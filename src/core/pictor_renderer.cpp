@@ -1,0 +1,320 @@
+#include "pictor/core/pictor_renderer.h"
+
+namespace pictor {
+
+PictorRenderer::PictorRenderer() = default;
+PictorRenderer::~PictorRenderer() {
+    if (initialized_) shutdown();
+}
+
+void PictorRenderer::initialize() { initialize(RendererConfig{}); }
+
+void PictorRenderer::initialize(const RendererConfig& config) {
+    config_ = config;
+
+    // §12: Initialize backend, memory, profiler, default profile
+
+    // 1. Memory Subsystem
+    memory_ = std::make_unique<MemorySubsystem>(config.memory_config);
+
+    // 2. Scene Registry
+    scene_ = std::make_unique<SceneRegistry>(*memory_);
+
+    // 3. Update Scheduler
+    update_scheduler_ = std::make_unique<UpdateScheduler>(*scene_, config.update_config);
+
+    // 4. Batch Builder
+    batch_builder_ = std::make_unique<BatchBuilder>(*scene_);
+
+    // 5. Culling System
+    culling_ = std::make_unique<CullingSystem>(*scene_);
+
+    // 6. GPU Buffer Manager
+    gpu_buffer_manager_ = std::make_unique<GPUBufferManager>(memory_->gpu_allocator());
+
+    // 7. Pipeline Profile Manager
+    profile_manager_ = std::make_unique<PipelineProfileManager>();
+    profile_manager_->register_defaults();
+
+    // 8. Apply initial profile
+    if (!config.initial_profile.empty()) {
+        profile_manager_->set_profile(config.initial_profile);
+    }
+    const auto& profile = profile_manager_->current_profile();
+
+    // 9. GPU Driven Pipeline (if enabled)
+    if (profile.gpu_driven_enabled) {
+        gpu_pipeline_ = std::make_unique<GPUDrivenPipeline>(
+            *gpu_buffer_manager_, *scene_, profile.gpu_driven_config);
+    }
+
+    // 10. Render Pass Scheduler
+    pass_scheduler_ = std::make_unique<RenderPassScheduler>(profile);
+
+    // 11. Command Encoder
+    command_encoder_ = std::make_unique<CommandEncoder>();
+
+    // 12. Profiler
+    profiler_ = std::make_unique<Profiler>();
+    profiler_->set_enabled(config.profiler_enabled);
+    profiler_->set_overlay_mode(config.overlay_mode);
+
+    // 13. Overlay Renderer
+    overlay_ = std::make_unique<OverlayRenderer>();
+    overlay_->initialize(config.screen_width, config.screen_height);
+
+    // 14. Data Exporter
+    data_exporter_ = std::make_unique<DataExporter>();
+
+    initialized_ = true;
+}
+
+void PictorRenderer::shutdown() {
+    if (!initialized_) return;
+
+    // §12: Release all resources, GPU sync
+    data_exporter_.reset();
+    overlay_.reset();
+    profiler_.reset();
+    command_encoder_.reset();
+    pass_scheduler_.reset();
+    gpu_pipeline_.reset();
+    profile_manager_.reset();
+    gpu_buffer_manager_.reset();
+    culling_.reset();
+    batch_builder_.reset();
+    update_scheduler_.reset();
+    scene_.reset();
+    memory_.reset();
+
+    initialized_ = false;
+}
+
+void PictorRenderer::begin_frame(float delta_time) {
+    if (!initialized_) return;
+
+    delta_time_ = delta_time;
+    ++frame_number_;
+
+    // §12, §11.3: Fence wait + Frame Allocator reset + Profiler frame start
+    memory_->begin_frame();
+    gpu_buffer_manager_->reset_frame_buffers();
+
+    profiler_->begin_frame();
+    command_encoder_->reset();
+}
+
+void PictorRenderer::render(const Camera& camera) {
+    if (!initialized_) return;
+
+    auto& frame_alloc = memory_->frame_allocator();
+
+    // §11.3 Step 2: Data Update
+    profiler_->begin_cpu_section("DataUpdate");
+    update_scheduler_->update(delta_time_);
+    profiler_->end_cpu_section("DataUpdate");
+
+    // §11.3 Step 3: Culling
+    profiler_->begin_cpu_section("Culling");
+    culling_->cull(camera.frustum, frame_alloc);
+    profiler_->end_cpu_section("Culling");
+
+    // Record culling stats
+    auto cull_stats = culling_->get_stats();
+    profiler_->record_visible(cull_stats.visible_objects, cull_stats.culled_objects);
+
+    // §11.3 Step 4: Sort + Step 5: Batch Build
+    profiler_->begin_cpu_section("Sort");
+    profiler_->begin_cpu_section("BatchBuild");
+    batch_builder_->build(frame_alloc);
+    profiler_->end_cpu_section("BatchBuild");
+    profiler_->end_cpu_section("Sort");
+
+    profiler_->record_batches(static_cast<uint32_t>(batch_builder_->batches().size()));
+
+    // GPU Driven Pipeline execution (§7.2)
+    if (gpu_pipeline_) {
+        profiler_->begin_gpu_section("ComputeUpdate");
+        profiler_->begin_gpu_section("GPUCullPass");
+        gpu_pipeline_->execute(camera.frustum, update_scheduler_->compute_params());
+        profiler_->end_gpu_section("GPUCullPass");
+        profiler_->end_gpu_section("ComputeUpdate");
+
+        auto gpu_stats = gpu_pipeline_->get_stats();
+        profiler_->record_gpu_driven_objects(gpu_stats.total_objects);
+        profiler_->record_compute_update_objects(gpu_stats.total_objects);
+    }
+
+    // §11.3 Step 5-6: Encode + Submit
+    profiler_->begin_cpu_section("CommandEncode");
+    pass_scheduler_->execute(*batch_builder_, *culling_, gpu_pipeline_.get());
+    profiler_->end_cpu_section("CommandEncode");
+
+    profiler_->record_draw_calls(command_encoder_->draw_call_count());
+    profiler_->record_triangles(command_encoder_->triangle_count());
+
+    // Record memory stats
+    auto mem_stats = memory_->get_stats();
+    profiler_->record_memory_stats(
+        mem_stats.frame_alloc_used, mem_stats.frame_alloc_capacity,
+        mem_stats.pool_allocated,
+        mem_stats.gpu_stats.ssbo_used, mem_stats.gpu_stats.mesh_pool_used,
+        mem_stats.gpu_stats.ssbo_used + mem_stats.gpu_stats.mesh_pool_used +
+        mem_stats.gpu_stats.instance_used,
+        mem_stats.gpu_stats.ssbo_capacity + mem_stats.gpu_stats.mesh_pool_capacity
+    );
+
+    // Render profiler overlay (§13.6)
+    if (profiler_->is_enabled() && profiler_->overlay_mode() != OverlayMode::OFF) {
+        overlay_->render(profiler_->overlay_mode(),
+                         profiler_->get_frame_stats(), *profiler_);
+    }
+}
+
+void PictorRenderer::end_frame() {
+    if (!initialized_) return;
+
+    // §12, §11.3: Present
+    profiler_->end_frame();
+    memory_->end_frame();
+
+    // Record frame for export if recording
+    if (data_exporter_ && data_exporter_->is_recording()) {
+        data_exporter_->record_frame(profiler_->get_frame_stats(), frame_number_);
+    }
+}
+
+// ---- Object Operations ----
+
+ObjectId PictorRenderer::register_object(const ObjectDescriptor& desc) {
+    if (!initialized_) return INVALID_OBJECT_ID;
+    return scene_->register_object(desc);
+}
+
+void PictorRenderer::unregister_object(ObjectId id) {
+    if (!initialized_) return;
+    scene_->unregister_object(id);
+}
+
+void PictorRenderer::update_transform(ObjectId id, const float4x4& transform) {
+    if (!initialized_) return;
+    scene_->update_transform(id, transform);
+}
+
+// ---- Compute Update ----
+
+void PictorRenderer::set_compute_update_shader(ShaderHandle shader) {
+    if (!initialized_) return;
+    scene_->set_compute_update_shader(shader);
+}
+
+// ---- Profile Operations ----
+
+bool PictorRenderer::set_profile(const std::string& name) {
+    if (!initialized_) return false;
+
+    if (!profile_manager_->set_profile(name)) return false;
+
+    apply_profile(profile_manager_->current_profile());
+    return true;
+}
+
+void PictorRenderer::register_custom_profile(const PipelineProfileDef& def) {
+    if (!initialized_) return;
+    profile_manager_->register_profile(def);
+}
+
+const std::string& PictorRenderer::current_profile_name() const {
+    return profile_manager_->current_profile_name();
+}
+
+void PictorRenderer::apply_profile(const PipelineProfileDef& profile) {
+    // §8.4: Profile switch procedure
+    // 1. Validate new profile (done by ProfileManager)
+
+    // 2. Frame Allocator size change — requires memory reallocation
+    //    (simplified: would recreate MemorySubsystem in production)
+
+    // 3. UpdateScheduler config change
+    update_scheduler_->set_config(profile.update_config);
+
+    // 4. Invalidate all batches
+    batch_builder_->invalidate_all();
+
+    // 5. RenderPassScheduler reconfigure
+    pass_scheduler_->reconfigure(profile);
+
+    // 6. GPU resource reallocation
+    if (profile.gpu_driven_enabled && !gpu_pipeline_) {
+        gpu_pipeline_ = std::make_unique<GPUDrivenPipeline>(
+            *gpu_buffer_manager_, *scene_, profile.gpu_driven_config);
+    } else if (!profile.gpu_driven_enabled) {
+        gpu_pipeline_.reset();
+    } else if (gpu_pipeline_) {
+        gpu_pipeline_->set_config(profile.gpu_driven_config);
+    }
+
+    // 7. Profiler config
+    profiler_->set_enabled(profile.profiler_config.enabled);
+    profiler_->set_overlay_mode(profile.profiler_config.overlay_mode);
+}
+
+// ---- Profiler ----
+
+void PictorRenderer::set_profiler_enabled(bool enabled) {
+    if (profiler_) profiler_->set_enabled(enabled);
+}
+
+void PictorRenderer::set_overlay_mode(OverlayMode mode) {
+    if (profiler_) profiler_->set_overlay_mode(mode);
+}
+
+const FrameStats& PictorRenderer::get_frame_stats() const {
+    return profiler_->get_frame_stats();
+}
+
+// ---- Extension Points ----
+
+void PictorRenderer::set_update_callback(IUpdateCallback* callback) {
+    if (update_scheduler_) update_scheduler_->set_update_callback(callback);
+}
+
+void PictorRenderer::set_culling_provider(ICullingProvider* provider) {
+    if (culling_) culling_->set_culling_provider(provider);
+}
+
+void PictorRenderer::set_batch_policy(IBatchPolicy* policy) {
+    if (batch_builder_) batch_builder_->set_batch_policy(policy);
+}
+
+void PictorRenderer::set_job_dispatcher(IJobDispatcher* dispatcher) {
+    if (update_scheduler_) update_scheduler_->set_job_dispatcher(dispatcher);
+}
+
+void PictorRenderer::register_custom_pass(ICustomRenderPass* pass) {
+    if (pass_scheduler_) pass_scheduler_->register_custom_pass(pass);
+}
+
+// ---- Data Export ----
+
+void PictorRenderer::begin_profiler_recording(const std::string& path) {
+    if (data_exporter_) data_exporter_->begin_recording(path);
+}
+
+void PictorRenderer::end_profiler_recording() {
+    if (data_exporter_) data_exporter_->end_recording();
+}
+
+bool PictorRenderer::export_profiler_json(const std::string& path) {
+    return data_exporter_ ? data_exporter_->export_json(path) : false;
+}
+
+bool PictorRenderer::export_profiler_chrome_tracing(const std::string& path) {
+    return data_exporter_ ? data_exporter_->export_chrome_tracing(path) : false;
+}
+
+bool PictorRenderer::export_profiler_csv(const std::string& path) {
+    return data_exporter_ ? data_exporter_->export_csv(path) : false;
+}
+
+} // namespace pictor

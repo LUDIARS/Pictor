@@ -1,0 +1,56 @@
+// Pictor — LOD Selection Shader (§7.2 Step 3)
+// Selects appropriate LOD level based on camera distance.
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform LODParams {
+    vec4  cameraPos;
+    uint  objectCount;
+    uint  maxLODLevels;
+    float lodDistances[8]; // Distance thresholds for LOD levels
+};
+
+// Transform positions for distance calculation
+layout(std430, set = 0, binding = 1) readonly buffer Transforms {
+    mat4 gpu_transforms[];
+};
+
+// LOD info per object
+layout(std430, set = 0, binding = 2) readonly buffer LODInfo {
+    // x = numLODs, y = meshId_LOD0, z = meshId_LOD1, w = meshId_LOD2
+    uvec4 gpu_lod_info[];
+};
+
+// Output: visibility + selected LOD (packed)
+layout(std430, set = 0, binding = 3) buffer Visibility {
+    uint gpu_visibility[]; // bits 0-7: visible, bits 8-15: LOD level
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    // Skip if already culled
+    if ((gpu_visibility[idx] & 0xFF) == 0) return;
+
+    // Get object position from transform matrix
+    vec3 objPos = gpu_transforms[idx][3].xyz;
+    float dist = distance(objPos, cameraPos.xyz);
+
+    // Select LOD based on distance (§7.2)
+    uint lodLevel = 0;
+    uint numLODs = gpu_lod_info[idx].x;
+
+    for (uint i = 0; i < min(numLODs, maxLODLevels); i++) {
+        if (dist > lodDistances[i]) {
+            lodLevel = i + 1;
+        }
+    }
+
+    lodLevel = min(lodLevel, numLODs - 1);
+
+    // Pack LOD level into visibility flags
+    gpu_visibility[idx] = (gpu_visibility[idx] & 0xFF) | (lodLevel << 8);
+}
