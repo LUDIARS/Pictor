@@ -1,0 +1,78 @@
+// Pictor — Compute Update Shader (§5.4, §14.3)
+// Updates gpu_transforms and gpu_bounds for all GPU Driven objects.
+// 1 thread = 1 object. Dispatch: ceil(objectCount / 256) workgroups.
+//
+// For the 1M Spheres benchmark, objects follow 3D Lissajous curves.
+// Input: initial positions, frequency/phase params, frame constants.
+// Output: updated transforms (float4x4) and bounds (AABB).
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+// Frame constants (§5.4: ~64B uniform, uploaded each frame)
+layout(set = 0, binding = 0) uniform UpdateParams {
+    float totalTime;
+    float deltaTime;
+    uint  frameNumber;
+    float gravity;
+    uint  objectCount;
+    float amplitude;
+    float pad0, pad1;
+};
+
+// Input SSBOs
+layout(std430, set = 0, binding = 1) readonly buffer InitialPositions {
+    vec4 initialPos[]; // xyz = position, w = radius
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer FreqPhase {
+    // xy = freqX, freqY; zw = freqZ, phaseX
+    // Second vec4: xy = phaseY, phaseZ; zw = unused
+    vec4 freqPhaseData[];
+};
+
+// Output SSBOs (§7.3)
+layout(std430, set = 0, binding = 3) writeonly buffer Transforms {
+    mat4 gpu_transforms[];
+};
+
+layout(std430, set = 0, binding = 4) writeonly buffer Bounds {
+    // AABB: vec4(min.xyz, 0), vec4(max.xyz, 0)
+    vec4 gpu_bounds[];
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    // Read initial position and radius
+    vec4 initP = initialPos[idx];
+    vec3 basePos = initP.xyz;
+    float radius = initP.w;
+
+    // Read frequency and phase parameters (§14.3)
+    vec4 fp0 = freqPhaseData[idx * 2];
+    vec4 fp1 = freqPhaseData[idx * 2 + 1];
+    float freqX  = fp0.x;
+    float freqY  = fp0.y;
+    float freqZ  = fp0.z;
+    float phaseX = fp0.w;
+    float phaseY = fp1.x;
+    float phaseZ = fp1.y;
+
+    // 3D Lissajous curve motion (§14.3)
+    vec3 pos;
+    pos.x = basePos.x + amplitude * sin(totalTime * freqX + phaseX);
+    pos.y = basePos.y + amplitude * sin(totalTime * freqY + phaseY);
+    pos.z = basePos.z + amplitude * sin(totalTime * freqZ + phaseZ);
+
+    // Write transform (translation matrix)
+    mat4 transform = mat4(1.0);
+    transform[3] = vec4(pos, 1.0);
+    gpu_transforms[idx] = transform;
+
+    // Write AABB (§14.3: sphere bounding box)
+    gpu_bounds[idx * 2]     = vec4(pos - vec3(radius), 0.0);
+    gpu_bounds[idx * 2 + 1] = vec4(pos + vec3(radius), 0.0);
+}
