@@ -1,0 +1,105 @@
+// Pictor — GPU Frustum + Hi-Z Culling Shader (§7.2, §10.3)
+// Tests each object's AABB against frustum planes and Hi-Z depth buffer.
+// Output: per-object visibility flag.
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform CullParams {
+    vec4  frustumPlanes[6]; // xyz = normal, w = distance
+    mat4  viewProj;
+    uint  objectCount;
+    uint  enableHiZ;       // 0 = frustum only, 1 = frustum + Hi-Z
+    float hiZWidth;
+    float hiZHeight;
+};
+
+// Input: AABB bounds
+layout(std430, set = 0, binding = 1) readonly buffer Bounds {
+    vec4 gpu_bounds[]; // pairs: [min, max]
+};
+
+// Output: visibility flags
+layout(std430, set = 0, binding = 2) writeonly buffer Visibility {
+    uint gpu_visibility[];
+};
+
+// Hi-Z depth pyramid (optional)
+layout(set = 0, binding = 3) uniform sampler2D hiZTexture;
+
+bool frustumCull(vec3 aabbMin, vec3 aabbMax) {
+    for (int i = 0; i < 6; i++) {
+        vec3 normal = frustumPlanes[i].xyz;
+        float dist  = frustumPlanes[i].w;
+
+        // Test positive vertex (the vertex most in the direction of the plane normal)
+        vec3 pVertex;
+        pVertex.x = (normal.x > 0.0) ? aabbMax.x : aabbMin.x;
+        pVertex.y = (normal.y > 0.0) ? aabbMax.y : aabbMin.y;
+        pVertex.z = (normal.z > 0.0) ? aabbMax.z : aabbMin.z;
+
+        if (dot(normal, pVertex) + dist < 0.0) {
+            return false; // Outside this plane
+        }
+    }
+    return true;
+}
+
+bool hiZOcclusionCull(vec3 aabbMin, vec3 aabbMax) {
+    if (enableHiZ == 0) return true; // Hi-Z disabled, pass through
+
+    // Project AABB corners to screen space
+    vec4 corners[8];
+    corners[0] = viewProj * vec4(aabbMin.x, aabbMin.y, aabbMin.z, 1.0);
+    corners[1] = viewProj * vec4(aabbMax.x, aabbMin.y, aabbMin.z, 1.0);
+    corners[2] = viewProj * vec4(aabbMin.x, aabbMax.y, aabbMin.z, 1.0);
+    corners[3] = viewProj * vec4(aabbMax.x, aabbMax.y, aabbMin.z, 1.0);
+    corners[4] = viewProj * vec4(aabbMin.x, aabbMin.y, aabbMax.z, 1.0);
+    corners[5] = viewProj * vec4(aabbMax.x, aabbMin.y, aabbMax.z, 1.0);
+    corners[6] = viewProj * vec4(aabbMin.x, aabbMax.y, aabbMax.z, 1.0);
+    corners[7] = viewProj * vec4(aabbMax.x, aabbMax.y, aabbMax.z, 1.0);
+
+    // Find screen-space bounding rectangle and closest depth
+    float minZ = 1.0;
+    vec2 minXY = vec2(1.0);
+    vec2 maxXY = vec2(0.0);
+
+    for (int i = 0; i < 8; i++) {
+        if (corners[i].w <= 0.0) return true; // Behind camera, don't cull
+
+        vec3 ndc = corners[i].xyz / corners[i].w;
+        vec2 uv = ndc.xy * 0.5 + 0.5;
+
+        minXY = min(minXY, uv);
+        maxXY = max(maxXY, uv);
+        minZ = min(minZ, ndc.z);
+    }
+
+    // Determine Hi-Z mip level based on screen-space size
+    vec2 screenSize = (maxXY - minXY) * vec2(hiZWidth, hiZHeight);
+    float mipLevel = ceil(log2(max(screenSize.x, screenSize.y)));
+    mipLevel = clamp(mipLevel, 0.0, 10.0);
+
+    // Sample Hi-Z at corners of the screen-space rect
+    float hiZDepth = textureLod(hiZTexture, (minXY + maxXY) * 0.5, mipLevel).r;
+
+    // If the object is behind the Hi-Z depth, it's occluded
+    return minZ <= hiZDepth;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    vec3 aabbMin = gpu_bounds[idx * 2].xyz;
+    vec3 aabbMax = gpu_bounds[idx * 2 + 1].xyz;
+
+    bool visible = frustumCull(aabbMin, aabbMax);
+
+    if (visible && enableHiZ != 0) {
+        visible = hiZOcclusionCull(aabbMin, aabbMax);
+    }
+
+    gpu_visibility[idx] = visible ? 1u : 0u;
+}

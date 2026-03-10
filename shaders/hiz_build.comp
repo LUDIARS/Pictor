@@ -1,0 +1,35 @@
+// Pictor — Hi-Z Mipmap Build Shader (§10.3)
+// Generates hierarchical depth buffer from the depth pre-pass output.
+// Each mip level stores the maximum depth of its 2x2 parent region.
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform HiZParams {
+    uvec2 inputSize;
+    uvec2 outputSize;
+    uint  mipLevel;
+};
+
+layout(set = 0, binding = 1) uniform sampler2D inputDepth;
+layout(set = 0, binding = 2, r32f) writeonly uniform image2D outputDepth;
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= outputSize.x || pos.y >= outputSize.y) return;
+
+    // Sample 2x2 texels from the previous mip level
+    vec2 texelSize = 1.0 / vec2(inputSize);
+    vec2 uv = (vec2(pos) * 2.0 + 0.5) * texelSize;
+
+    float d0 = textureLodOffset(inputDepth, uv, float(mipLevel), ivec2(0, 0)).r;
+    float d1 = textureLodOffset(inputDepth, uv, float(mipLevel), ivec2(1, 0)).r;
+    float d2 = textureLodOffset(inputDepth, uv, float(mipLevel), ivec2(0, 1)).r;
+    float d3 = textureLodOffset(inputDepth, uv, float(mipLevel), ivec2(1, 1)).r;
+
+    // Take maximum depth (conservative — ensures occluded objects are detected)
+    float maxDepth = max(max(d0, d1), max(d2, d3));
+
+    imageStore(outputDepth, ivec2(pos), vec4(maxDepth));
+}

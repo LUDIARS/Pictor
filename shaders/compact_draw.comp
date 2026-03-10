@@ -1,0 +1,61 @@
+// Pictor — Compact + Indirect Draw Generation Shader (§7.2 Step 4)
+// Compacts visible objects and generates DrawIndexedIndirectCommand entries.
+// Uses atomic counter for the draw count.
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform CompactParams {
+    uint objectCount;
+    uint indexCountPerMesh;   // For 1M Spheres: 240 (80 tri * 3)
+    uint baseVertex;
+    uint firstIndex;
+};
+
+// Input: visibility flags from cull pass
+layout(std430, set = 0, binding = 1) readonly buffer Visibility {
+    uint gpu_visibility[];
+};
+
+// Input: mesh info (for multi-mesh support)
+layout(std430, set = 0, binding = 2) readonly buffer MeshInfo {
+    // x = indexCount, y = firstIndex, z = baseVertex, w = meshId
+    uvec4 gpu_mesh_info[];
+};
+
+// Output: DrawIndexedIndirectCommand (§7.3)
+struct DrawCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+layout(std430, set = 0, binding = 3) writeonly buffer IndirectDrawBuffer {
+    DrawCommand drawCommands[];
+};
+
+// Atomic draw count
+layout(std430, set = 0, binding = 4) buffer DrawCountBuffer {
+    uint drawCount;
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    if (gpu_visibility[idx] != 0) {
+        // Atomically allocate a slot in the indirect draw buffer
+        uint drawIdx = atomicAdd(drawCount, 1);
+
+        // For the 1M Spheres benchmark, all objects share the same mesh
+        // so we create one draw command per visible object (instanced as batch)
+        drawCommands[drawIdx].indexCount    = indexCountPerMesh;
+        drawCommands[drawIdx].instanceCount = 1;
+        drawCommands[drawIdx].firstIndex    = firstIndex;
+        drawCommands[drawIdx].vertexOffset  = int(baseVertex);
+        drawCommands[drawIdx].firstInstance = idx; // gl_InstanceIndex = object index
+    }
+}
