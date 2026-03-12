@@ -46,5 +46,8 @@
 #include "pictor/profiler/overlay_renderer.h"
 #include "pictor/profiler/data_exporter.h"
 
+// Surface abstraction
+#include "pictor/surface/surface_provider.h"
+
 // Public API
 #include "pictor/core/pictor_renderer.h"
