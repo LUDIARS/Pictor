@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PICTOR_BUILD_BENCHMARK "Build 1M Spheres benchmark" ON)
+option(PICTOR_BUILD_DEMO      "Build Vulkan window demo"   ON)
 option(PICTOR_ENABLE_PROFILER "Enable built-in profiler" ON)
 option(PICTOR_USE_LARGE_PAGES "Enable large page support" OFF)
 
@@ -56,6 +57,10 @@ add_library(pictor STATIC
     src/profiler/overlay_renderer.cpp
     src/profiler/data_exporter.cpp
 
+    # Surface Abstraction
+    src/surface/vulkan_context.cpp
+    src/surface/glfw_surface_provider.cpp
+
     # Public API
     src/core/pictor_renderer.cpp
 )
@@ -85,7 +90,22 @@ elseif(MSVC)
     target_compile_options(pictor PRIVATE /W4 /arch:AVX2)
 endif()
 
+# GLFW (required for demo, optional for library)
+find_package(glfw3 QUIET)
+
+if(glfw3_FOUND)
+    target_link_libraries(pictor PUBLIC glfw)
+endif()
+
 if(PICTOR_BUILD_BENCHMARK)
     add_executable(pictor_benchmark benchmark/main.cpp)
     target_link_libraries(pictor_benchmark PRIVATE pictor)
+endif()
+
+if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND glfw3_FOUND)
+    add_executable(pictor_demo demo/main.cpp)
+    target_link_libraries(pictor_demo PRIVATE pictor)
+    message(STATUS "Pictor: Vulkan window demo enabled")
+elseif(PICTOR_BUILD_DEMO)
+    message(STATUS "Pictor: Demo disabled (requires Vulkan + GLFW3)")
 endif()
