@@ -1,0 +1,124 @@
+// Pictor — Screen-Space Ambient Occlusion (SSAO) Generation Shader
+// Generates an occlusion map from the depth buffer and view-space normals.
+// Uses hemisphere sampling with random rotation to detect nearby geometry
+// that blocks ambient light. Output is a single-channel occlusion texture.
+// Independent of material shaders — reads only depth/normal G-buffer.
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform SSAOParams {
+    mat4  projection;
+    mat4  invProjection;
+    uvec2 screenSize;
+    float radius;           // world-space hemisphere radius
+    float bias;             // angle bias to reduce self-occlusion
+    float intensity;        // occlusion strength multiplier
+    uint  sampleCount;      // kernel samples (typically 32 or 64)
+    float falloffStart;     // distance at which AO starts to fall off
+    float falloffEnd;       // distance at which AO reaches zero
+};
+
+// Hemisphere sample kernel (pre-computed on CPU, cosine-weighted)
+layout(std430, set = 0, binding = 1) readonly buffer SampleKernel {
+    vec4 samples[];  // xyz = direction, w = scale factor
+};
+
+// Input: depth buffer from depth pre-pass
+layout(set = 0, binding = 2) uniform sampler2D depthTexture;
+
+// Input: view-space normals (from G-buffer or reconstructed)
+layout(set = 0, binding = 3) uniform sampler2D normalTexture;
+
+// Input: 4x4 rotation noise texture (tiled across screen)
+layout(set = 0, binding = 4) uniform sampler2D noiseTexture;
+
+// Output: single-channel AO map
+layout(set = 0, binding = 5, r8) writeonly uniform image2D aoOutput;
+
+// Reconstruct view-space position from depth
+vec3 reconstructViewPos(vec2 uv, float depth) {
+    // NDC: Vulkan uses [0,1] depth range
+    vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 viewPos = invProjection * clipPos;
+    return viewPos.xyz / viewPos.w;
+}
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= screenSize.x || pos.y >= screenSize.y) return;
+
+    vec2 uv = (vec2(pos) + 0.5) / vec2(screenSize);
+
+    // Sample depth and reconstruct view-space position
+    float depth = texture(depthTexture, uv).r;
+
+    // Skip far plane (sky)
+    if (depth >= 1.0) {
+        imageStore(aoOutput, ivec2(pos), vec4(1.0));
+        return;
+    }
+
+    vec3 viewPos = reconstructViewPos(uv, depth);
+
+    // Distance-based falloff: skip very distant fragments
+    float dist = -viewPos.z; // positive distance in view space
+    if (dist > falloffEnd) {
+        imageStore(aoOutput, ivec2(pos), vec4(1.0));
+        return;
+    }
+
+    // Read view-space normal
+    vec3 normal = normalize(texture(normalTexture, uv).xyz * 2.0 - 1.0);
+
+    // Rotation vector from 4x4 noise tile
+    vec2 noiseUV = vec2(pos) / 4.0; // 4x4 tile
+    vec3 randomVec = normalize(texture(noiseTexture, noiseUV).xyz * 2.0 - 1.0);
+
+    // Build TBN (tangent-bitangent-normal) from normal + randomVec
+    vec3 tangent   = normalize(randomVec - normal * dot(randomVec, normal));
+    vec3 bitangent = cross(normal, tangent);
+    mat3 TBN       = mat3(tangent, bitangent, normal);
+
+    // Accumulate occlusion from hemisphere samples
+    float occlusion = 0.0;
+
+    for (uint i = 0; i < sampleCount; i++) {
+        // Transform sample from tangent space to view space
+        vec3 sampleDir = TBN * samples[i].xyz;
+        vec3 samplePos = viewPos + sampleDir * radius * samples[i].w;
+
+        // Project sample to screen space
+        vec4 sampleClip = projection * vec4(samplePos, 1.0);
+        vec2 sampleUV   = (sampleClip.xy / sampleClip.w) * 0.5 + 0.5;
+
+        // Bounds check
+        if (sampleUV.x < 0.0 || sampleUV.x > 1.0 ||
+            sampleUV.y < 0.0 || sampleUV.y > 1.0) {
+            continue;
+        }
+
+        // Sample depth at the projected position
+        float sampleDepth = texture(depthTexture, sampleUV).r;
+        vec3  sampleViewPos = reconstructViewPos(sampleUV, sampleDepth);
+
+        // Range check: only occlude if the sampled geometry is close enough
+        float rangeCheck = smoothstep(0.0, 1.0,
+            radius / abs(viewPos.z - sampleViewPos.z));
+
+        // Occlusion test: is the sample behind existing geometry?
+        float occluded = (sampleViewPos.z >= samplePos.z + bias) ? 1.0 : 0.0;
+        occlusion += occluded * rangeCheck;
+    }
+
+    occlusion = 1.0 - (occlusion / float(sampleCount)) * intensity;
+
+    // Distance-based falloff
+    float distFade = 1.0 - smoothstep(falloffStart, falloffEnd, dist);
+    occlusion = mix(1.0, occlusion, distFade);
+
+    occlusion = clamp(occlusion, 0.0, 1.0);
+
+    imageStore(aoOutput, ivec2(pos), vec4(occlusion));
+}
