@@ -218,19 +218,19 @@ public:
 private:
     /// Bake shadow data for static objects
     void bake_shadows(const ObjectPool& pool, GIBakeResult& result,
-                      BakeProgressCallback* progress);
+                      const BakeProgressCallback& progress);
 
     /// Bake per-object AO for static objects
     void bake_ao(const ObjectPool& pool, GIBakeResult& result,
-                 BakeProgressCallback* progress);
+                 const BakeProgressCallback& progress);
 
     /// Bake irradiance from probe grid
     void bake_irradiance(const ObjectPool& pool, GIBakeResult& result,
-                         BakeProgressCallback* progress);
+                         const BakeProgressCallback& progress);
 
     /// Bake combined lightmap
     void bake_lightmap(const ObjectPool& pool, GIBakeResult& result,
-                       BakeProgressCallback* progress);
+                       const BakeProgressCallback& progress);
 
     /// Collect static object IDs into the result
     void collect_static_objects(const ObjectPool& pool, GIBakeResult& result);
