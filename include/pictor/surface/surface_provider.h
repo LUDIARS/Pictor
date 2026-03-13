@@ -12,21 +12,21 @@ namespace pictor {
 ///
 /// Usage:
 ///   NativeWindowHandle h{};
-///   h.type = NativeWindowHandle::Type::WIN32;
+///   h.type = NativeWindowHandle::Type::Win32;
 ///   h.win32.hwnd      = myHwnd;
 ///   h.win32.hinstance = myHinstance;
 struct NativeWindowHandle {
     enum class Type : uint8_t {
-        NONE    = 0,
-        WIN32   = 1,   // VK_KHR_win32_surface
-        XLIB    = 2,   // VK_KHR_xlib_surface
-        XCB     = 3,   // VK_KHR_xcb_surface
-        WAYLAND = 4,   // VK_KHR_wayland_surface
-        COCOA   = 5,   // VK_MVK_macos_surface / VK_EXT_metal_surface
-        ANDROID = 6,   // VK_KHR_android_surface
+        None    = 0,
+        Win32   = 1,   // VK_KHR_win32_surface
+        Xlib    = 2,   // VK_KHR_xlib_surface
+        Xcb     = 3,   // VK_KHR_xcb_surface
+        Wayland = 4,   // VK_KHR_wayland_surface
+        Cocoa   = 5,   // VK_MVK_macos_surface / VK_EXT_metal_surface
+        Android = 6,   // VK_KHR_android_surface
     };
 
-    Type type = Type::NONE;
+    Type type = Type::None;
 
     // Win32
     struct Win32 {
@@ -71,7 +71,7 @@ struct NativeWindowHandle {
         Android android;
     };
 
-    NativeWindowHandle() : win32{} {}
+    NativeWindowHandle() : type(Type::None) { win32 = {}; }
 };
 
 /// Swapchain configuration requested by the host.

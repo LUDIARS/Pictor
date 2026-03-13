@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <new>
 
+#ifdef _MSC_VER
+#include <malloc.h>
+#endif
+
 #ifdef PICTOR_LARGE_PAGES
 #ifdef _WIN32
 #include <windows.h>
@@ -43,7 +47,11 @@ FrameAllocator::FrameAllocator(size_t capacity)
 #endif
 #else
     // Standard aligned allocation (64-byte alignment for cache lines)
+#ifdef _MSC_VER
+    buffer_ = static_cast<uint8_t*>(_aligned_malloc(capacity, 64));
+#else
     buffer_ = static_cast<uint8_t*>(std::aligned_alloc(64, capacity));
+#endif
     owns_memory_ = true;
 #endif
 
@@ -61,7 +69,11 @@ FrameAllocator::~FrameAllocator() {
         munmap(buffer_, capacity_);
 #endif
 #else
+#ifdef _MSC_VER
+        _aligned_free(buffer_);
+#else
         std::free(buffer_);
+#endif
 #endif
     }
 }
@@ -82,7 +94,11 @@ FrameAllocator::FrameAllocator(FrameAllocator&& other) noexcept
 FrameAllocator& FrameAllocator::operator=(FrameAllocator&& other) noexcept {
     if (this != &other) {
         if (buffer_ && owns_memory_) {
+#ifdef _MSC_VER
+            _aligned_free(buffer_);
+#else
             std::free(buffer_);
+#endif
         }
         buffer_ = other.buffer_;
         capacity_ = other.capacity_;
