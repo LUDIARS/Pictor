@@ -31,13 +31,6 @@ namespace MaterialFeature {
 }
 
 // ============================================================
-// Texture Slot
-// ============================================================
-
-using TextureHandle = uint32_t;
-constexpr TextureHandle INVALID_TEXTURE = std::numeric_limits<uint32_t>::max();
-
-// ============================================================
 // Material Descriptor
 // ============================================================
 // Full description of a material before pass-specific stripping.

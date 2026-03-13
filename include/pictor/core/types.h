@@ -94,11 +94,92 @@ using ObjectId       = uint32_t;
 using MeshHandle     = uint32_t;
 using MaterialHandle = uint32_t;
 using ShaderHandle   = uint32_t;
+using TextureHandle  = uint32_t;
 using PoolId         = uint32_t;
 
 constexpr ObjectId INVALID_OBJECT_ID = std::numeric_limits<uint32_t>::max();
 constexpr MeshHandle INVALID_MESH    = std::numeric_limits<uint32_t>::max();
 constexpr MaterialHandle INVALID_MATERIAL = std::numeric_limits<uint32_t>::max();
+constexpr TextureHandle INVALID_TEXTURE   = std::numeric_limits<uint32_t>::max();
+
+// ============================================================
+// Texture Format
+// ============================================================
+
+enum class TextureFormat : uint8_t {
+    RGBA8_UNORM  = 0,
+    RGBA8_SRGB   = 1,
+    RGBA16_FLOAT = 2,
+    RGBA32_FLOAT = 3,
+    R8_UNORM     = 4,
+    RG8_UNORM    = 5,
+    BC1_UNORM    = 6,  // DXT1
+    BC3_UNORM    = 7,  // DXT5
+    BC5_UNORM    = 8,  // Normal map
+    BC7_UNORM    = 9,
+    DEPTH_32F    = 10,
+    DEPTH_24_STENCIL_8 = 11
+};
+
+enum class TextureType : uint8_t {
+    TEXTURE_2D       = 0,
+    TEXTURE_3D       = 1,
+    TEXTURE_CUBE     = 2,
+    TEXTURE_2D_ARRAY = 3
+};
+
+// ============================================================
+// Vertex Attribute
+// ============================================================
+
+enum class VertexAttributeType : uint8_t {
+    FLOAT     = 0,
+    FLOAT2    = 1,
+    FLOAT3    = 2,
+    FLOAT4    = 3,
+    UINT32    = 4,
+    INT32     = 5,
+    UNORM8X4  = 6,  // Packed color
+    HALF2     = 7,
+    HALF4     = 8
+};
+
+enum class VertexSemantic : uint8_t {
+    POSITION    = 0,
+    NORMAL      = 1,
+    TANGENT     = 2,
+    TEXCOORD0   = 3,
+    TEXCOORD1   = 4,
+    COLOR0      = 5,
+    JOINTS      = 6,
+    WEIGHTS     = 7,
+    CUSTOM0     = 8,
+    CUSTOM1     = 9,
+    CUSTOM2     = 10,
+    CUSTOM3     = 11
+};
+
+struct VertexAttribute {
+    VertexSemantic    semantic;
+    VertexAttributeType type;
+    uint16_t          offset = 0;  // Byte offset within vertex
+};
+
+/// Returns byte size of a VertexAttributeType
+inline size_t vertex_attribute_size(VertexAttributeType type) {
+    switch (type) {
+        case VertexAttributeType::FLOAT:    return 4;
+        case VertexAttributeType::FLOAT2:   return 8;
+        case VertexAttributeType::FLOAT3:   return 12;
+        case VertexAttributeType::FLOAT4:   return 16;
+        case VertexAttributeType::UINT32:   return 4;
+        case VertexAttributeType::INT32:    return 4;
+        case VertexAttributeType::UNORM8X4: return 4;
+        case VertexAttributeType::HALF2:    return 4;
+        case VertexAttributeType::HALF4:    return 8;
+        default: return 0;
+    }
+}
 
 // ============================================================
 // Object Flags (§3.3)

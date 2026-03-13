@@ -23,14 +23,10 @@ GIBakeSystem::~GIBakeSystem() = default;
 // ============================================================
 
 GIBakeResult GIBakeSystem::bake() {
-    return bake(nullptr);
+    return bake(BakeProgressCallback{});
 }
 
 GIBakeResult GIBakeSystem::bake(BakeProgressCallback progress) {
-    return bake(&progress);
-}
-
-GIBakeResult GIBakeSystem::bake(BakeProgressCallback* progress) {
     auto start = std::chrono::high_resolution_clock::now();
 
     GIBakeResult result;
@@ -65,7 +61,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback* progress) {
 
     // Pass 1: Shadow bake
     if (has_flag(config_.targets, BakeTarget::SHADOW_MAP)) {
-        if (progress && !(*progress)(
+        if (progress && !progress(
                 static_cast<float>(current_pass) / total_passes, "Baking shadows")) {
             return result; // cancelled
         }
@@ -76,7 +72,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback* progress) {
 
     // Pass 2: AO bake
     if (has_flag(config_.targets, BakeTarget::AMBIENT_OCCLUSION)) {
-        if (progress && !(*progress)(
+        if (progress && !progress(
                 static_cast<float>(current_pass) / total_passes, "Baking ambient occlusion")) {
             return result;
         }
@@ -87,7 +83,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback* progress) {
 
     // Pass 3: Irradiance bake
     if (has_flag(config_.targets, BakeTarget::PROBE_IRRADIANCE)) {
-        if (progress && !(*progress)(
+        if (progress && !progress(
                 static_cast<float>(current_pass) / total_passes, "Baking probe irradiance")) {
             return result;
         }
@@ -98,7 +94,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback* progress) {
 
     // Pass 4: Lightmap bake
     if (has_flag(config_.targets, BakeTarget::LIGHTMAP)) {
-        if (progress && !(*progress)(
+        if (progress && !progress(
                 static_cast<float>(current_pass) / total_passes, "Baking lightmaps")) {
             return result;
         }
@@ -116,7 +112,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback* progress) {
     dirty_ = false;
 
     if (progress) {
-        (*progress)(1.0f, "Bake complete");
+        progress(1.0f, "Bake complete");
     }
 
     // Notify provider
@@ -183,7 +179,7 @@ void GIBakeSystem::invalidate() {
 // ============================================================
 
 void GIBakeSystem::bake_shadows(const ObjectPool& pool, GIBakeResult& result,
-                                BakeProgressCallback* progress) {
+                                const BakeProgressCallback& progress) {
     uint32_t count = pool.count();
     result.shadows.resize(count);
 
@@ -227,7 +223,7 @@ void GIBakeSystem::bake_shadows(const ObjectPool& pool, GIBakeResult& result,
 // ============================================================
 
 void GIBakeSystem::bake_ao(const ObjectPool& pool, GIBakeResult& result,
-                           BakeProgressCallback* progress) {
+                           const BakeProgressCallback& progress) {
     uint32_t count = pool.count();
     result.ao.resize(count);
 
@@ -261,7 +257,7 @@ void GIBakeSystem::bake_ao(const ObjectPool& pool, GIBakeResult& result,
 // ============================================================
 
 void GIBakeSystem::bake_irradiance(const ObjectPool& pool, GIBakeResult& result,
-                                   BakeProgressCallback* progress) {
+                                   const BakeProgressCallback& progress) {
     uint32_t count = pool.count();
     result.irradiance.resize(count);
 
@@ -294,7 +290,7 @@ void GIBakeSystem::bake_irradiance(const ObjectPool& pool, GIBakeResult& result,
 // ============================================================
 
 void GIBakeSystem::bake_lightmap(const ObjectPool& pool, GIBakeResult& result,
-                                 BakeProgressCallback* progress) {
+                                 const BakeProgressCallback& progress) {
     uint32_t count = pool.count();
     result.lightmaps.resize(count);
 

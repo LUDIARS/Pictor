@@ -88,6 +88,12 @@ add_library(pictor STATIC
     src/surface/vulkan_context.cpp
     src/surface/glfw_surface_provider.cpp
 
+    # Data Handler
+    src/data/texture_registry.cpp
+    src/data/vertex_data_uploader.cpp
+    src/data/data_handler.cpp
+    src/data/data_query_api.cpp
+
     # Public API
     src/core/pictor_renderer.cpp
 )
