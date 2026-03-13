@@ -145,6 +145,13 @@ public:
 
     const GIResourceLayout& resource_layout() const { return resources_; }
 
+    // ---- Bake integration ----
+
+    /// Set the baked static object count. When > 0, runtime GI passes
+    /// skip the first `count` static objects and use pre-baked GPU data.
+    void set_baked_static_count(uint32_t count) { baked_static_count_ = count; }
+    uint32_t baked_static_count() const { return baked_static_count_; }
+
     // ---- Statistics ----
 
     struct Stats {
@@ -191,6 +198,7 @@ private:
     uint32_t           max_objects_  = 0;
     uint32_t           screen_width_ = 0;
     uint32_t           screen_height_ = 0;
+    uint32_t           baked_static_count_ = 0;
 };
 
 } // namespace pictor
