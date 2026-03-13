@@ -74,4 +74,34 @@ void RenderPassScheduler::execute(const BatchBuilder& batch_builder,
     }
 }
 
+std::vector<RenderBatch> RenderPassScheduler::remap_batches_for_pass(
+    const std::vector<RenderBatch>& batches,
+    PassType pass_type) const
+{
+    if (!material_registry_) return batches;
+
+    std::vector<RenderBatch> remapped;
+    remapped.reserve(batches.size());
+
+    for (const auto& batch : batches) {
+        RenderBatch rb = batch;
+
+        // Look up the pass-specific variant for this batch's material.
+        // The batch carries a materialKey that was assigned at build time;
+        // we need to resolve it via the MaterialHandle stored in the pool.
+        // For now we use materialKey as handle lookup (direct mapping).
+        const auto* variant = material_registry_->variant_for(
+            static_cast<MaterialHandle>(batch.materialKey), pass_type);
+
+        if (variant) {
+            rb.shaderKey   = variant->shader_key;
+            rb.materialKey = variant->material_key;
+        }
+
+        remapped.push_back(rb);
+    }
+
+    return remapped;
+}
+
 } // namespace pictor

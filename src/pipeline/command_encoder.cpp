@@ -22,6 +22,42 @@ void CommandEncoder::encode(const std::vector<RenderBatch>& batches,
     }
 }
 
+void CommandEncoder::encode(const std::vector<RenderBatch>& batches,
+                             PassType pass_type,
+                             FrameAllocator& allocator,
+                             const MaterialRegistry* material_registry) {
+    if (!material_registry) {
+        encode(batches, pass_type, allocator);
+        return;
+    }
+
+    for (const auto& batch : batches) {
+        DrawCommand cmd;
+        cmd.type = DrawCommand::Type::DRAW_INDEXED;
+        cmd.index_count = batch.count;
+        cmd.instance_count = 1;
+        cmd.first_index = batch.startIndex;
+        cmd.vertex_offset = 0;
+        cmd.first_instance = 0;
+
+        // Resolve pass-specific keys from material variant
+        const auto* variant = material_registry->variant_for(
+            static_cast<MaterialHandle>(batch.materialKey), pass_type);
+
+        if (variant) {
+            cmd.shader_key   = variant->shader_key;
+            cmd.material_key = variant->material_key;
+        } else {
+            cmd.shader_key   = batch.shaderKey;
+            cmd.material_key = batch.materialKey;
+        }
+
+        commands_.push_back(cmd);
+        ++draw_call_count_;
+        triangle_count_ += batch.count / 3;
+    }
+}
+
 void CommandEncoder::encode_compute(uint32_t group_x, uint32_t group_y, uint32_t group_z,
                                      uint64_t shader_key) {
     DrawCommand cmd;
