@@ -1,0 +1,103 @@
+// Pictor — Static Object AO Bake Shader
+// Computes per-object ambient occlusion for the static pool by testing
+// each object's position against surrounding geometry AABBs.
+// Unlike screen-space SSAO, this is view-independent and uses
+// a high sample count for offline-quality results.
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform BakeAOParams {
+    uint  objectCount;
+    uint  totalSceneObjects;  // all static objects for intersection
+    uint  sampleCount;        // hemisphere sample directions
+    float radius;             // max occlusion test radius
+    float bias;
+    float intensity;
+    float padding0;
+    float padding1;
+};
+
+// Input: world-space AABB bounds of bake targets
+layout(std430, set = 0, binding = 1) readonly buffer BakeBounds {
+    vec4 bake_bounds[];  // pairs: [min, max]
+};
+
+// Input: all static scene AABB bounds (occluders)
+layout(std430, set = 0, binding = 2) readonly buffer SceneBounds {
+    vec4 scene_bounds[];  // pairs: [min, max]
+};
+
+// Input: hemisphere sample directions (cosine-weighted)
+layout(std430, set = 0, binding = 3) readonly buffer SampleDirs {
+    vec4 sample_dirs[];  // xyz = direction, w = weight
+};
+
+// Output: per-object AO value
+layout(std430, set = 0, binding = 4) writeonly buffer AOOutput {
+    float ao_values[];
+};
+
+// Ray-AABB intersection test (slab method)
+bool rayIntersectsAABB(vec3 origin, vec3 invDir, vec3 aabbMin, vec3 aabbMax,
+                       float maxDist) {
+    vec3 t1 = (aabbMin - origin) * invDir;
+    vec3 t2 = (aabbMax - origin) * invDir;
+
+    vec3 tMin = min(t1, t2);
+    vec3 tMax = max(t1, t2);
+
+    float tNear = max(max(tMin.x, tMin.y), tMin.z);
+    float tFar  = min(min(tMax.x, tMax.y), tMax.z);
+
+    return tFar >= max(tNear, 0.0) && tNear < maxDist;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    vec3 aabbMin = bake_bounds[idx * 2].xyz;
+    vec3 aabbMax = bake_bounds[idx * 2 + 1].xyz;
+    vec3 center  = (aabbMin + aabbMax) * 0.5;
+
+    float occlusion = 0.0;
+
+    for (uint s = 0; s < sampleCount; s++) {
+        vec3 dir = sample_dirs[s].xyz;
+        float weight = sample_dirs[s].w;
+
+        // Offset ray origin slightly to avoid self-intersection
+        vec3 origin = center + dir * bias;
+        vec3 invDir = 1.0 / (dir + vec3(1e-8)); // avoid div-by-zero
+
+        bool occluded = false;
+
+        // Test against all scene objects (brute-force for correctness)
+        for (uint j = 0; j < totalSceneObjects; j++) {
+            if (j == idx) continue; // skip self
+
+            vec3 sceneMin = scene_bounds[j * 2].xyz;
+            vec3 sceneMax = scene_bounds[j * 2 + 1].xyz;
+
+            if (rayIntersectsAABB(origin, invDir, sceneMin, sceneMax, radius)) {
+                occluded = true;
+                break;
+            }
+        }
+
+        if (occluded) {
+            occlusion += weight;
+        }
+    }
+
+    // Normalize and invert: 1.0 = fully open, 0.0 = fully occluded
+    float totalWeight = 0.0;
+    for (uint s = 0; s < sampleCount; s++) {
+        totalWeight += sample_dirs[s].w;
+    }
+
+    float ao = 1.0 - (occlusion / max(totalWeight, 1e-6)) * intensity;
+    ao_values[idx] = clamp(ao, 0.0, 1.0);
+}
