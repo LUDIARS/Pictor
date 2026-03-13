@@ -1,0 +1,145 @@
+// Pictor — Global Illumination Probe Sampling Shader
+// Computes indirect diffuse lighting by sampling irradiance probes
+// placed on a uniform 3D grid. Produces an irradiance map that
+// material shaders can sample without coupling to the GI algorithm.
+//
+// Approach: Light Probe Grid (similar to DDGI — Dynamic Diffuse GI)
+//   1. Each probe stores SH coefficients or cubemap irradiance
+//   2. This shader interpolates nearby probes for each visible object
+//   3. Output: per-object indirect diffuse SH (L2 spherical harmonics)
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform GIProbeParams {
+    vec4  gridOrigin;         // xyz = world-space origin of probe grid
+    vec4  gridSpacing;        // xyz = spacing between probes
+    uvec4 gridDimensions;     // xyz = probe count per axis, w = total
+    uint  objectCount;
+    uint  probeCount;
+    float giIntensity;        // global multiplier for indirect light
+    float maxProbeDistance;   // max distance for probe influence
+};
+
+// Input: world-space transforms (translation = object position)
+layout(std430, set = 0, binding = 1) readonly buffer Transforms {
+    mat4 gpu_transforms[];
+};
+
+// Input: object visibility flags
+layout(std430, set = 0, binding = 2) readonly buffer Visibility {
+    uint gpu_visibility[];
+};
+
+// Input: probe irradiance data — L2 SH coefficients (9 vec4 per probe)
+// Each probe: 9 × vec4 = 36 floats = RGB irradiance in SH basis
+layout(std430, set = 0, binding = 3) readonly buffer ProbeIrradiance {
+    vec4 probe_sh[];  // [probeIdx * 9 + shCoeff]
+};
+
+// Output: per-object indirect diffuse (L2 SH, 9 × vec4 per object)
+layout(std430, set = 0, binding = 4) writeonly buffer ObjectIrradiance {
+    vec4 object_irradiance[];  // [objIdx * 9 + shCoeff]
+};
+
+// Convert world position to probe grid index
+ivec3 worldToProbeIndex(vec3 worldPos) {
+    vec3 local = (worldPos - gridOrigin.xyz) / gridSpacing.xyz;
+    return ivec3(floor(local));
+}
+
+// Flatten 3D probe index to 1D
+uint probeIndex3Dto1D(ivec3 idx) {
+    return uint(idx.z) * gridDimensions.x * gridDimensions.y
+         + uint(idx.y) * gridDimensions.x
+         + uint(idx.x);
+}
+
+// Check if probe index is valid
+bool isValidProbe(ivec3 idx) {
+    return idx.x >= 0 && idx.y >= 0 && idx.z >= 0 &&
+           uint(idx.x) < gridDimensions.x &&
+           uint(idx.y) < gridDimensions.y &&
+           uint(idx.z) < gridDimensions.z;
+}
+
+// Trilinear interpolation of 8 surrounding probes' SH data
+void interpolateProbes(vec3 worldPos, out vec4 resultSH[9]) {
+    // Initialize output
+    for (int i = 0; i < 9; i++) {
+        resultSH[i] = vec4(0.0);
+    }
+
+    vec3 local = (worldPos - gridOrigin.xyz) / gridSpacing.xyz;
+    ivec3 baseIdx = ivec3(floor(local));
+    vec3 frac = local - vec3(baseIdx);
+
+    float totalWeight = 0.0;
+
+    // Sample 8 corners of the surrounding cell
+    for (int dz = 0; dz < 2; dz++) {
+        for (int dy = 0; dy < 2; dy++) {
+            for (int dx = 0; dx < 2; dx++) {
+                ivec3 probeIdx = baseIdx + ivec3(dx, dy, dz);
+
+                if (!isValidProbe(probeIdx)) continue;
+
+                // Trilinear weight
+                vec3 w = mix(1.0 - frac, frac, vec3(dx, dy, dz));
+                float weight = w.x * w.y * w.z;
+
+                if (weight <= 0.0) continue;
+
+                uint flatIdx = probeIndex3Dto1D(probeIdx);
+
+                // Distance-based falloff
+                vec3 probeWorld = gridOrigin.xyz + vec3(probeIdx) * gridSpacing.xyz;
+                float dist = length(worldPos - probeWorld);
+                float distWeight = 1.0 - smoothstep(0.0, maxProbeDistance, dist);
+                weight *= distWeight;
+
+                if (weight <= 0.0) continue;
+
+                // Accumulate SH coefficients
+                for (int s = 0; s < 9; s++) {
+                    resultSH[s] += probe_sh[flatIdx * 9 + s] * weight;
+                }
+                totalWeight += weight;
+            }
+        }
+    }
+
+    // Normalize
+    if (totalWeight > 0.0) {
+        float invWeight = 1.0 / totalWeight;
+        for (int i = 0; i < 9; i++) {
+            resultSH[i] *= invWeight;
+        }
+    }
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    // Skip invisible objects
+    if (gpu_visibility[idx] == 0) {
+        for (int i = 0; i < 9; i++) {
+            object_irradiance[idx * 9 + i] = vec4(0.0);
+        }
+        return;
+    }
+
+    // Extract world position from transform matrix
+    vec3 worldPos = gpu_transforms[idx][3].xyz;
+
+    // Interpolate irradiance from surrounding probes
+    vec4 sh[9];
+    interpolateProbes(worldPos, sh);
+
+    // Apply global GI intensity
+    for (int i = 0; i < 9; i++) {
+        object_irradiance[idx * 9 + i] = sh[i] * giIntensity;
+    }
+}

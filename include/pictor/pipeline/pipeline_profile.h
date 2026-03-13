@@ -4,6 +4,7 @@
 #include "pictor/memory/memory_subsystem.h"
 #include "pictor/update/update_scheduler.h"
 #include "pictor/gpu/gpu_driven_pipeline.h"
+#include "pictor/gi/gi_lighting_system.h"
 #include <string>
 #include <vector>
 
@@ -56,6 +57,7 @@ struct PipelineProfileDef {
     MemoryConfig               memory_config;
     UpdateConfig               update_config;
     ProfilerConfig             profiler_config;
+    GIConfig                   gi_config;
     uint32_t                   max_lights           = 256;
     uint8_t                    msaa_samples         = 0;
 };

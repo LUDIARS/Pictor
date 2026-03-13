@@ -14,6 +14,7 @@
 #include "pictor/profiler/profiler.h"
 #include "pictor/profiler/overlay_renderer.h"
 #include "pictor/profiler/data_exporter.h"
+#include "pictor/gi/gi_lighting_system.h"
 #include <memory>
 
 namespace pictor {
@@ -103,6 +104,18 @@ public:
     void set_job_dispatcher(IJobDispatcher* dispatcher);
     void register_custom_pass(ICustomRenderPass* pass);
 
+    // ---- GI Lighting ----
+
+    /// Set the primary directional light for shadow mapping
+    void set_directional_light(const DirectionalLight& light);
+
+    /// Upload light probe irradiance data for GI
+    void upload_gi_probe_data(const float* sh_data, uint32_t probe_count);
+
+    /// Access GI system configuration
+    void set_gi_config(const GIConfig& config);
+    GILightingSystem* gi_system() { return gi_system_.get(); }
+
     // ---- Data Export (§13.7) ----
 
     void begin_profiler_recording(const std::string& path);
@@ -138,6 +151,7 @@ private:
     std::unique_ptr<Profiler>               profiler_;
     std::unique_ptr<OverlayRenderer>        overlay_;
     std::unique_ptr<DataExporter>           data_exporter_;
+    std::unique_ptr<GILightingSystem>       gi_system_;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;
