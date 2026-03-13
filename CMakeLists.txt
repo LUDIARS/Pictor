@@ -65,6 +65,13 @@ add_library(pictor STATIC
     src/gpu/gpu_buffer_manager.cpp
     src/gpu/gpu_driven_pipeline.cpp
 
+    # Global Illumination
+    src/gi/gi_lighting_system.cpp
+    src/gi/gi_bake.cpp
+
+    # Material
+    src/material/base_material_builder.cpp
+
     # Pipeline
     src/pipeline/pipeline_profile.cpp
     src/pipeline/render_pass_scheduler.cpp

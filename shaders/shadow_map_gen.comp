@@ -1,0 +1,137 @@
+// Pictor — Cascaded Shadow Map Generation Shader
+// Pre-generates a shadow depth atlas from the directional light's perspective.
+// Each cascade renders objects into its own region of the shadow atlas.
+// Operates independently of material/fragment shaders.
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+// Per-cascade light-space view-projection
+layout(set = 0, binding = 0) uniform ShadowParams {
+    mat4  lightViewProj[4];   // up to 4 CSM cascades
+    vec4  cascadeSplits;      // near-plane split distances (view-space Z)
+    uint  objectCount;
+    uint  cascadeCount;       // active cascade count (1..4)
+    uint  shadowResolution;   // per-cascade resolution (e.g. 2048)
+    float depthBias;
+    float normalBias;
+    float padding0;
+    float padding1;
+    float padding2;
+};
+
+// Input: world-space AABB bounds (pairs of [min, max])
+layout(std430, set = 0, binding = 1) readonly buffer Bounds {
+    vec4 gpu_bounds[];
+};
+
+// Input: world-space transforms
+layout(std430, set = 0, binding = 2) readonly buffer Transforms {
+    mat4 gpu_transforms[];
+};
+
+// Input: object visibility from culling pass
+layout(std430, set = 0, binding = 3) readonly buffer Visibility {
+    uint gpu_visibility[];
+};
+
+// Output: per-object shadow-cascade membership (bitmask per object)
+// bit 0 = cascade 0, bit 1 = cascade 1, etc.
+layout(std430, set = 0, binding = 4) writeonly buffer ShadowCascadeFlags {
+    uint shadow_cascade_flags[];
+};
+
+// Output: light-space depth for each object × cascade
+// Layout: [obj0_c0, obj0_c1, obj0_c2, obj0_c3, obj1_c0, ...]
+layout(std430, set = 0, binding = 5) writeonly buffer ShadowDepths {
+    float shadow_depths[];
+};
+
+// Test if an AABB is inside a cascade's light frustum
+bool testCascadeFrustum(vec3 aabbMin, vec3 aabbMax, mat4 lvp) {
+    // Project all 8 corners into light clip space
+    // If all corners are outside any single clip plane, AABB is outside
+    bool allOutside[6] = bool[6](true, true, true, true, true, true);
+
+    for (int c = 0; c < 8; c++) {
+        vec3 corner = vec3(
+            ((c & 1) != 0) ? aabbMax.x : aabbMin.x,
+            ((c & 2) != 0) ? aabbMax.y : aabbMin.y,
+            ((c & 4) != 0) ? aabbMax.z : aabbMin.z
+        );
+
+        vec4 clip = lvp * vec4(corner, 1.0);
+
+        // Check each clip plane
+        if (clip.x >= -clip.w) allOutside[0] = false; // +X
+        if (clip.x <=  clip.w) allOutside[1] = false; // -X
+        if (clip.y >= -clip.w) allOutside[2] = false; // +Y
+        if (clip.y <=  clip.w) allOutside[3] = false; // -Y
+        if (clip.z >= 0.0)     allOutside[4] = false; // near (Vulkan: 0..1)
+        if (clip.z <=  clip.w) allOutside[5] = false; // far
+    }
+
+    for (int i = 0; i < 6; i++) {
+        if (allOutside[i]) return false;
+    }
+    return true;
+}
+
+// Compute the minimum light-space depth of an AABB
+float computeLightDepth(vec3 aabbMin, vec3 aabbMax, mat4 lvp) {
+    float minDepth = 1.0;
+
+    for (int c = 0; c < 8; c++) {
+        vec3 corner = vec3(
+            ((c & 1) != 0) ? aabbMax.x : aabbMin.x,
+            ((c & 2) != 0) ? aabbMax.y : aabbMin.y,
+            ((c & 4) != 0) ? aabbMax.z : aabbMin.z
+        );
+
+        vec4 clip = lvp * vec4(corner, 1.0);
+        if (clip.w > 0.0) {
+            float depth = clip.z / clip.w;
+            minDepth = min(minDepth, depth);
+        }
+    }
+
+    return clamp(minDepth + depthBias, 0.0, 1.0);
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    // Skip invisible objects
+    if (gpu_visibility[idx] == 0) {
+        shadow_cascade_flags[idx] = 0u;
+        for (uint c = 0; c < 4; c++) {
+            shadow_depths[idx * 4 + c] = 1.0;
+        }
+        return;
+    }
+
+    vec3 aabbMin = gpu_bounds[idx * 2].xyz;
+    vec3 aabbMax = gpu_bounds[idx * 2 + 1].xyz;
+
+    uint cascadeMask = 0u;
+
+    for (uint c = 0; c < cascadeCount; c++) {
+        bool inCascade = testCascadeFrustum(aabbMin, aabbMax, lightViewProj[c]);
+
+        if (inCascade) {
+            cascadeMask |= (1u << c);
+            shadow_depths[idx * 4 + c] = computeLightDepth(aabbMin, aabbMax, lightViewProj[c]);
+        } else {
+            shadow_depths[idx * 4 + c] = 1.0;
+        }
+    }
+
+    // Fill unused cascade slots
+    for (uint c = cascadeCount; c < 4; c++) {
+        shadow_depths[idx * 4 + c] = 1.0;
+    }
+
+    shadow_cascade_flags[idx] = cascadeMask;
+}

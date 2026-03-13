@@ -16,6 +16,8 @@
 #include "pictor/profiler/data_exporter.h"
 #include "pictor/data/data_handler.h"
 #include "pictor/data/data_query_api.h"
+#include "pictor/gi/gi_lighting_system.h"
+#include "pictor/gi/gi_bake.h"
 #include <memory>
 
 namespace pictor {
@@ -122,6 +124,42 @@ public:
     /// Create a read-only query API for external tools/editors
     DataQueryAPI create_query_api() const { return DataQueryAPI(*data_handler_); }
 
+    // ---- GI Lighting ----
+
+    /// Set the primary directional light for shadow mapping
+    void set_directional_light(const DirectionalLight& light);
+
+    /// Upload light probe irradiance data for GI
+    void upload_gi_probe_data(const float* sh_data, uint32_t probe_count);
+
+    /// Access GI system configuration
+    void set_gi_config(const GIConfig& config);
+    GILightingSystem* gi_system() { return gi_system_.get(); }
+
+    // ---- GI Bake (static objects) ----
+
+    /// Bake GI data for all static-pool objects (blocking)
+    GIBakeResult bake_static_gi();
+
+    /// Bake with progress callback (return false to cancel)
+    GIBakeResult bake_static_gi(BakeProgressCallback progress);
+
+    /// Apply baked result to GPU for runtime use
+    void apply_bake(const GIBakeResult& result);
+
+    /// Mark bake as stale (call after modifying static objects)
+    void invalidate_bake();
+
+    /// Save / load bake data
+    bool save_bake(const std::string& path, const GIBakeResult& result);
+    GIBakeResult load_bake(const std::string& path);
+
+    /// Set a data provider for bake (extra lights, emissive surfaces, etc.)
+    void set_bake_data_provider(IBakeDataProvider* provider);
+
+    /// Access bake system
+    GIBakeSystem* bake_system() { return bake_system_.get(); }
+
     // ---- Data Export (§13.7) ----
 
     void begin_profiler_recording(const std::string& path);
@@ -158,6 +196,8 @@ private:
     std::unique_ptr<OverlayRenderer>        overlay_;
     std::unique_ptr<DataExporter>           data_exporter_;
     std::unique_ptr<DataHandler>            data_handler_;
+    std::unique_ptr<GILightingSystem>       gi_system_;
+    std::unique_ptr<GIBakeSystem>           bake_system_;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;

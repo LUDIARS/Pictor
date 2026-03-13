@@ -48,7 +48,21 @@ void PictorRenderer::initialize(const RendererConfig& config) {
             *gpu_buffer_manager_, *scene_, profile.gpu_driven_config);
     }
 
-    // 10. Render Pass Scheduler
+    // 10. GI Lighting System (shadow maps + AO + probes)
+    if (profile.gi_config.shadow_enabled || profile.gi_config.ssao_enabled ||
+        profile.gi_config.gi_probes_enabled) {
+        gi_system_ = std::make_unique<GILightingSystem>(
+            *gpu_buffer_manager_, *scene_, profile.gi_config);
+        gi_system_->initialize(
+            profile.gpu_driven_config.max_triangle_count,
+            config.screen_width, config.screen_height);
+
+        // Bake system (depends on GI system)
+        bake_system_ = std::make_unique<GIBakeSystem>(
+            *gpu_buffer_manager_, *scene_, *gi_system_);
+    }
+
+    // 11. Render Pass Scheduler
     pass_scheduler_ = std::make_unique<RenderPassScheduler>(profile);
 
     // 11. Command Encoder
@@ -83,6 +97,8 @@ void PictorRenderer::shutdown() {
     profiler_.reset();
     command_encoder_.reset();
     pass_scheduler_.reset();
+    bake_system_.reset();
+    gi_system_.reset();
     gpu_pipeline_.reset();
     profile_manager_.reset();
     gpu_buffer_manager_.reset();
@@ -148,6 +164,15 @@ void PictorRenderer::render(const Camera& camera) {
         auto gpu_stats = gpu_pipeline_->get_stats();
         profiler_->record_gpu_driven_objects(gpu_stats.total_objects);
         profiler_->record_compute_update_objects(gpu_stats.total_objects);
+    }
+
+    // GI pre-passes: shadow maps + SSAO + probe sampling
+    // Executes after culling (visibility data ready), before command encoding.
+    // Results are bound as read-only resources for material shaders.
+    if (gi_system_) {
+        profiler_->begin_gpu_section("GILighting");
+        gi_system_->execute(camera.view, camera.projection);
+        profiler_->end_gpu_section("GILighting");
     }
 
     // §11.3 Step 5-6: Encode + Submit
@@ -259,7 +284,23 @@ void PictorRenderer::apply_profile(const PipelineProfileDef& profile) {
         gpu_pipeline_->set_config(profile.gpu_driven_config);
     }
 
-    // 7. Profiler config
+    // 7. GI system reconfigure
+    if (profile.gi_config.shadow_enabled || profile.gi_config.ssao_enabled ||
+        profile.gi_config.gi_probes_enabled) {
+        if (!gi_system_) {
+            gi_system_ = std::make_unique<GILightingSystem>(
+                *gpu_buffer_manager_, *scene_, profile.gi_config);
+            gi_system_->initialize(
+                profile.gpu_driven_config.max_triangle_count,
+                config_.screen_width, config_.screen_height);
+        } else {
+            gi_system_->set_config(profile.gi_config);
+        }
+    } else {
+        gi_system_.reset();
+    }
+
+    // 8. Profiler config
     profiler_->set_enabled(profile.profiler_config.enabled);
     profiler_->set_overlay_mode(profile.profiler_config.overlay_mode);
 }
@@ -320,6 +361,66 @@ MeshHandle PictorRenderer::register_mesh_data(const MeshDataDescriptor& desc) {
 void PictorRenderer::unregister_mesh_data(MeshHandle handle) {
     if (!initialized_) return;
     data_handler_->unregister_mesh(handle);
+}
+
+// ---- GI Lighting ----
+
+void PictorRenderer::set_directional_light(const DirectionalLight& light) {
+    if (gi_system_) gi_system_->set_directional_light(light);
+}
+
+void PictorRenderer::upload_gi_probe_data(const float* sh_data, uint32_t probe_count) {
+    if (gi_system_) gi_system_->upload_probe_data(sh_data, probe_count);
+}
+
+void PictorRenderer::set_gi_config(const GIConfig& config) {
+    if (gi_system_) gi_system_->set_config(config);
+}
+
+// ---- GI Bake ----
+
+GIBakeResult PictorRenderer::bake_static_gi() {
+    if (!bake_system_) return GIBakeResult{};
+    auto result = bake_system_->bake();
+    result.bake_timestamp = frame_number_;
+    return result;
+}
+
+GIBakeResult PictorRenderer::bake_static_gi(BakeProgressCallback progress) {
+    if (!bake_system_) return GIBakeResult{};
+    auto result = bake_system_->bake(std::move(progress));
+    result.bake_timestamp = frame_number_;
+    return result;
+}
+
+void PictorRenderer::apply_bake(const GIBakeResult& result) {
+    if (!bake_system_) return;
+    bake_system_->apply(result);
+
+    // Notify GI system how many static objects have baked data
+    if (gi_system_) {
+        gi_system_->set_baked_static_count(
+            static_cast<uint32_t>(result.object_ids.size()));
+    }
+}
+
+void PictorRenderer::invalidate_bake() {
+    if (bake_system_) bake_system_->invalidate();
+    if (gi_system_) gi_system_->set_baked_static_count(0);
+}
+
+bool PictorRenderer::save_bake(const std::string& path, const GIBakeResult& result) {
+    if (!bake_system_) return false;
+    return bake_system_->save(path, result);
+}
+
+GIBakeResult PictorRenderer::load_bake(const std::string& path) {
+    if (!bake_system_) return GIBakeResult{};
+    return bake_system_->load(path);
+}
+
+void PictorRenderer::set_bake_data_provider(IBakeDataProvider* provider) {
+    if (bake_system_) bake_system_->set_bake_data_provider(provider);
 }
 
 // ---- Data Export ----

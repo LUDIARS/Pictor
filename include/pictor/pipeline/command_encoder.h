@@ -3,6 +3,7 @@
 #include "pictor/core/types.h"
 #include "pictor/batch/batch_builder.h"
 #include "pictor/memory/frame_allocator.h"
+#include "pictor/material/base_material_builder.h"
 #include <vector>
 
 namespace pictor {
@@ -44,6 +45,13 @@ public:
     void encode(const std::vector<RenderBatch>& batches,
                 PassType pass_type,
                 FrameAllocator& allocator);
+
+    /// Encode draw commands with material registry awareness.
+    /// Resolves pass-specific shader/material keys from variants.
+    void encode(const std::vector<RenderBatch>& batches,
+                PassType pass_type,
+                FrameAllocator& allocator,
+                const MaterialRegistry* material_registry);
 
     /// Encode a compute dispatch
     void encode_compute(uint32_t group_x, uint32_t group_y, uint32_t group_z,
