@@ -230,6 +230,15 @@ renderer.end_frame();
 | **RenderPassScheduler** | PipelineProfileに基づくパス順序決定と実行 |
 | **CommandEncoder** | DrawCommand生成とVkCommandBuffer記録 |
 | **Profiler** | FPS, パス別GPU/CPU時間, メモリ統計, オーバーレイUI |
+| **DataHandler** | テクスチャ・頂点データの統合管理ファサード |
+| **DataQueryAPI** | 外部ツール向け読み取り専用クエリAPI |
+| **TextureRegistry** | テクスチャ登録・GPUメモリ管理 |
+| **VertexDataUploader** | 柔軟な頂点レイアウトによるメッシュ登録・GPU転送 |
+| **BaseMaterialBuilder** | Fluent APIによるPBRマテリアル構築・パス別バリアント生成 |
+| **MaterialRegistry** | BuiltMaterial の一元管理・O(1)ルックアップ |
+| **GILightingSystem** | シャドウマップ(CSM)・SSAO・Light Probe による GI プリパス |
+| **GIBakeSystem** | 静的オブジェクトのオフライン GI ベイク (Shadow/AO/Irradiance/Lightmap) |
+| **VulkanContext** | Vulkan インスタンス・デバイス・スワップチェーン管理 |
 
 ### SoAデータモデル
 
@@ -261,12 +270,187 @@ PipelineProfileにより以下のパスを切り替え可能です:
 
 ---
 
+## データハンドラ
+
+`DataHandler` はテクスチャと頂点データの登録・アップロードを統合管理するファサードです。レンダラ内部と外部ツールの双方から利用できます。
+
+### テクスチャ管理
+
+```cpp
+// テクスチャ登録（即時アップロードまたは遅延アップロード）
+TextureDescriptor tex_desc;
+tex_desc.name   = "brick_albedo";
+tex_desc.width  = 1024;
+tex_desc.height = 1024;
+tex_desc.format = TextureFormat::RGBA8_SRGB;
+
+TextureHandle tex = renderer.register_texture(tex_desc);
+
+// 後からデータをアップロード（ミップレベル指定可）
+renderer.data_handler().textures().upload_texture_data(tex, pixels, size, /*mip=*/0);
+```
+
+### メッシュ管理
+
+```cpp
+// 柔軟な頂点レイアウトでメッシュを登録
+MeshDataDescriptor mesh_desc;
+mesh_desc.name = "cube";
+mesh_desc.layout.attributes = {
+    {VertexSemantic::POSITION, VertexAttributeType::FLOAT3, 0},
+    {VertexSemantic::NORMAL,   VertexAttributeType::FLOAT3, 12},
+    {VertexSemantic::TEXCOORD0,VertexAttributeType::FLOAT2, 24},
+};
+mesh_desc.vertex_data      = vertices;
+mesh_desc.vertex_data_size = sizeof(vertices);
+mesh_desc.vertex_count     = 24;
+
+MeshHandle mesh = renderer.register_mesh_data(mesh_desc);
+```
+
+### 外部クエリAPI
+
+レベルエディタやアセットブラウザ等の外部ツール向けに、読み取り専用のクエリAPIを提供します。
+
+```cpp
+DataQueryAPI query = renderer.create_query_api();
+
+// サマリー取得
+DataSummary summary = query.get_summary();
+
+// テクスチャ一覧をイテレーション
+query.for_each_texture([](const TextureInfo& info) {
+    printf("Texture: %s (%dx%d)\n", info.name.c_str(), info.width, info.height);
+});
+
+// JSON エクスポート（ツール連携用）
+std::string json = query.export_json();
+```
+
+---
+
+## マテリアルシステム
+
+`BaseMaterialBuilder` は Fluent API でPBRマテリアルを構築し、レンダーパスごとに最適化されたバリアントを自動生成します。
+
+### マテリアル構築
+
+```cpp
+auto mat = BaseMaterialBuilder()
+    .albedo(tex_albedo)
+    .normal_map(tex_normal)
+    .metallic_value(0.0f)
+    .roughness_value(0.8f)
+    .build(registry.allocate_handle());
+```
+
+### パス別バリアント
+
+各マテリアルは登録時にパスごとのバリアントを自動生成します。不要なテクスチャバインディングやフィーチャーフラグが自動的にストリップされ、シェーダーパーミュテーションが最小化されます。
+
+| パスタイプ | 使用されるフィーチャー |
+|-----------|---------------------|
+| Shadow / Depth-Only | ALPHA_TEST, TWO_SIDED のみ |
+| GI | ALBEDO_MAP, EMISSIVE_MAP, ALPHA_TEST, TWO_SIDED, VERTEX_COLOR |
+| Opaque / Transparent | 全フィーチャー |
+
+---
+
+## グローバルイルミネーション
+
+### GILightingSystem
+
+マテリアルシェーダから独立したGIプリパスを実行し、結果を読み取り専用テクスチャ/SSBOとして後続パスに提供します。
+
+```
+ShadowMapGen → SSAO → GI Probes → (既存シェーダが結果を読み取り)
+```
+
+```cpp
+// ディレクショナルライト設定
+DirectionalLight sun;
+sun.direction = {0.5f, -1.0f, 0.3f};
+sun.intensity = 1.0f;
+renderer.set_directional_light(sun);
+
+// GI設定
+GIConfig gi_config;
+gi_config.shadow.cascade_count = 3;
+gi_config.shadow.resolution    = 2048;
+gi_config.ssao.sample_count    = 32;
+gi_config.ssao_enabled         = true;
+gi_config.gi_probes_enabled    = false; // オプトイン
+renderer.set_gi_config(gi_config);
+```
+
+### GIBakeSystem
+
+静的オブジェクトに対して高品質なオフラインGIベイクを実行し、ランタイムのGIパスをスキップできます。
+
+```cpp
+// ブロッキングベイク
+GIBakeResult result = renderer.bake_static_gi();
+
+// プログレス付きベイク
+GIBakeResult result = renderer.bake_static_gi([](float progress, const char* stage) {
+    printf("[%.0f%%] %s\n", progress * 100, stage);
+    return true; // false でキャンセル
+});
+
+// 結果をGPUに適用
+renderer.apply_bake(result);
+
+// ファイルへの保存/読み込み
+renderer.save_bake("scene_gi.bin", result);
+GIBakeResult loaded = renderer.load_bake("scene_gi.bin");
+```
+
+**ベイクターゲット:**
+
+| ターゲット | 説明 |
+|-----------|------|
+| SHADOW_MAP | 静的シャドウ深度 + カスケードフラグ |
+| AMBIENT_OCCLUSION | オブジェクト空間AO（SSAOより高品質） |
+| PROBE_IRRADIANCE | Light Probeグリッドからの放射照度(SH L2) |
+| LIGHTMAP | 直接光 + 間接光の統合ライトマップ |
+
+---
+
+## サーフェスプロバイダ
+
+`ISurfaceProvider` インタフェースにより、Pictorをウィンドウシステムから分離しています。
+
+### 組み込みモード（外部ウィンドウ）
+
+ホストアプリケーションが `ISurfaceProvider` を実装し、Pictorに渡します。
+
+```cpp
+class MyWindowProvider : public pictor::ISurfaceProvider {
+public:
+    NativeWindowHandle get_native_handle() const override { /* ... */ }
+    SwapchainConfig get_swapchain_config() const override { /* ... */ }
+};
+```
+
+### スタンドアロンモード（GLFW）
+
+デモ・ツール向けにGLFWベースの実装 `GlfwSurfaceProvider` を同梱しています。
+
+```cpp
+GlfwSurfaceProvider surface;
+surface.create({.width = 1280, .height = 720, .title = "Pictor Demo"});
+```
+
+**対応プラットフォーム:** Win32, Xlib, XCB, Wayland, macOS (Metal), Android
+
+---
+
 ## ディレクトリ構成
 
 ```
 Pictor/
 ├── include/pictor/
-│   ├── pictor.h                  # パブリックAPI
+│   ├── pictor.h                  # パブリックAPI (全ヘッダ集約)
 │   ├── core/                     # PictorRenderer, 型定義
 │   ├── scene/                    # SceneRegistry, ObjectPool, SoAStream
 │   ├── memory/                   # アロケータ群
@@ -274,12 +458,19 @@ Pictor/
 │   ├── batch/                    # BatchBuilder, RadixSort
 │   ├── culling/                  # CullingSystem, FlatBVH
 │   ├── gpu/                      # GPUDrivenPipeline, GPUBufferManager
-│   ├── pipeline/                 # PipelineProfile, RenderPassScheduler
-│   └── profiler/                 # Profiler, Overlay
+│   ├── pipeline/                 # PipelineProfile, RenderPassScheduler, CommandEncoder
+│   ├── profiler/                 # Profiler, Overlay, DataExporter
+│   ├── data/                     # DataHandler, TextureRegistry, VertexDataUploader, DataQueryAPI
+│   ├── material/                 # BaseMaterialBuilder, MaterialProperty, MaterialRegistry
+│   ├── gi/                       # GILightingSystem, GIBakeSystem
+│   └── surface/                  # ISurfaceProvider, VulkanContext, GlfwSurfaceProvider
 ├── src/                          # 実装
-├── shaders/                      # Compute Shader (.comp)
+├── shaders/                      # Compute Shader (.comp), サンプルシェーダ
 ├── demo/                         # Vulkan ウィンドウデモ
 ├── benchmark/                    # 1M Spheres ベンチマーク
+├── docs/
+│   ├── api/                      # 外部インタフェース・クラス定義ドキュメント
+│   └── design/                   # 設計ドキュメント (WebGL バックエンド等)
 └── plan.md                       # 技術設計書
 ```
 
