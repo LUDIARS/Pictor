@@ -5,6 +5,7 @@
 #include "pictor/batch/batch_builder.h"
 #include "pictor/culling/culling_system.h"
 #include "pictor/gpu/gpu_driven_pipeline.h"
+#include "pictor/material/base_material_builder.h"
 #include <vector>
 #include <functional>
 
@@ -37,6 +38,11 @@ public:
     /// Register a custom render pass (§12.2)
     void register_custom_pass(ICustomRenderPass* pass);
 
+    /// Set material registry for pass-specific variant resolution.
+    /// When set, the scheduler resolves per-pass shader/material keys
+    /// from the registry, stripping unused features per pass.
+    void set_material_registry(const MaterialRegistry* registry) { material_registry_ = registry; }
+
     /// Execute all render passes in order
     void execute(const BatchBuilder& batch_builder,
                  const CullingSystem& culling,
@@ -51,6 +57,14 @@ public:
 private:
     std::vector<RenderPassDef>       pass_order_;
     std::vector<ICustomRenderPass*>  custom_passes_;
+    const MaterialRegistry*          material_registry_ = nullptr;
+
+    /// Remap batch keys using pass-specific material variants.
+    /// Returns a new batch list with shader/material keys replaced by
+    /// the variant appropriate for `pass_type`.
+    std::vector<RenderBatch> remap_batches_for_pass(
+        const std::vector<RenderBatch>& batches,
+        PassType pass_type) const;
 };
 
 } // namespace pictor

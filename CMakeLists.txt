@@ -68,6 +68,9 @@ add_library(pictor STATIC
     # Global Illumination
     src/gi/gi_lighting_system.cpp
 
+    # Material
+    src/material/base_material_builder.cpp
+
     # Pipeline
     src/pipeline/pipeline_profile.cpp
     src/pipeline/render_pass_scheduler.cpp
