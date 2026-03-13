@@ -48,7 +48,17 @@ void PictorRenderer::initialize(const RendererConfig& config) {
             *gpu_buffer_manager_, *scene_, profile.gpu_driven_config);
     }
 
-    // 10. Render Pass Scheduler
+    // 10. GI Lighting System (shadow maps + AO + probes)
+    if (profile.gi_config.shadow_enabled || profile.gi_config.ssao_enabled ||
+        profile.gi_config.gi_probes_enabled) {
+        gi_system_ = std::make_unique<GILightingSystem>(
+            *gpu_buffer_manager_, *scene_, profile.gi_config);
+        gi_system_->initialize(
+            profile.gpu_driven_config.max_triangle_count,
+            config.screen_width, config.screen_height);
+    }
+
+    // 11. Render Pass Scheduler
     pass_scheduler_ = std::make_unique<RenderPassScheduler>(profile);
 
     // 11. Command Encoder
@@ -78,6 +88,7 @@ void PictorRenderer::shutdown() {
     profiler_.reset();
     command_encoder_.reset();
     pass_scheduler_.reset();
+    gi_system_.reset();
     gpu_pipeline_.reset();
     profile_manager_.reset();
     gpu_buffer_manager_.reset();
@@ -143,6 +154,15 @@ void PictorRenderer::render(const Camera& camera) {
         auto gpu_stats = gpu_pipeline_->get_stats();
         profiler_->record_gpu_driven_objects(gpu_stats.total_objects);
         profiler_->record_compute_update_objects(gpu_stats.total_objects);
+    }
+
+    // GI pre-passes: shadow maps + SSAO + probe sampling
+    // Executes after culling (visibility data ready), before command encoding.
+    // Results are bound as read-only resources for material shaders.
+    if (gi_system_) {
+        profiler_->begin_gpu_section("GILighting");
+        gi_system_->execute(camera.view, camera.projection);
+        profiler_->end_gpu_section("GILighting");
     }
 
     // §11.3 Step 5-6: Encode + Submit
@@ -254,7 +274,23 @@ void PictorRenderer::apply_profile(const PipelineProfileDef& profile) {
         gpu_pipeline_->set_config(profile.gpu_driven_config);
     }
 
-    // 7. Profiler config
+    // 7. GI system reconfigure
+    if (profile.gi_config.shadow_enabled || profile.gi_config.ssao_enabled ||
+        profile.gi_config.gi_probes_enabled) {
+        if (!gi_system_) {
+            gi_system_ = std::make_unique<GILightingSystem>(
+                *gpu_buffer_manager_, *scene_, profile.gi_config);
+            gi_system_->initialize(
+                profile.gpu_driven_config.max_triangle_count,
+                config_.screen_width, config_.screen_height);
+        } else {
+            gi_system_->set_config(profile.gi_config);
+        }
+    } else {
+        gi_system_.reset();
+    }
+
+    // 8. Profiler config
     profiler_->set_enabled(profile.profiler_config.enabled);
     profiler_->set_overlay_mode(profile.profiler_config.overlay_mode);
 }
@@ -293,6 +329,20 @@ void PictorRenderer::set_job_dispatcher(IJobDispatcher* dispatcher) {
 
 void PictorRenderer::register_custom_pass(ICustomRenderPass* pass) {
     if (pass_scheduler_) pass_scheduler_->register_custom_pass(pass);
+}
+
+// ---- GI Lighting ----
+
+void PictorRenderer::set_directional_light(const DirectionalLight& light) {
+    if (gi_system_) gi_system_->set_directional_light(light);
+}
+
+void PictorRenderer::upload_gi_probe_data(const float* sh_data, uint32_t probe_count) {
+    if (gi_system_) gi_system_->upload_probe_data(sh_data, probe_count);
+}
+
+void PictorRenderer::set_gi_config(const GIConfig& config) {
+    if (gi_system_) gi_system_->set_config(config);
 }
 
 // ---- Data Export ----
