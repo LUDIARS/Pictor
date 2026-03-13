@@ -46,8 +46,18 @@
 #include "pictor/profiler/overlay_renderer.h"
 #include "pictor/profiler/data_exporter.h"
 
+// Material system
+#include "pictor/material/material_property.h"
+#include "pictor/material/base_material_builder.h"
+
+// GI system
+#include "pictor/gi/gi_lighting_system.h"
+#include "pictor/gi/gi_bake.h"
+
 // Surface abstraction
 #include "pictor/surface/surface_provider.h"
+#include "pictor/surface/vulkan_context.h"
+#include "pictor/surface/glfw_surface_provider.h"
 
 // Data handler
 #include "pictor/data/texture_registry.h"
