@@ -30,12 +30,22 @@ struct PointLight {
 
 /// Shadow map generation settings
 struct ShadowMapConfig {
-    uint32_t cascade_count     = 3;       // CSM cascade count (1..4)
-    uint32_t resolution        = 2048;    // per-cascade resolution
-    float    depth_bias        = 0.005f;  // constant depth bias
-    float    normal_bias       = 0.02f;   // slope-scaled normal bias
-    float    cascade_lambda    = 0.75f;   // practical-logarithmic split factor
-    float    max_shadow_dist   = 200.0f;  // max distance for shadow casting
+    uint32_t         cascade_count     = 3;       // CSM cascade count (1..4)
+    uint32_t         resolution        = 2048;    // per-cascade resolution
+    float            depth_bias        = 0.005f;  // constant depth bias
+    float            normal_bias       = 0.02f;   // normal-based bias
+    float            slope_scale_bias  = 0.005f;  // slope-scale depth bias
+    float            cascade_lambda    = 0.75f;   // practical-logarithmic split factor
+    float            max_shadow_dist   = 200.0f;  // max distance for shadow casting
+    float            cascade_blend_width = 0.1f;  // blend width at cascade boundaries
+    ShadowFilterMode filter_mode       = ShadowFilterMode::PCF;
+    float            shadow_strength   = 1.0f;    // 0 = no shadow, 1 = full shadow
+
+    // PCSS parameters (only used when filter_mode == PCSS)
+    float            pcss_light_size        = 0.04f;  // light source size
+    float            pcss_min_penumbra      = 0.5f;   // minimum penumbra width (texels)
+    float            pcss_max_penumbra      = 16.0f;  // maximum penumbra width (texels)
+    float            pcss_blocker_search_radius = 8.0f; // blocker search radius (texels)
 };
 
 /// Screen-space AO settings
@@ -74,11 +84,31 @@ struct GIConfig {
 // GPU resource layout for GI
 // ============================================================
 
+/// GPU-side shadow uniform data (mirrors ShadowUniforms in shadow.glsl)
+struct ShadowUniformData {
+    float4x4 shadow_view_proj[4];             // per-cascade light VP matrices
+    float    cascade_split_depths[4] = {};    // view-space Z split distances
+    float    texel_size       = 0.0f;         // 1.0 / resolution
+    float    cascade_count_f  = 3.0f;         // cascade count as float
+    float    filter_mode_f    = 1.0f;         // ShadowFilterMode as float
+    float    shadow_strength  = 1.0f;         // shadow intensity
+    float    depth_bias       = 0.005f;
+    float    normal_bias      = 0.02f;
+    float    slope_scale_bias = 0.005f;
+    float    cascade_blend_width = 0.1f;
+    float    pcss_light_size        = 0.04f;
+    float    pcss_min_penumbra      = 0.5f;
+    float    pcss_max_penumbra      = 16.0f;
+    float    pcss_blocker_search_radius = 8.0f;
+};
+
 /// GPU allocations managed by the GI system
 struct GIResourceLayout {
     // Shadow map resources
     GpuAllocation shadow_cascade_flags;   // uint per object
     GpuAllocation shadow_depths;          // 4 floats per object (per-cascade)
+    GpuAllocation shadow_atlas;           // depth texture array (cascadeCount layers)
+    GpuAllocation shadow_uniforms;        // ShadowUniformData uniform buffer
 
     // SSAO resources
     GpuAllocation ssao_kernel;            // vec4 × sample_count
@@ -145,6 +175,17 @@ public:
 
     const GIResourceLayout& resource_layout() const { return resources_; }
 
+    /// Get current shadow uniform data (for binding to fragment shaders)
+    const ShadowUniformData& shadow_uniforms() const { return shadow_uniform_data_; }
+
+    /// Get cascade split distances (view-space)
+    const float* cascade_splits() const { return cached_cascade_splits_; }
+
+    /// Get light-space view-projection for a cascade
+    const float4x4& cascade_view_proj(uint32_t cascade) const {
+        return shadow_uniform_data_.shadow_view_proj[cascade];
+    }
+
     // ---- Bake integration ----
 
     /// Set the baked static object count. When > 0, runtime GI passes
@@ -188,11 +229,21 @@ private:
     /// Calculate workgroup count
     uint32_t calculate_workgroups(uint32_t count, uint32_t size = 256) const;
 
+    /// Build shadow uniform data from current config and cascade matrices
+    void update_shadow_uniforms(const float4x4& camera_view,
+                                const float4x4& camera_projection);
+
+    /// Render shadow depth pass for a single cascade
+    void render_shadow_cascade(uint32_t cascade_index,
+                               const float4x4& light_view_proj);
+
     GPUBufferManager&  buffer_manager_;
     SceneRegistry&     registry_;
     GIConfig           config_;
     GIResourceLayout   resources_;
     DirectionalLight   directional_light_;
+    ShadowUniformData  shadow_uniform_data_;
+    float              cached_cascade_splits_[5] = {};
     Stats              stats_;
     bool               initialized_ = false;
     uint32_t           max_objects_  = 0;

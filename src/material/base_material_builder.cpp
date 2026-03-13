@@ -110,6 +110,24 @@ BaseMaterialBuilder& BaseMaterialBuilder::enable_alpha_test(bool enabled) {
     return *this;
 }
 
+BaseMaterialBuilder& BaseMaterialBuilder::enable_cast_shadow(bool enabled) {
+    desc_.cast_shadow = enabled;
+    if (enabled)
+        desc_.features |= MaterialFeature::CAST_SHADOW;
+    else
+        desc_.features &= ~MaterialFeature::CAST_SHADOW;
+    return *this;
+}
+
+BaseMaterialBuilder& BaseMaterialBuilder::enable_receive_shadow(bool enabled) {
+    desc_.receive_shadow = enabled;
+    if (enabled)
+        desc_.features |= MaterialFeature::RECEIVE_SHADOW;
+    else
+        desc_.features &= ~MaterialFeature::RECEIVE_SHADOW;
+    return *this;
+}
+
 BaseMaterialBuilder& BaseMaterialBuilder::set_pass_features(PassType pass, uint32_t features) {
     pass_feature_overrides_[static_cast<size_t>(pass)] = features;
     return *this;
@@ -129,6 +147,10 @@ uint32_t BaseMaterialBuilder::compute_features() const {
     if (desc_.ao_texture       != INVALID_TEXTURE) f |= MaterialFeature::AO_MAP;
     if (desc_.emissive_texture != INVALID_TEXTURE) f |= MaterialFeature::EMISSIVE_MAP;
     if (desc_.alpha_cutoff > 0.0f)                  f |= MaterialFeature::ALPHA_TEST;
+
+    // Shadow flags from descriptor booleans
+    if (desc_.cast_shadow)    f |= MaterialFeature::CAST_SHADOW;
+    if (desc_.receive_shadow) f |= MaterialFeature::RECEIVE_SHADOW;
 
     return f;
 }
@@ -197,8 +219,9 @@ uint64_t BaseMaterialBuilder::compute_shader_key(PassType pass, uint32_t variant
     key |= static_cast<uint64_t>(pass) << 56;
 
     // Pack feature bits into the permutation selector.
-    // Lower 10 bits of features map to unique shader variants.
-    uint16_t perm = static_cast<uint16_t>(variant_features & 0x03FF);
+    // Lower 12 bits of features map to unique shader variants
+    // (includes CAST_SHADOW and RECEIVE_SHADOW flags).
+    uint16_t perm = static_cast<uint16_t>(variant_features & 0x0FFF);
     key |= static_cast<uint64_t>(perm) << 40;
 
     return key;
