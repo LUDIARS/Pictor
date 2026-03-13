@@ -85,16 +85,16 @@ NativeWindowHandle GlfwSurfaceProvider::get_native_handle() const {
     if (!window_) return h;
 
 #if defined(_WIN32)
-    h.type = NativeWindowHandle::Type::WIN32;
+    h.type = NativeWindowHandle::Type::Win32;
     h.win32.hwnd      = glfwGetWin32Window(window_);
     h.win32.hinstance = GetModuleHandle(nullptr);
 #elif defined(__linux__)
     // X11 path (most common with GLFW on Linux)
-    h.type = NativeWindowHandle::Type::XLIB;
+    h.type = NativeWindowHandle::Type::Xlib;
     h.xlib.display = glfwGetX11Display();
     h.xlib.window  = glfwGetX11Window(window_);
 #elif defined(__APPLE__)
-    h.type = NativeWindowHandle::Type::COCOA;
+    h.type = NativeWindowHandle::Type::Cocoa;
     h.cocoa.ns_view = glfwGetCocoaWindow(window_); // NSWindow* — MoltenVK accepts this
 #endif
 

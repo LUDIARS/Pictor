@@ -87,6 +87,7 @@ add_library(pictor STATIC
     # Surface Abstraction
     src/surface/vulkan_context.cpp
     src/surface/glfw_surface_provider.cpp
+    src/surface/simple_renderer.cpp
 
     # Data Handler
     src/data/texture_registry.cpp
@@ -106,6 +107,13 @@ target_include_directories(pictor PUBLIC
 if(Vulkan_FOUND)
     target_link_libraries(pictor PUBLIC Vulkan::Vulkan)
     target_compile_definitions(pictor PUBLIC PICTOR_HAS_VULKAN=1)
+    if(WIN32)
+        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_WIN32_KHR=1 NOMINMAX)
+    elseif(UNIX AND NOT APPLE)
+        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_XLIB_KHR=1)
+    elseif(APPLE)
+        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_MACOS_MVK=1)
+    endif()
 endif()
 
 if(PICTOR_ENABLE_PROFILER)
@@ -138,4 +146,32 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND glfw3_FOUND)
     message(STATUS "Pictor: Vulkan window demo enabled")
 elseif(PICTOR_BUILD_DEMO)
     message(STATUS "Pictor: Demo disabled (requires Vulkan + GLFW3)")
+endif()
+
+# Shader compilation
+if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
+    set(PICTOR_SHADER_SOURCES
+        ${CMAKE_SOURCE_DIR}/shaders/simple_inst.vert
+        ${CMAKE_SOURCE_DIR}/shaders/simple_inst.frag
+    )
+    set(PICTOR_SPIRV_FILES)
+    foreach(SHADER ${PICTOR_SHADER_SOURCES})
+        get_filename_component(SHADER_NAME ${SHADER} NAME)
+        set(SPIRV_OUT ${CMAKE_BINARY_DIR}/shaders/${SHADER_NAME}.spv)
+        add_custom_command(
+            OUTPUT ${SPIRV_OUT}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SPIRV_OUT}
+            DEPENDS ${SHADER}
+            COMMENT "Compiling ${SHADER_NAME} -> SPIR-V"
+        )
+        list(APPEND PICTOR_SPIRV_FILES ${SPIRV_OUT})
+    endforeach()
+    add_custom_target(pictor_shaders ALL DEPENDS ${PICTOR_SPIRV_FILES})
+    if(TARGET pictor_demo)
+        add_dependencies(pictor_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_benchmark)
+        add_dependencies(pictor_benchmark pictor_shaders)
+    endif()
 endif()

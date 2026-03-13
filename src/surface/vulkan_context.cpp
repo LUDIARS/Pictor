@@ -191,7 +191,7 @@ bool VulkanContext::create_surface() {
 
     switch (handle.type) {
 #ifdef VK_USE_PLATFORM_WIN32_KHR
-    case NativeWindowHandle::Type::WIN32: {
+    case NativeWindowHandle::Type::Win32: {
         VkWin32SurfaceCreateInfoKHR info{};
         info.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
         info.hwnd      = static_cast<HWND>(handle.win32.hwnd);
@@ -205,7 +205,7 @@ bool VulkanContext::create_surface() {
 #endif
 
 #ifdef VK_USE_PLATFORM_XLIB_KHR
-    case NativeWindowHandle::Type::XLIB: {
+    case NativeWindowHandle::Type::Xlib: {
         VkXlibSurfaceCreateInfoKHR info{};
         info.sType  = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
         info.dpy    = static_cast<Display*>(handle.xlib.display);
@@ -219,7 +219,7 @@ bool VulkanContext::create_surface() {
 #endif
 
 #ifdef VK_USE_PLATFORM_XCB_KHR
-    case NativeWindowHandle::Type::XCB: {
+    case NativeWindowHandle::Type::Xcb: {
         VkXcbSurfaceCreateInfoKHR info{};
         info.sType      = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
         info.connection = static_cast<xcb_connection_t*>(handle.xcb.connection);
@@ -233,7 +233,7 @@ bool VulkanContext::create_surface() {
 #endif
 
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
-    case NativeWindowHandle::Type::WAYLAND: {
+    case NativeWindowHandle::Type::Wayland: {
         VkWaylandSurfaceCreateInfoKHR info{};
         info.sType   = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
         info.display = static_cast<wl_display*>(handle.wayland.display);
@@ -247,7 +247,7 @@ bool VulkanContext::create_surface() {
 #endif
 
 #ifdef VK_USE_PLATFORM_MACOS_MVK
-    case NativeWindowHandle::Type::COCOA: {
+    case NativeWindowHandle::Type::Cocoa: {
         VkMacOSSurfaceCreateInfoMVK info{};
         info.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
         info.pView = handle.cocoa.ns_view;
@@ -260,7 +260,7 @@ bool VulkanContext::create_surface() {
 #endif
 
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
-    case NativeWindowHandle::Type::ANDROID: {
+    case NativeWindowHandle::Type::Android: {
         VkAndroidSurfaceCreateInfoKHR info{};
         info.sType  = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
         info.window = static_cast<ANativeWindow*>(handle.android.native_window);
