@@ -66,6 +66,10 @@ void PictorRenderer::initialize(const RendererConfig& config) {
     // 14. Data Exporter
     data_exporter_ = std::make_unique<DataExporter>();
 
+    // 15. Data Handler
+    data_handler_ = std::make_unique<DataHandler>(
+        memory_->gpu_allocator(), *gpu_buffer_manager_);
+
     initialized_ = true;
 }
 
@@ -73,6 +77,7 @@ void PictorRenderer::shutdown() {
     if (!initialized_) return;
 
     // §12: Release all resources, GPU sync
+    data_handler_.reset();
     data_exporter_.reset();
     overlay_.reset();
     profiler_.reset();
@@ -293,6 +298,28 @@ void PictorRenderer::set_job_dispatcher(IJobDispatcher* dispatcher) {
 
 void PictorRenderer::register_custom_pass(ICustomRenderPass* pass) {
     if (pass_scheduler_) pass_scheduler_->register_custom_pass(pass);
+}
+
+// ---- Data Handler ----
+
+TextureHandle PictorRenderer::register_texture(const TextureDescriptor& desc) {
+    if (!initialized_) return INVALID_TEXTURE;
+    return data_handler_->register_texture(desc);
+}
+
+void PictorRenderer::unregister_texture(TextureHandle handle) {
+    if (!initialized_) return;
+    data_handler_->unregister_texture(handle);
+}
+
+MeshHandle PictorRenderer::register_mesh_data(const MeshDataDescriptor& desc) {
+    if (!initialized_) return INVALID_MESH;
+    return data_handler_->register_mesh(desc);
+}
+
+void PictorRenderer::unregister_mesh_data(MeshHandle handle) {
+    if (!initialized_) return;
+    data_handler_->unregister_mesh(handle);
 }
 
 // ---- Data Export ----

@@ -14,6 +14,8 @@
 #include "pictor/profiler/profiler.h"
 #include "pictor/profiler/overlay_renderer.h"
 #include "pictor/profiler/data_exporter.h"
+#include "pictor/data/data_handler.h"
+#include "pictor/data/data_query_api.h"
 #include <memory>
 
 namespace pictor {
@@ -103,6 +105,23 @@ public:
     void set_job_dispatcher(IJobDispatcher* dispatcher);
     void register_custom_pass(ICustomRenderPass* pass);
 
+    // ---- Data Handler ----
+
+    /// Register a texture via the data handler
+    TextureHandle register_texture(const TextureDescriptor& desc);
+    void unregister_texture(TextureHandle handle);
+
+    /// Register a mesh with flexible vertex data via the data handler
+    MeshHandle register_mesh_data(const MeshDataDescriptor& desc);
+    void unregister_mesh_data(MeshHandle handle);
+
+    /// Access the data handler directly
+    DataHandler&       data_handler()       { return *data_handler_; }
+    const DataHandler& data_handler() const { return *data_handler_; }
+
+    /// Create a read-only query API for external tools/editors
+    DataQueryAPI create_query_api() const { return DataQueryAPI(*data_handler_); }
+
     // ---- Data Export (§13.7) ----
 
     void begin_profiler_recording(const std::string& path);
@@ -138,6 +157,7 @@ private:
     std::unique_ptr<Profiler>               profiler_;
     std::unique_ptr<OverlayRenderer>        overlay_;
     std::unique_ptr<DataExporter>           data_exporter_;
+    std::unique_ptr<DataHandler>            data_handler_;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;

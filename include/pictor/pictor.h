@@ -49,5 +49,11 @@
 // Surface abstraction
 #include "pictor/surface/surface_provider.h"
 
+// Data handler
+#include "pictor/data/texture_registry.h"
+#include "pictor/data/vertex_data_uploader.h"
+#include "pictor/data/data_handler.h"
+#include "pictor/data/data_query_api.h"
+
 // Public API
 #include "pictor/core/pictor_renderer.h"
