@@ -10,7 +10,27 @@ option(PICTOR_BUILD_DEMO      "Build Vulkan window demo"   ON)
 option(PICTOR_ENABLE_PROFILER "Enable built-in profiler" ON)
 option(PICTOR_USE_LARGE_PAGES "Enable large page support" OFF)
 
+# --- Vulkan (requires Vulkan SDK to be installed) ---
 find_package(Vulkan QUIET)
+
+# --- GLFW (auto-download via FetchContent if not found) ---
+include(FetchContent)
+find_package(glfw3 QUIET)
+if(NOT glfw3_FOUND)
+    message(STATUS "Pictor: glfw3 not found on system — fetching via FetchContent")
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG        3.4
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(glfw)
+    set(glfw3_FOUND TRUE)
+endif()
 
 add_library(pictor STATIC
     # Core
@@ -89,9 +109,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 elseif(MSVC)
     target_compile_options(pictor PRIVATE /W4 /arch:AVX2)
 endif()
-
-# GLFW (required for demo, optional for library)
-find_package(glfw3 QUIET)
 
 if(glfw3_FOUND)
     target_link_libraries(pictor PUBLIC glfw)
