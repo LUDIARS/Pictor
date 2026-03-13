@@ -56,6 +56,10 @@ void PictorRenderer::initialize(const RendererConfig& config) {
         gi_system_->initialize(
             profile.gpu_driven_config.max_triangle_count,
             config.screen_width, config.screen_height);
+
+        // Bake system (depends on GI system)
+        bake_system_ = std::make_unique<GIBakeSystem>(
+            *gpu_buffer_manager_, *scene_, *gi_system_);
     }
 
     // 11. Render Pass Scheduler
@@ -88,6 +92,7 @@ void PictorRenderer::shutdown() {
     profiler_.reset();
     command_encoder_.reset();
     pass_scheduler_.reset();
+    bake_system_.reset();
     gi_system_.reset();
     gpu_pipeline_.reset();
     profile_manager_.reset();
@@ -343,6 +348,52 @@ void PictorRenderer::upload_gi_probe_data(const float* sh_data, uint32_t probe_c
 
 void PictorRenderer::set_gi_config(const GIConfig& config) {
     if (gi_system_) gi_system_->set_config(config);
+}
+
+// ---- GI Bake ----
+
+GIBakeResult PictorRenderer::bake_static_gi() {
+    if (!bake_system_) return GIBakeResult{};
+    auto result = bake_system_->bake();
+    result.bake_timestamp = frame_number_;
+    return result;
+}
+
+GIBakeResult PictorRenderer::bake_static_gi(BakeProgressCallback progress) {
+    if (!bake_system_) return GIBakeResult{};
+    auto result = bake_system_->bake(std::move(progress));
+    result.bake_timestamp = frame_number_;
+    return result;
+}
+
+void PictorRenderer::apply_bake(const GIBakeResult& result) {
+    if (!bake_system_) return;
+    bake_system_->apply(result);
+
+    // Notify GI system how many static objects have baked data
+    if (gi_system_) {
+        gi_system_->set_baked_static_count(
+            static_cast<uint32_t>(result.object_ids.size()));
+    }
+}
+
+void PictorRenderer::invalidate_bake() {
+    if (bake_system_) bake_system_->invalidate();
+    if (gi_system_) gi_system_->set_baked_static_count(0);
+}
+
+bool PictorRenderer::save_bake(const std::string& path, const GIBakeResult& result) {
+    if (!bake_system_) return false;
+    return bake_system_->save(path, result);
+}
+
+GIBakeResult PictorRenderer::load_bake(const std::string& path) {
+    if (!bake_system_) return GIBakeResult{};
+    return bake_system_->load(path);
+}
+
+void PictorRenderer::set_bake_data_provider(IBakeDataProvider* provider) {
+    if (bake_system_) bake_system_->set_bake_data_provider(provider);
 }
 
 // ---- Data Export ----

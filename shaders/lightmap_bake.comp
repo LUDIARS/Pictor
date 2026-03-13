@@ -1,0 +1,170 @@
+// Pictor — Static Lightmap Bake Shader
+// Computes direct + indirect illumination for static objects.
+// Multi-bounce: run once for direct, then iteratively for indirect bounces.
+// Results are accumulated per-object as RGB direct + RGB indirect.
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform LightmapBakeParams {
+    vec4  lightDirection;       // xyz = direction (toward light), w = intensity
+    vec4  lightColor;           // rgb = color, w = unused
+    uint  objectCount;
+    uint  totalSceneObjects;
+    uint  pointLightCount;
+    uint  bounceIndex;          // 0 = direct, 1+ = indirect bounce
+    float indirectIntensity;    // multiplier for indirect contribution
+    float padding0;
+    float padding1;
+    float padding2;
+};
+
+// Input: world-space AABB bounds
+layout(std430, set = 0, binding = 1) readonly buffer Bounds {
+    vec4 bake_bounds[];
+};
+
+// Input: world-space transforms
+layout(std430, set = 0, binding = 2) readonly buffer Transforms {
+    mat4 bake_transforms[];
+};
+
+// Input: point lights (position.xyz, radius, color.rgb, intensity)
+layout(std430, set = 0, binding = 3) readonly buffer PointLights {
+    vec4 point_lights[];  // pairs: [pos_radius, color_intensity]
+};
+
+// Input/Output: previous bounce lighting (read for indirect bounces)
+layout(std430, set = 0, binding = 4) readonly buffer PrevBounce {
+    vec4 prev_lighting[];  // rgb = previous bounce illumination, w = unused
+};
+
+// Output: current bounce lighting
+// For bounce 0: direct lighting
+// For bounce N: N-th indirect bounce contribution
+layout(std430, set = 0, binding = 5) writeonly buffer CurrentBounce {
+    vec4 current_lighting[];
+};
+
+// Simplified visibility test: does a ray from src to dst hit any AABB?
+bool isOccluded(vec3 src, vec3 dst) {
+    vec3 dir = dst - src;
+    float maxDist = length(dir);
+    if (maxDist < 1e-6) return false;
+    dir /= maxDist;
+    vec3 invDir = 1.0 / (dir + vec3(1e-8));
+
+    for (uint j = 0; j < totalSceneObjects; j++) {
+        vec3 aabbMin = bake_bounds[j * 2].xyz;
+        vec3 aabbMax = bake_bounds[j * 2 + 1].xyz;
+
+        // Skip if src or dst is inside this AABB
+        vec3 center = (aabbMin + aabbMax) * 0.5;
+        if (distance(center, src) < 0.1 || distance(center, dst) < 0.1) continue;
+
+        vec3 t1 = (aabbMin - src) * invDir;
+        vec3 t2 = (aabbMax - src) * invDir;
+        vec3 tMin = min(t1, t2);
+        vec3 tMax = max(t1, t2);
+        float tNear = max(max(tMin.x, tMin.y), tMin.z);
+        float tFar  = min(min(tMax.x, tMax.y), tMax.z);
+
+        if (tFar >= max(tNear, 0.0) && tNear > 0.01 && tNear < maxDist - 0.01) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= objectCount) return;
+
+    vec3 aabbMin = bake_bounds[idx * 2].xyz;
+    vec3 aabbMax = bake_bounds[idx * 2 + 1].xyz;
+    vec3 center  = (aabbMin + aabbMax) * 0.5;
+
+    // Estimate a surface normal (simplified: use upward normal)
+    // In a real implementation, per-vertex normals would be used
+    vec3 normal = vec3(0.0, 1.0, 0.0);
+
+    vec3 lighting = vec3(0.0);
+
+    if (bounceIndex == 0) {
+        // ---- Direct lighting ----
+
+        // Directional light
+        vec3 L = -lightDirection.xyz;
+        float NdotL = max(dot(normal, L), 0.0);
+
+        if (NdotL > 0.0) {
+            // Shadow test: cast ray toward light
+            vec3 lightPos = center + L * 1000.0; // distant directional light
+            if (!isOccluded(center, lightPos)) {
+                lighting += lightColor.rgb * lightDirection.w * NdotL;
+            }
+        }
+
+        // Point lights
+        for (uint p = 0; p < pointLightCount; p++) {
+            vec3 plPos     = point_lights[p * 2].xyz;
+            float plRadius = point_lights[p * 2].w;
+            vec3 plColor   = point_lights[p * 2 + 1].xyz;
+            float plIntens = point_lights[p * 2 + 1].w;
+
+            vec3 toLight = plPos - center;
+            float dist = length(toLight);
+            if (dist > plRadius || dist < 1e-4) continue;
+
+            vec3 plDir = toLight / dist;
+            float plNdotL = max(dot(normal, plDir), 0.0);
+            if (plNdotL <= 0.0) continue;
+
+            // Attenuation (inverse square with radius falloff)
+            float atten = 1.0 / (dist * dist + 1.0);
+            atten *= 1.0 - smoothstep(plRadius * 0.8, plRadius, dist);
+
+            if (!isOccluded(center, plPos)) {
+                lighting += plColor * plIntens * plNdotL * atten;
+            }
+        }
+
+    } else {
+        // ---- Indirect bounce ----
+        // Gather light from nearby objects that received light in the previous bounce.
+        // Each neighbor acts as a virtual area light, redistributing its received energy.
+
+        for (uint j = 0; j < objectCount; j++) {
+            if (j == idx) continue;
+
+            vec3 neighborMin = bake_bounds[j * 2].xyz;
+            vec3 neighborMax = bake_bounds[j * 2 + 1].xyz;
+            vec3 neighborCenter = (neighborMin + neighborMax) * 0.5;
+
+            vec3 toNeighbor = neighborCenter - center;
+            float dist = length(toNeighbor);
+            if (dist < 1e-4 || dist > 20.0) continue; // max indirect range
+
+            vec3 dir = toNeighbor / dist;
+            float NdotL = max(dot(normal, dir), 0.0);
+            if (NdotL <= 0.0) continue;
+
+            // Previous bounce energy of the neighbor
+            vec3 neighborEnergy = prev_lighting[j].rgb;
+            if (dot(neighborEnergy, neighborEnergy) < 1e-8) continue;
+
+            // Approximate form factor
+            float sa = (neighborMax.x - neighborMin.x) *
+                       (neighborMax.y - neighborMin.y);
+            float formFactor = sa * NdotL / (dist * dist + 1.0);
+            formFactor = min(formFactor, 1.0);
+
+            if (!isOccluded(center, neighborCenter)) {
+                lighting += neighborEnergy * formFactor * indirectIntensity;
+            }
+        }
+    }
+
+    current_lighting[idx] = vec4(lighting, 1.0);
+}
