@@ -19,6 +19,7 @@
 #include "pictor/data/data_query_api.h"
 #include "pictor/gi/gi_lighting_system.h"
 #include "pictor/gi/gi_bake.h"
+#include "pictor/postprocess/postprocess_pipeline.h"
 #include <memory>
 
 namespace pictor {
@@ -175,6 +176,15 @@ public:
     /// Access bake system
     GIBakeSystem* bake_system() { return bake_system_.get(); }
 
+    // ---- Post-Process Pipeline ----
+
+    /// Access the post-process pipeline
+    PostProcessPipeline& post_process() { return *postprocess_; }
+    const PostProcessPipeline& post_process() const { return *postprocess_; }
+
+    /// Set full post-process configuration
+    void set_postprocess_config(const PostProcessConfig& config);
+
     // ---- Data Export (§13.7) ----
 
     void begin_profiler_recording(const std::string& path);
@@ -214,6 +224,7 @@ private:
     std::unique_ptr<DataHandler>            data_handler_;
     std::unique_ptr<GILightingSystem>       gi_system_;
     std::unique_ptr<GIBakeSystem>           bake_system_;
+    std::unique_ptr<PostProcessPipeline>    postprocess_;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;

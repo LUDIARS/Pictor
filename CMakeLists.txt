@@ -68,6 +68,13 @@ add_library(pictor STATIC
     src/gi/gi_lighting_system.cpp
     src/gi/gi_bake.cpp
 
+    # Post-Process
+    src/postprocess/bloom_effect.cpp
+    src/postprocess/depth_of_field_effect.cpp
+    src/postprocess/tone_mapping_effect.cpp
+    src/postprocess/gaussian_blur_effect.cpp
+    src/postprocess/postprocess_pipeline.cpp
+
     # Material
     src/material/base_material_builder.cpp
 
@@ -164,7 +171,11 @@ if(PICTOR_BUILD_DEMO)
         add_executable(pictor_text_demo demo/text/main.cpp)
         target_link_libraries(pictor_text_demo PRIVATE pictor)
 
-        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text)")
+        # Post-process demo
+        add_executable(pictor_postprocess_demo demo/postprocess/main.cpp)
+        target_link_libraries(pictor_postprocess_demo PRIVATE pictor)
+
+        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
     endif()
@@ -186,6 +197,16 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.frag
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.vert
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/fullscreen_quad.vert
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_composite.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/tone_mapping.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/dof.comp
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/gaussian_blur.comp
+        ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.vert
+        ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -215,5 +236,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_text_demo)
         add_dependencies(pictor_text_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_postprocess_demo)
+        add_dependencies(pictor_postprocess_demo pictor_shaders)
     endif()
 endif()

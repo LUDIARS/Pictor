@@ -1,0 +1,47 @@
+// Pictor — Bloom Brightness Extraction (Compute Shader)
+// Extracts pixels above a luminance threshold with soft knee transition.
+// Output is written to half-resolution texture (first bloom mip).
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inputTexture;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform BloomExtractParams {
+    float threshold;
+    float softThreshold;
+    vec2  inputTexelSize;   // 1.0 / inputResolution
+};
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(outputImage);
+    if (pixel.x >= outputSize.x || pixel.y >= outputSize.y) return;
+
+    // Sample from full-res input at the center of 2x2 block (downsample)
+    vec2 uv = (vec2(pixel) + 0.5) * 2.0 * inputTexelSize;
+
+    // 4-tap box filter for initial downsample (average 2x2 block)
+    vec3 color = vec3(0.0);
+    color += textureLod(inputTexture, uv + vec2(-0.5, -0.5) * inputTexelSize, 0.0).rgb;
+    color += textureLod(inputTexture, uv + vec2( 0.5, -0.5) * inputTexelSize, 0.0).rgb;
+    color += textureLod(inputTexture, uv + vec2(-0.5,  0.5) * inputTexelSize, 0.0).rgb;
+    color += textureLod(inputTexture, uv + vec2( 0.5,  0.5) * inputTexelSize, 0.0).rgb;
+    color *= 0.25;
+
+    // Compute luminance
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+
+    // Soft threshold knee curve
+    float knee = threshold * softThreshold;
+    float soft = luminance - threshold + knee;
+    soft = clamp(soft / (2.0 * knee + 0.00001), 0.0, 1.0);
+    soft = soft * soft;
+
+    // Contribution factor
+    float contribution = max(soft, step(threshold, luminance));
+
+    imageStore(outputImage, pixel, vec4(color * contribution, 1.0));
+}
