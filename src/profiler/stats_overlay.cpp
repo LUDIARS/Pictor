@@ -7,35 +7,35 @@ namespace pictor {
 void StatsOverlay::initialize(uint32_t screen_width, uint32_t screen_height) {
     screen_width_ = screen_width;
     screen_height_ = screen_height;
-
-    // In a full implementation:
-    // - Reuse SDF font atlas from OverlayRenderer
-    // - Create dedicated quad batch for stats text
-    // - Allocate small vertex buffer for overlay geometry
-
     initialized_ = true;
 }
+
+#ifdef PICTOR_HAS_VULKAN
+void StatsOverlay::begin_render(VkCommandBuffer cmd, VkExtent2D extent) {
+    if (text_renderer_) {
+        text_renderer_->begin(cmd, extent);
+    }
+}
+
+void StatsOverlay::end_render() {
+    if (text_renderer_) {
+        text_renderer_->end();
+    }
+}
+#endif
 
 void StatsOverlay::render(const FrameStats& stats, const SceneSummary& summary) {
     if (!initialized_ || !visible_) return;
 
-    // Render stats text at top-left corner.
-    // In production this uses the SDF text rendering pipeline.
-    // Current implementation records draw commands for text quads
-    // that will be submitted after the post-process pass.
-
     float x = MARGIN_X;
     float y = MARGIN_Y;
 
-    // ---- Frame rate ----
     char buf[256];
 
     std::snprintf(buf, sizeof(buf), "FPS: %.1f  (%.2f ms)", stats.fps, stats.frame_time_ms);
     draw_text(x, y, buf);
     y += LINE_HEIGHT;
 
-    // ---- CPU / GPU load ----
-    // CPU load: sum of per-pass CPU times relative to frame budget (16.67ms@60fps)
     double cpu_total_ms = stats.data_update_ms + stats.culling_ms +
                           stats.sort_ms + stats.batch_build_ms +
                           stats.command_encode_ms;
@@ -58,7 +58,6 @@ void StatsOverlay::render(const FrameStats& stats, const SceneSummary& summary) 
     draw_text(x, y, buf);
     y += LINE_HEIGHT;
 
-    // ---- Draw statistics ----
     std::snprintf(buf, sizeof(buf),
                   "Batches: %u  Polygons: %llu  DrawCalls: %u",
                   summary.batch_count,
@@ -67,7 +66,6 @@ void StatsOverlay::render(const FrameStats& stats, const SceneSummary& summary) 
     draw_text(x, y, buf);
     y += LINE_HEIGHT;
 
-    // ---- Lighting / GI / Shadow ----
     const char* filter_str = "OFF";
     if (summary.shadow_enabled) {
         switch (summary.shadow_filter_mode) {
@@ -102,11 +100,12 @@ void StatsOverlay::resize(uint32_t width, uint32_t height) {
 }
 
 void StatsOverlay::draw_text(float x, float y, const char* text) {
-    // In production: generate textured quads from SDF font atlas,
-    // append to overlay vertex buffer for batched rendering.
-    //
-    // Stub: record the text position and content.
-    // When PICTOR_STATS_DEBUG is defined, also print to stdout.
+#ifdef PICTOR_HAS_VULKAN
+    if (text_renderer_) {
+        text_renderer_->draw_text(x, y, text, 0.0f, 1.0f, 0.0f, 1.0f);
+        return;
+    }
+#endif
 #ifdef PICTOR_STATS_DEBUG
     printf("[Stats %4.0f,%4.0f] %s\n", x, y, text);
 #endif

@@ -83,6 +83,7 @@ add_library(pictor STATIC
     src/profiler/overlay_renderer.cpp
     src/profiler/stats_overlay.cpp
     src/profiler/data_exporter.cpp
+    src/profiler/bitmap_text_renderer.cpp
 
     # Surface Abstraction
     src/surface/vulkan_context.cpp
@@ -183,6 +184,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean_wireframe.frag
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.vert
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.frag
+        ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.vert
+        ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
