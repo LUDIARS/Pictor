@@ -169,6 +169,7 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tesc
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tese
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.frag
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean_wireframe.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})

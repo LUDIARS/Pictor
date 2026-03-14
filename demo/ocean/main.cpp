@@ -173,12 +173,17 @@ public:
         return true;
     }
 
+    void set_wireframe(bool enabled) { wireframe_ = enabled; }
+    bool wireframe() const { return wireframe_; }
+    void toggle_wireframe() { wireframe_ = !wireframe_; }
+
     void shutdown() {
         if (!initialized_) return;
         vkDeviceWaitIdle(device_);
 
-        if (pipeline_)        vkDestroyPipeline(device_, pipeline_, nullptr);
-        if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
+        if (pipeline_)           vkDestroyPipeline(device_, pipeline_, nullptr);
+        if (wireframe_pipeline_) vkDestroyPipeline(device_, wireframe_pipeline_, nullptr);
+        if (pipeline_layout_)    vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
         if (desc_set_layout_) vkDestroyDescriptorSetLayout(device_, desc_set_layout_, nullptr);
         if (desc_pool_)       vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
 
@@ -223,7 +228,8 @@ public:
 
         vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+        VkPipeline active_pipeline = wireframe_ ? wireframe_pipeline_ : pipeline_;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, active_pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipeline_layout_, 0, 1, &desc_set_, 0, nullptr);
 
@@ -499,17 +505,19 @@ private:
 
     bool create_pipeline(const char* shader_dir) {
         std::string base = std::string(shader_dir) + "/";
-        VkShaderModule vert_mod = load_shader((base + "ocean.vert.spv").c_str());
-        VkShaderModule tesc_mod = load_shader((base + "ocean.tesc.spv").c_str());
-        VkShaderModule tese_mod = load_shader((base + "ocean.tese.spv").c_str());
-        VkShaderModule frag_mod = load_shader((base + "ocean.frag.spv").c_str());
+        VkShaderModule vert_mod      = load_shader((base + "ocean.vert.spv").c_str());
+        VkShaderModule tesc_mod      = load_shader((base + "ocean.tesc.spv").c_str());
+        VkShaderModule tese_mod      = load_shader((base + "ocean.tese.spv").c_str());
+        VkShaderModule frag_mod      = load_shader((base + "ocean.frag.spv").c_str());
+        VkShaderModule wire_frag_mod = load_shader((base + "ocean_wireframe.frag.spv").c_str());
 
-        if (!vert_mod || !tesc_mod || !tese_mod || !frag_mod) {
+        if (!vert_mod || !tesc_mod || !tese_mod || !frag_mod || !wire_frag_mod) {
             fprintf(stderr, "OceanDemoRenderer: failed to load shaders from %s\n", shader_dir);
             auto cleanup = [this](VkShaderModule m) {
                 if (m) vkDestroyShaderModule(device_, m, nullptr);
             };
-            cleanup(vert_mod); cleanup(tesc_mod); cleanup(tese_mod); cleanup(frag_mod);
+            cleanup(vert_mod); cleanup(tesc_mod); cleanup(tese_mod);
+            cleanup(frag_mod); cleanup(wire_frag_mod);
             return false;
         }
 
@@ -524,29 +532,11 @@ private:
             vkDestroyShaderModule(device_, tesc_mod, nullptr);
             vkDestroyShaderModule(device_, tese_mod, nullptr);
             vkDestroyShaderModule(device_, frag_mod, nullptr);
+            vkDestroyShaderModule(device_, wire_frag_mod, nullptr);
             return false;
         }
 
-        // 4 shader stages
-        VkPipelineShaderStageCreateInfo stages[4] = {};
-        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-        stages[0].module = vert_mod;
-        stages[0].pName  = "main";
-        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[1].stage  = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
-        stages[1].module = tesc_mod;
-        stages[1].pName  = "main";
-        stages[2].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[2].stage  = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
-        stages[2].module = tese_mod;
-        stages[2].pName  = "main";
-        stages[3].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[3].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[3].module = frag_mod;
-        stages[3].pName  = "main";
-
-        // Vertex input: pos(vec3) + texCoord(vec2)
+        // Shared pipeline state
         VkVertexInputBindingDescription bind_desc{};
         bind_desc.binding   = 0;
         bind_desc.stride    = sizeof(OceanVertex);
@@ -569,12 +559,10 @@ private:
         vi.vertexAttributeDescriptionCount = 2;
         vi.pVertexAttributeDescriptions    = attr_descs;
 
-        // Input assembly: patch list for tessellation
         VkPipelineInputAssemblyStateCreateInfo ia{};
         ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         ia.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
 
-        // Tessellation state: 4 control points per patch (quads)
         VkPipelineTessellationStateCreateInfo tess{};
         tess.sType              = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
         tess.patchControlPoints = 4;
@@ -583,13 +571,6 @@ private:
         vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         vp.viewportCount = 1;
         vp.scissorCount  = 1;
-
-        VkPipelineRasterizationStateCreateInfo rs{};
-        rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode    = VK_CULL_MODE_NONE;  // ocean visible from both sides
-        rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        rs.lineWidth   = 1.0f;
 
         VkPipelineMultisampleStateCreateInfo ms{};
         ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -616,15 +597,41 @@ private:
         dyn.dynamicStateCount = 2;
         dyn.pDynamicStates    = dyn_states;
 
+        // --- Fill pipeline (original) ---
+        VkPipelineShaderStageCreateInfo fill_stages[4] = {};
+        fill_stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fill_stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        fill_stages[0].module = vert_mod;
+        fill_stages[0].pName  = "main";
+        fill_stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fill_stages[1].stage  = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+        fill_stages[1].module = tesc_mod;
+        fill_stages[1].pName  = "main";
+        fill_stages[2].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fill_stages[2].stage  = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+        fill_stages[2].module = tese_mod;
+        fill_stages[2].pName  = "main";
+        fill_stages[3].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fill_stages[3].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fill_stages[3].module = frag_mod;
+        fill_stages[3].pName  = "main";
+
+        VkPipelineRasterizationStateCreateInfo rs_fill{};
+        rs_fill.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs_fill.polygonMode = VK_POLYGON_MODE_FILL;
+        rs_fill.cullMode    = VK_CULL_MODE_NONE;
+        rs_fill.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs_fill.lineWidth   = 1.0f;
+
         VkGraphicsPipelineCreateInfo pipe_info{};
         pipe_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         pipe_info.stageCount          = 4;
-        pipe_info.pStages             = stages;
+        pipe_info.pStages             = fill_stages;
         pipe_info.pVertexInputState   = &vi;
         pipe_info.pInputAssemblyState = &ia;
         pipe_info.pTessellationState  = &tess;
         pipe_info.pViewportState      = &vp;
-        pipe_info.pRasterizationState = &rs;
+        pipe_info.pRasterizationState = &rs_fill;
         pipe_info.pMultisampleState   = &ms;
         pipe_info.pDepthStencilState  = &ds;
         pipe_info.pColorBlendState    = &cb;
@@ -634,11 +641,43 @@ private:
 
         VkResult result = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
                                                      &pipe_info, nullptr, &pipeline_);
+        if (result != VK_SUCCESS) {
+            vkDestroyShaderModule(device_, vert_mod, nullptr);
+            vkDestroyShaderModule(device_, tesc_mod, nullptr);
+            vkDestroyShaderModule(device_, tese_mod, nullptr);
+            vkDestroyShaderModule(device_, frag_mod, nullptr);
+            vkDestroyShaderModule(device_, wire_frag_mod, nullptr);
+            return false;
+        }
+
+        // --- Wireframe pipeline ---
+        VkPipelineShaderStageCreateInfo wire_stages[4] = {};
+        wire_stages[0] = fill_stages[0]; // same vert
+        wire_stages[1] = fill_stages[1]; // same tesc
+        wire_stages[2] = fill_stages[2]; // same tese
+        wire_stages[3].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        wire_stages[3].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        wire_stages[3].module = wire_frag_mod;
+        wire_stages[3].pName  = "main";
+
+        VkPipelineRasterizationStateCreateInfo rs_wire{};
+        rs_wire.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs_wire.polygonMode = VK_POLYGON_MODE_LINE;
+        rs_wire.cullMode    = VK_CULL_MODE_NONE;
+        rs_wire.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs_wire.lineWidth   = 1.0f;
+
+        pipe_info.pStages             = wire_stages;
+        pipe_info.pRasterizationState = &rs_wire;
+
+        result = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+                                            &pipe_info, nullptr, &wireframe_pipeline_);
 
         vkDestroyShaderModule(device_, vert_mod, nullptr);
         vkDestroyShaderModule(device_, tesc_mod, nullptr);
         vkDestroyShaderModule(device_, tese_mod, nullptr);
         vkDestroyShaderModule(device_, frag_mod, nullptr);
+        vkDestroyShaderModule(device_, wire_frag_mod, nullptr);
 
         return result == VK_SUCCESS;
     }
@@ -737,6 +776,8 @@ private:
     // Pipeline
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkPipeline wireframe_pipeline_ = VK_NULL_HANDLE;
+    bool wireframe_ = false;
     VkDescriptorSetLayout desc_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool desc_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_ = VK_NULL_HANDLE;
@@ -846,10 +887,24 @@ int main() {
     printf("  - Target: ~100K polygons adaptive LOD\n");
     printf("  - 6-layer Gerstner wave displacement\n");
     printf("  - Physically-based ocean shading (Fresnel + SSS + foam)\n");
+    printf("  - Press 'W' to toggle wireframe tessellation view\n");
     printf("\nEntering main loop. Close the window to exit.\n\n");
+
+    bool w_key_was_pressed = false;
 
     while (!surface_provider.should_close()) {
         surface_provider.poll_events();
+
+        // Toggle wireframe with W key
+        {
+            GLFWwindow* win = surface_provider.glfw_window();
+            bool w_pressed = glfwGetKey(win, GLFW_KEY_W) == GLFW_PRESS;
+            if (w_pressed && !w_key_was_pressed) {
+                ocean_renderer.toggle_wireframe();
+                printf("[Wireframe] %s\n", ocean_renderer.wireframe() ? "ON" : "OFF");
+            }
+            w_key_was_pressed = w_pressed;
+        }
 
         auto now = std::chrono::high_resolution_clock::now();
         float elapsed = std::chrono::duration<float>(now - start).count();
