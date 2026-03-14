@@ -65,5 +65,12 @@
 #include "pictor/data/data_handler.h"
 #include "pictor/data/data_query_api.h"
 
+// Text rendering
+#include "pictor/text/text_types.h"
+#include "pictor/text/font_loader.h"
+#include "pictor/text/text_image_renderer.h"
+#include "pictor/text/text_svg_renderer.h"
+#include "pictor/text/text_rasterizer.h"
+
 // Public API
 #include "pictor/core/pictor_renderer.h"
