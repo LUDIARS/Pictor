@@ -893,7 +893,14 @@ int main() {
 
         // Update Pictor renderer
         camera.position = {eye[0], eye[1], eye[2]};
-        renderer.begin_frame(camera);
+
+        // Calculate delta time
+        static auto last_time = start;
+        float dt = std::chrono::duration<float>(now - last_time).count();
+        last_time = now;
+
+        renderer.begin_frame(dt);
+        renderer.render(camera);
         renderer.end_frame();
 
         // Render ocean
@@ -934,8 +941,6 @@ int main() {
 
         frame_count++;
         if (frame_count % 300 == 0) {
-            float fps = 300.0f / std::chrono::duration<float>(
-                std::chrono::high_resolution_clock::now() - now).count();
             printf("[Frame %lu] t=%.1fs\n", (unsigned long)frame_count, elapsed);
         }
     }
