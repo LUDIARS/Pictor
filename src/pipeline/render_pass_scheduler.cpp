@@ -46,7 +46,30 @@ void RenderPassScheduler::execute(const BatchBuilder& batch_builder,
                 break;
 
             case PassType::SHADOW:
-                // Record shadow map render commands for each cascade
+                // Shadow pass: render shadow-casting geometry into the shadow atlas.
+                // Uses shadow-specific material variants (stripped to alpha test only).
+                //
+                // Vulkan implementation steps:
+                //   1. Remap batches to shadow pass variants (strip unused features)
+                //   2. Filter batches: only objects with CAST_SHADOW flag
+                //   3. For each cascade (0..cascadeCount-1):
+                //      a. Begin render pass (depth-only, shadow atlas layer as attachment)
+                //      b. Set viewport/scissor to cascade resolution
+                //      c. Bind shadow_depth pipeline
+                //      d. Bind cascade's lightViewProj via push constant
+                //      e. For each shadow batch:
+                //         - Push model matrix, cascade index, materialFlags, alphaCutoff
+                //         - Bind vertex/index buffers
+                //         - If alpha test: bind albedo texture to set=1, binding=0
+                //         - vkCmdDrawIndexed
+                //      f. End render pass
+                //   4. Transition shadow atlas to SHADER_READ_ONLY for fragment sampling
+                {
+                    auto shadow_batches = remap_batches_for_pass(batches, PassType::SHADOW);
+                    // Filter out non-shadow-casting batches
+                    // (materials without CAST_SHADOW feature will have zeroed shader key)
+                    (void)shadow_batches;
+                }
                 break;
 
             case PassType::DEPTH_ONLY:
@@ -55,11 +78,13 @@ void RenderPassScheduler::execute(const BatchBuilder& batch_builder,
 
             case PassType::OPAQUE:
                 // Record opaque geometry draw commands
+                // Shadow map is bound as set=2 for sampling
                 // Uses batches sorted front-to-back
                 break;
 
             case PassType::TRANSPARENT:
                 // Record transparent geometry draw commands
+                // Shadow map is bound as set=2 for sampling
                 // Uses batches sorted back-to-front
                 break;
 
@@ -87,13 +112,16 @@ std::vector<RenderBatch> RenderPassScheduler::remap_batches_for_pass(
         RenderBatch rb = batch;
 
         // Look up the pass-specific variant for this batch's material.
-        // The batch carries a materialKey that was assigned at build time;
-        // we need to resolve it via the MaterialHandle stored in the pool.
-        // For now we use materialKey as handle lookup (direct mapping).
         const auto* variant = material_registry_->variant_for(
             static_cast<MaterialHandle>(batch.materialKey), pass_type);
 
         if (variant) {
+            // For shadow pass: skip materials that don't cast shadows
+            if (pass_type == PassType::SHADOW &&
+                !(variant->features & MaterialFeature::CAST_SHADOW)) {
+                continue;
+            }
+
             rb.shaderKey   = variant->shader_key;
             rb.materialKey = variant->material_key;
         }

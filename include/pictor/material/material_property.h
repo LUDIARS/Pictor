@@ -24,10 +24,15 @@ namespace MaterialFeature {
     constexpr uint32_t TWO_SIDED       = 1 << 7;
     constexpr uint32_t VERTEX_COLOR    = 1 << 8;
     constexpr uint32_t METALLIC_ROUGHNESS_PACKED = 1 << 9; // single ORM map
+    constexpr uint32_t CAST_SHADOW    = 1 << 10;  // material casts shadows
+    constexpr uint32_t RECEIVE_SHADOW = 1 << 11;  // material receives shadows
 
     // Full PBR mask
     constexpr uint32_t PBR_FULL = ALBEDO_MAP | NORMAL_MAP | METALLIC_MAP
                                 | ROUGHNESS_MAP | AO_MAP | EMISSIVE_MAP;
+
+    // Default shadow flags (most materials cast and receive)
+    constexpr uint32_t SHADOW_DEFAULT = CAST_SHADOW | RECEIVE_SHADOW;
 }
 
 // ============================================================
@@ -52,6 +57,10 @@ struct MaterialDesc {
     float alpha_cutoff   = 0.0f;   // 0 = no alpha test
     float normal_scale   = 1.0f;
     float ao_strength    = 1.0f;
+
+    // --- Shadow flags ---
+    bool     cast_shadow   = true;   // participates in shadow pass
+    bool     receive_shadow = true;  // samples shadow map in fragment shader
 
     // --- Feature flags (auto-detected from bindings, can be overridden) ---
     uint32_t features    = MaterialFeature::NONE;
@@ -94,9 +103,13 @@ struct PassMaterialVariant {
 // Used by BaseMaterialBuilder to strip unused bindings.
 
 namespace PassFeatureRequirement {
-    // Shadow / Depth-only: depth writing. Only alpha test matters.
-    constexpr uint32_t SHADOW     = MaterialFeature::ALPHA_TEST
-                                  | MaterialFeature::TWO_SIDED;
+    // Shadow: depth writing from light's perspective.
+    // Needs ALBEDO_MAP for alpha-tested materials, TWO_SIDED for backface,
+    // CAST_SHADOW to filter materials that actually cast shadows.
+    constexpr uint32_t SHADOW     = MaterialFeature::ALBEDO_MAP
+                                  | MaterialFeature::ALPHA_TEST
+                                  | MaterialFeature::TWO_SIDED
+                                  | MaterialFeature::CAST_SHADOW;
 
     constexpr uint32_t DEPTH_ONLY = MaterialFeature::ALPHA_TEST
                                   | MaterialFeature::TWO_SIDED;

@@ -1,11 +1,13 @@
 // Pictor — PBR Fragment Shader
 // Cook-Torrance BRDF with metallic-roughness workflow.
 // Supports: albedo, normal, metallic-roughness, AO, emissive maps.
+// Supports: CSM shadow mapping with PCF/PCSS soft shadows.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
+#include "shadow.glsl"
 
 // ============================================================
 // Fragment Input
@@ -38,6 +40,8 @@ layout(set = 1, binding = 5) uniform MaterialParams {
     float aoStrength;
     float emissiveStrength;
     vec4  emissiveFactor;      // RGB emissive multiplier
+    uint  receiveShadow;       // 1 = sample shadow map, 0 = skip
+    uint  matPad0, matPad1, matPad2;
 };
 
 // ============================================================
@@ -132,17 +136,28 @@ void main() {
 
     vec3 V = normalize(cameraPosition.xyz - fragWorldPos);
 
+    // ---- Compute view-space depth for cascade selection ----
+    vec4 viewPos = view * vec4(fragWorldPos, 1.0);
+    float viewDepth = -viewPos.z; // positive depth toward camera
+
+    // ---- Compute shadow factor ----
+    float shadow = 1.0;
+    if (receiveShadow != 0u) {
+        vec3 sunDir = normalize(sun.direction.xyz);
+        shadow = sampleShadow(fragWorldPos, viewDepth, N, sunDir);
+    }
+
     // ---- Accumulate lighting ----
     vec3 Lo = vec3(0.0);
 
-    // Directional light (sun)
+    // Directional light (sun) — modulated by shadow
     {
         vec3 L = normalize(sun.direction.xyz);
         vec3 radiance = sun.color.rgb * sun.color.a;
-        Lo += evaluateBRDF(N, V, L, radiance, albedo, metallic, roughness);
+        Lo += evaluateBRDF(N, V, L, radiance, albedo, metallic, roughness) * shadow;
     }
 
-    // Point lights
+    // Point lights (no shadow mapping for point lights currently)
     for (uint i = 0; i < activePointLights; i++) {
         vec3 lightVec = pointLights[i].position.xyz - fragWorldPos;
         float dist    = length(lightVec);
@@ -154,7 +169,7 @@ void main() {
         Lo += evaluateBRDF(N, V, L, radiance, albedo, metallic, roughness);
     }
 
-    // Ambient (simplified IBL substitute)
+    // Ambient (simplified IBL substitute) — not affected by directional shadow
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 kS = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     vec3 kD = (1.0 - kS) * (1.0 - metallic);

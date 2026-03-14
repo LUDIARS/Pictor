@@ -72,6 +72,14 @@ public:
     BaseMaterialBuilder& enable_vertex_color(bool enabled = true);
     BaseMaterialBuilder& enable_alpha_test(bool enabled = true);
 
+    // --- Shadow configuration ---
+
+    /// Enable/disable shadow casting for this material (default: true)
+    BaseMaterialBuilder& enable_cast_shadow(bool enabled = true);
+
+    /// Enable/disable shadow receiving for this material (default: true)
+    BaseMaterialBuilder& enable_receive_shadow(bool enabled = true);
+
     // --- Custom pass feature override ---
     // Override the default PassFeatureRequirement for a specific pass.
     // For example, a custom GI pass that also needs normal maps.

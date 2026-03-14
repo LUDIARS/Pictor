@@ -69,10 +69,10 @@ PipelineProfileDef PipelineProfileManager::create_lite_profile() {
     def.max_lights = 16;
     def.msaa_samples = 2;
 
-    // Shadow config (§8.1: 1 cascade)
+    // Shadow config (§8.1: 1 cascade, hard shadows for performance)
     def.shadow_config.cascade_count = 1;
     def.shadow_config.resolution = 1024;
-    def.shadow_config.pcf_filtering = false;
+    def.shadow_config.filter_mode = ShadowFilterMode::NONE;
 
     // Memory config (§4.4: Pictor Lite)
     def.memory_config.frame_allocator_size = 4 * 1024 * 1024; // 4MB
@@ -94,6 +94,7 @@ PipelineProfileDef PipelineProfileManager::create_lite_profile() {
     def.gi_config.shadow.cascade_count = 1;
     def.gi_config.shadow.resolution = 1024;
     def.gi_config.shadow.depth_bias = 0.005f;
+    def.gi_config.shadow.filter_mode = ShadowFilterMode::NONE;
 
     // Render passes (§9.1 simplified)
     def.render_passes = {
@@ -122,10 +123,10 @@ PipelineProfileDef PipelineProfileManager::create_standard_profile() {
     def.max_lights = 256;
     def.msaa_samples = 4;
 
-    // Shadow config (§8.1: 3 cascades)
+    // Shadow config (§8.1: 3 cascades, PCF soft shadows)
     def.shadow_config.cascade_count = 3;
     def.shadow_config.resolution = 2048;
-    def.shadow_config.pcf_filtering = true;
+    def.shadow_config.filter_mode = ShadowFilterMode::PCF;
 
     // Memory config (§4.4: Pictor Standard)
     def.memory_config.frame_allocator_size = 16 * 1024 * 1024; // 16MB
@@ -153,6 +154,7 @@ PipelineProfileDef PipelineProfileManager::create_standard_profile() {
     def.gi_config.gi_probes_enabled = false;
     def.gi_config.shadow.cascade_count = 3;
     def.gi_config.shadow.resolution = 2048;
+    def.gi_config.shadow.filter_mode = ShadowFilterMode::PCF;
     def.gi_config.ssao.sample_count = 32;
     def.gi_config.ssao.radius = 0.5f;
     def.gi_config.ssao.intensity = 1.0f;
@@ -191,10 +193,10 @@ PipelineProfileDef PipelineProfileManager::create_ultra_profile() {
     def.max_lights = 1024;
     def.msaa_samples = 0; // TAA handles anti-aliasing
 
-    // Shadow config (§8.1: high quality)
+    // Shadow config (§8.1: high quality, PCSS contact-hardening shadows)
     def.shadow_config.cascade_count = 4;
     def.shadow_config.resolution = 4096;
-    def.shadow_config.pcf_filtering = true;
+    def.shadow_config.filter_mode = ShadowFilterMode::PCSS;
 
     // Memory config (§4.4: Pictor Ultra)
     def.memory_config.frame_allocator_size = 64 * 1024 * 1024; // 64MB
@@ -229,6 +231,9 @@ PipelineProfileDef PipelineProfileManager::create_ultra_profile() {
     def.gi_config.shadow.resolution = 4096;
     def.gi_config.shadow.cascade_lambda = 0.8f;
     def.gi_config.shadow.max_shadow_dist = 300.0f;
+    def.gi_config.shadow.filter_mode = ShadowFilterMode::PCSS;
+    def.gi_config.shadow.pcss_light_size = 0.06f;
+    def.gi_config.shadow.pcss_max_penumbra = 24.0f;
     def.gi_config.ssao.sample_count = 64;
     def.gi_config.ssao.radius = 0.5f;
     def.gi_config.ssao.intensity = 1.2f;

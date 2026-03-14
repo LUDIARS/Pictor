@@ -6,6 +6,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
+#include "shadow.glsl"
 
 // ============================================================
 // Specialization Constants
@@ -42,7 +43,7 @@ layout(set = 1, binding = 5) uniform MaterialParams {
     float specularSmoothness;  // specular edge smoothness
     float rimPower;            // rim light exponent
     float rimStrength;         // rim light intensity
-    float pad8;
+    uint  receiveShadow;       // 1 = sample shadow map, 0 = skip
 };
 
 // ============================================================
@@ -114,9 +115,18 @@ void main() {
     vec3 albedo = albedoSample.rgb * baseColorFactor.rgb;
     float alpha = albedoSample.a * baseColorFactor.a;
 
+    // Compute shadow factor
+    float shadow = 1.0;
+    if (receiveShadow != 0u) {
+        vec4 viewPos = view * vec4(fragWorldPos, 1.0);
+        float viewDepth = -viewPos.z;
+        vec3 sunDir = normalize(sun.direction.xyz);
+        shadow = sampleShadow(fragWorldPos, viewDepth, N, sunDir);
+    }
+
     vec3 Lo = vec3(0.0);
 
-    // Directional light (sun)
+    // Directional light (sun) — modulated by shadow
     {
         vec3 L = normalize(sun.direction.xyz);
         vec3 H = normalize(V + L);
@@ -126,8 +136,8 @@ void main() {
         float spec    = toonSpecular(N, H);
 
         vec3 lightColor = sun.color.rgb * sun.color.a;
-        Lo += albedo * lightColor * diffuse;
-        Lo += lightColor * spec;
+        Lo += albedo * lightColor * diffuse * shadow;
+        Lo += lightColor * spec * shadow;
     }
 
     // Point lights
