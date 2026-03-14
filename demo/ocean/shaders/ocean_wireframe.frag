@@ -9,11 +9,12 @@ layout(set = 0, binding = 0) uniform SceneParams {
     mat4  viewProjection;
     vec4  cameraPosition;
     float time;
-    float maxTessLevel;
-    float minTessLevel;
-    float tessNearDist;
-    float tessFarDist;
-    float pad0, pad1, pad2;
+    float tessLevelHigh;
+    float tessLevelMedium;
+    float tessLevelLow;
+    float tessDistNearMid;
+    float tessDistMidFar;
+    float pad0, pad1;
 };
 
 layout(location = 0) in vec3 fragWorldPos;
@@ -24,14 +25,24 @@ layout(location = 3) in float fragFoam;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    // Distance-based color: near = bright cyan, far = darker blue
+    // 3-level tessellation visualization:
+    //   High (near) = bright green, Medium = yellow, Low (far) = red
     float dist = length(fragWorldPos - cameraPosition.xyz);
-    float t = clamp(dist / tessFarDist, 0.0, 1.0);
 
-    vec3 nearColor = vec3(0.0, 1.0, 0.9);   // bright cyan
-    vec3 farColor  = vec3(0.1, 0.3, 0.6);   // muted blue
+    vec3 highColor   = vec3(0.0, 1.0, 0.5);   // bright green (near / high detail)
+    vec3 mediumColor = vec3(1.0, 1.0, 0.0);   // yellow (medium detail)
+    vec3 lowColor    = vec3(1.0, 0.3, 0.1);   // red-orange (far / low detail)
 
-    vec3 wireColor = mix(nearColor, farColor, t);
+    vec3 wireColor;
+    if (dist < tessDistNearMid) {
+        float t = clamp(dist / tessDistNearMid, 0.0, 1.0);
+        wireColor = mix(highColor, mediumColor, t);
+    } else if (dist < tessDistMidFar) {
+        float t = clamp((dist - tessDistNearMid) / (tessDistMidFar - tessDistNearMid), 0.0, 1.0);
+        wireColor = mix(mediumColor, lowColor, t);
+    } else {
+        wireColor = lowColor;
+    }
 
     // Slight brightness variation based on surface normal for depth perception
     float facing = abs(dot(normalize(fragNormal), vec3(0.0, 1.0, 0.0)));
