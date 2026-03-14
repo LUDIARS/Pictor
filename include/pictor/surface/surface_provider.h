@@ -2,6 +2,11 @@
 
 #include <cstdint>
 
+// X11 headers define 'None' as a macro — undefine it to avoid conflicts
+#ifdef None
+#undef None
+#endif
+
 namespace pictor {
 
 /// Platform-agnostic native window handle.

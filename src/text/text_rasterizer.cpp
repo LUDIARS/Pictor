@@ -53,6 +53,11 @@ std::vector<uint32_t> TextRasterizer::utf8_to_codepoints(const std::string& text
 // Atlas building
 // ============================================================
 
+bool TextRasterizer::build_atlas(FontHandle font, CharSet charset) {
+    Config default_config;
+    return build_atlas(font, charset, default_config);
+}
+
 bool TextRasterizer::build_atlas(FontHandle font, CharSet charset,
                                   const Config& config) {
     auto ranges = charset_to_ranges(charset);
@@ -60,6 +65,12 @@ bool TextRasterizer::build_atlas(FontHandle font, CharSet charset,
     current_font_ = font;
     current_charset_ = charset;
     return build_atlas(font, ranges, config);
+}
+
+bool TextRasterizer::build_atlas(FontHandle font,
+                                  const std::vector<CodepointRange>& ranges) {
+    Config default_config;
+    return build_atlas(font, ranges, default_config);
 }
 
 bool TextRasterizer::build_atlas(FontHandle font,

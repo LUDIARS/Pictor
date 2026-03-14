@@ -51,13 +51,16 @@ public:
 
     /// Build a glyph atlas for the specified font and character set.
     /// Returns true on success. Atlas pages are stored internally.
+    bool build_atlas(FontHandle font, CharSet charset);
     bool build_atlas(FontHandle font, CharSet charset,
-                     const Config& config = {});
+                     const Config& config);
 
     /// Build an atlas from explicit codepoint ranges.
     bool build_atlas(FontHandle font,
+                     const std::vector<CodepointRange>& ranges);
+    bool build_atlas(FontHandle font,
                      const std::vector<CodepointRange>& ranges,
-                     const Config& config = {});
+                     const Config& config);
 
     /// Add additional codepoints to an existing atlas (incremental build).
     /// Returns true if all codepoints were added successfully.
