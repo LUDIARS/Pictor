@@ -137,7 +137,7 @@ if(glfw3_FOUND)
 endif()
 
 if(PICTOR_BUILD_BENCHMARK)
-    add_executable(pictor_benchmark benchmark/main.cpp)
+    add_executable(pictor_benchmark demo/benchmark/main.cpp)
     target_link_libraries(pictor_benchmark PRIVATE pictor)
 endif()
 
@@ -160,8 +160,8 @@ endif()
 # Shader compilation
 if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     set(PICTOR_SHADER_SOURCES
-        ${CMAKE_SOURCE_DIR}/shaders/simple_inst.vert
-        ${CMAKE_SOURCE_DIR}/shaders/simple_inst.frag
+        ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.vert
+        ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.frag
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
     )
