@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(PICTOR_BUILD_BENCHMARK     "Build 1M Spheres benchmark"       ON)
 option(PICTOR_BUILD_DEMO          "Build Vulkan window demo"         ON)
 option(PICTOR_BUILD_GRAPHICS_DEMO "Build PBR graphics demo"         ON)
+option(PICTOR_BUILD_OCEAN_DEMO    "Build Ocean wave tessellation demo" ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 
@@ -157,6 +158,14 @@ elseif(PICTOR_BUILD_GRAPHICS_DEMO)
     message(STATUS "Pictor: Graphics demo disabled (requires Vulkan + GLFW3)")
 endif()
 
+if(PICTOR_BUILD_OCEAN_DEMO AND Vulkan_FOUND AND glfw3_FOUND)
+    add_executable(pictor_ocean_demo demo/ocean/main.cpp)
+    target_link_libraries(pictor_ocean_demo PRIVATE pictor)
+    message(STATUS "Pictor: Ocean wave tessellation demo enabled")
+elseif(PICTOR_BUILD_OCEAN_DEMO)
+    message(STATUS "Pictor: Ocean demo disabled (requires Vulkan + GLFW3)")
+endif()
+
 # Shader compilation
 if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     set(PICTOR_SHADER_SOURCES
@@ -164,6 +173,10 @@ if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/simple_inst.frag
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.vert
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tesc
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tese
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -187,5 +200,8 @@ if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_graphics_demo)
         add_dependencies(pictor_graphics_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_ocean_demo)
+        add_dependencies(pictor_ocean_demo pictor_shaders)
     endif()
 endif()
