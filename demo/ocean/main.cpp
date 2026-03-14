@@ -86,11 +86,12 @@ struct OceanSceneUBO {
     float viewProj[16];
     float cameraPos[4];     // xyz + pad
     float time;
-    float maxTessLevel;
-    float minTessLevel;
-    float tessNearDist;
-    float tessFarDist;
-    float pad0, pad1, pad2;
+    float tessLevelHigh;    // tessellation level for near range (e.g. 32)
+    float tessLevelMedium;  // tessellation level for mid range (e.g. 16)
+    float tessLevelLow;     // tessellation level for far range (e.g. 4)
+    float tessDistNearMid;  // distance boundary: high -> medium
+    float tessDistMidFar;   // distance boundary: medium -> low
+    float pad0, pad1;
 };
 
 // ============================================================
@@ -881,13 +882,52 @@ int main() {
     auto start = std::chrono::high_resolution_clock::now();
     uint64_t frame_count = 0;
 
+    // ---- Orbit Camera State ----
+    struct OrbitCamera {
+        float yaw   = 0.0f;
+        float pitch = 0.3f;    // slight downward angle
+        float radius = 40.0f;
+        float center[3] = {0.0f, 0.0f, 0.0f};
+        double lastMouseX = 0.0, lastMouseY = 0.0;
+        bool dragging = false;
+    };
+    static OrbitCamera orbit_cam;
+
+    // Mouse callbacks for orbit camera
+    GLFWwindow* win = surface_provider.glfw_window();
+    glfwSetMouseButtonCallback(win, [](GLFWwindow* w, int button, int action, int /*mods*/) {
+        if (button == GLFW_MOUSE_BUTTON_LEFT) {
+            orbit_cam.dragging = (action == GLFW_PRESS);
+            if (orbit_cam.dragging)
+                glfwGetCursorPos(w, &orbit_cam.lastMouseX, &orbit_cam.lastMouseY);
+        }
+    });
+    glfwSetCursorPosCallback(win, [](GLFWwindow*, double xpos, double ypos) {
+        if (!orbit_cam.dragging) return;
+        double dx = xpos - orbit_cam.lastMouseX;
+        double dy = ypos - orbit_cam.lastMouseY;
+        orbit_cam.lastMouseX = xpos;
+        orbit_cam.lastMouseY = ypos;
+        orbit_cam.yaw   -= static_cast<float>(dx) * 0.005f;
+        orbit_cam.pitch += static_cast<float>(dy) * 0.005f;
+        // Clamp pitch to avoid flipping
+        if (orbit_cam.pitch > 1.5f)  orbit_cam.pitch = 1.5f;
+        if (orbit_cam.pitch < -1.5f) orbit_cam.pitch = -1.5f;
+    });
+    glfwSetScrollCallback(win, [](GLFWwindow*, double /*xoffset*/, double yoffset) {
+        orbit_cam.radius -= static_cast<float>(yoffset) * 3.0f;
+        if (orbit_cam.radius < 5.0f)  orbit_cam.radius = 5.0f;
+        if (orbit_cam.radius > 200.0f) orbit_cam.radius = 200.0f;
+    });
+
     printf("\nOcean setup:\n");
     printf("  - 32x32 quad patch grid (1024 patches)\n");
-    printf("  - Tessellation range: 1 (far) to 32 (near)\n");
+    printf("  - 3-level tessellation: High(32) / Medium(16) / Low(4)\n");
     printf("  - Target: ~100K polygons adaptive LOD\n");
     printf("  - 6-layer Gerstner wave displacement\n");
     printf("  - Physically-based ocean shading (Fresnel + SSS + foam)\n");
     printf("  - Press 'W' to toggle wireframe tessellation view\n");
+    printf("  - Mouse drag: orbit camera, Scroll: zoom\n");
     printf("\nEntering main loop. Close the window to exit.\n\n");
 
     bool w_key_was_pressed = false;
@@ -897,7 +937,6 @@ int main() {
 
         // Toggle wireframe with W key
         {
-            GLFWwindow* win = surface_provider.glfw_window();
             bool w_pressed = glfwGetKey(win, GLFW_KEY_W) == GLFW_PRESS;
             if (w_pressed && !w_key_was_pressed) {
                 ocean_renderer.toggle_wireframe();
@@ -909,28 +948,23 @@ int main() {
         auto now = std::chrono::high_resolution_clock::now();
         float elapsed = std::chrono::duration<float>(now - start).count();
 
-        // Orbit camera over ocean
-        float cam_radius = 40.0f;
-        float cam_height = 15.0f;
-        float cam_speed  = 0.15f;
-        float cam_angle  = elapsed * cam_speed;
-
+        // Compute eye position from orbit camera
+        float cos_pitch = std::cos(orbit_cam.pitch);
         float eye[3] = {
-            cam_radius * std::sin(cam_angle),
-            cam_height + 3.0f * std::sin(elapsed * 0.2f),  // gentle bob
-            cam_radius * std::cos(cam_angle)
+            orbit_cam.center[0] + orbit_cam.radius * cos_pitch * std::sin(orbit_cam.yaw),
+            orbit_cam.center[1] + orbit_cam.radius * std::sin(orbit_cam.pitch),
+            orbit_cam.center[2] + orbit_cam.radius * cos_pitch * std::cos(orbit_cam.yaw)
         };
-        float center[3] = {0.0f, 0.0f, 0.0f};
-        float up[3]     = {0.0f, 1.0f, 0.0f};
+        float up[3] = {0.0f, 1.0f, 0.0f};
 
         float view_mat[16], proj_mat[16], view_proj[16];
-        mat4_look_at(view_mat, eye, center, up);
+        mat4_look_at(view_mat, eye, orbit_cam.center, up);
 
         float aspect = static_cast<float>(screen_w) / static_cast<float>(screen_h);
         mat4_perspective(proj_mat, 0.7854f, aspect, 0.1f, 500.0f);
         mat4_multiply(view_proj, proj_mat, view_mat);
 
-        // Build UBO
+        // Build UBO — 3-level tessellation
         OceanSceneUBO ubo;
         memcpy(ubo.view,    view_mat,  sizeof(view_mat));
         memcpy(ubo.proj,    proj_mat,  sizeof(proj_mat));
@@ -939,12 +973,13 @@ int main() {
         ubo.cameraPos[1] = eye[1];
         ubo.cameraPos[2] = eye[2];
         ubo.cameraPos[3] = 0.0f;
-        ubo.time          = elapsed;
-        ubo.maxTessLevel  = 32.0f;
-        ubo.minTessLevel  = 1.0f;
-        ubo.tessNearDist  = 10.0f;
-        ubo.tessFarDist   = 200.0f;
-        ubo.pad0 = ubo.pad1 = ubo.pad2 = 0.0f;
+        ubo.time            = elapsed;
+        ubo.tessLevelHigh   = 32.0f;
+        ubo.tessLevelMedium = 16.0f;
+        ubo.tessLevelLow    = 4.0f;
+        ubo.tessDistNearMid = 30.0f;
+        ubo.tessDistMidFar  = 100.0f;
+        ubo.pad0 = ubo.pad1 = 0.0f;
 
         // Update Pictor renderer
         camera.position = {eye[0], eye[1], eye[2]};

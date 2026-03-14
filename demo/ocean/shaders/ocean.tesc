@@ -1,7 +1,7 @@
 // Pictor — Ocean Wave Tessellation Control Shader
-// Distance-based adaptive tessellation: more polygons near the camera,
-// fewer polygons at distance. Targets ~100K total polygons across the
-// ocean surface.
+// 3-level distance-based adaptive tessellation:
+//   High (near), Medium (mid), Low (far)
+// Tessellation is determined by camera distance to each edge midpoint.
 
 #version 450
 
@@ -13,11 +13,12 @@ layout(set = 0, binding = 0) uniform SceneParams {
     mat4  viewProjection;
     vec4  cameraPosition;
     float time;
-    float maxTessLevel;     // maximum tessellation level (near camera)
-    float minTessLevel;     // minimum tessellation level (far from camera)
-    float tessNearDist;     // distance at which max tessellation is used
-    float tessFarDist;      // distance beyond which min tessellation is used
-    float pad0, pad1, pad2;
+    float tessLevelHigh;    // tessellation level for near range
+    float tessLevelMedium;  // tessellation level for mid range
+    float tessLevelLow;     // tessellation level for far range
+    float tessDistNearMid;  // distance boundary: high -> medium
+    float tessDistMidFar;   // distance boundary: medium -> low
+    float pad0, pad1;
 };
 
 layout(location = 0) in vec3 vsPosition[];
@@ -29,8 +30,17 @@ layout(location = 1) out vec2 tcsTexCoord[];
 float calcTessLevel(vec3 p0, vec3 p1) {
     vec3 midpoint = (p0 + p1) * 0.5;
     float dist = distance(cameraPosition.xyz, midpoint);
-    float t = clamp((dist - tessNearDist) / (tessFarDist - tessNearDist), 0.0, 1.0);
-    return mix(maxTessLevel, minTessLevel, t);
+
+    // 3-level discrete tessellation with smooth transitions
+    if (dist < tessDistNearMid) {
+        float t = clamp(dist / tessDistNearMid, 0.0, 1.0);
+        return mix(tessLevelHigh, tessLevelMedium, t);
+    } else if (dist < tessDistMidFar) {
+        float t = clamp((dist - tessDistNearMid) / (tessDistMidFar - tessDistNearMid), 0.0, 1.0);
+        return mix(tessLevelMedium, tessLevelLow, t);
+    } else {
+        return tessLevelLow;
+    }
 }
 
 void main() {
