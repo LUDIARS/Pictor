@@ -318,4 +318,11 @@ enum class UpdateStrategy : uint8_t {
     GPU_COMPUTE      = 3   // Level 3
 };
 
+/// Shadow filtering mode for shadow map sampling
+enum class ShadowFilterMode : uint8_t {
+    NONE = 0,   // Hard shadows (single sample)
+    PCF  = 1,   // Percentage Closer Filtering (uniform soft shadow)
+    PCSS = 2    // Percentage Closer Soft Shadows (contact-hardening)
+};
+
 } // namespace pictor

@@ -12,9 +12,9 @@ namespace pictor {
 
 /// Shadow configuration (§8.2)
 struct ShadowConfig {
-    uint32_t cascade_count   = 3;
-    uint32_t resolution      = 2048;
-    bool     pcf_filtering   = true;
+    uint32_t         cascade_count   = 3;
+    uint32_t         resolution      = 2048;
+    ShadowFilterMode filter_mode     = ShadowFilterMode::PCF;
 };
 
 /// Post-process effect definition (§8.2)
