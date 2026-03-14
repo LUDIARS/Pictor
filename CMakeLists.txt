@@ -150,7 +150,7 @@ elseif(PICTOR_BUILD_DEMO)
 endif()
 
 if(PICTOR_BUILD_GRAPHICS_DEMO AND Vulkan_FOUND AND glfw3_FOUND)
-    add_executable(pictor_graphics_demo graphics_demo/main.cpp)
+    add_executable(pictor_graphics_demo demo/graphics/main.cpp)
     target_link_libraries(pictor_graphics_demo PRIVATE pictor)
     message(STATUS "Pictor: PBR graphics demo enabled")
 elseif(PICTOR_BUILD_GRAPHICS_DEMO)
@@ -162,8 +162,8 @@ if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     set(PICTOR_SHADER_SOURCES
         ${CMAKE_SOURCE_DIR}/shaders/simple_inst.vert
         ${CMAKE_SOURCE_DIR}/shaders/simple_inst.frag
-        ${CMAKE_SOURCE_DIR}/shaders/pbr_demo.vert
-        ${CMAKE_SOURCE_DIR}/shaders/pbr_demo.frag
+        ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
+        ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
