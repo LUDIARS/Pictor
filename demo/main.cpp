@@ -7,6 +7,8 @@
 #include "pictor/pictor.h"
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
+#include "pictor/profiler/stats_overlay.h"
+#include "pictor/profiler/bitmap_text_renderer.h"
 
 #include <GLFW/glfw3.h>
 #include <cstdio>
@@ -112,6 +114,25 @@ int main() {
     camera.frustum.planes[4] = {{0, 0, 1}, 0.1f};
     camera.frustum.planes[5] = {{0, 0, -1}, 500.0f};
 
+    // ---- 3b. Bitmap Text Renderer + Stats Overlay ----
+#ifdef PICTOR_HAS_VULKAN
+    BitmapTextRenderer text_renderer;
+    {
+        // Shader dir: look for compiled SPIR-V shaders next to the executable
+        // CMake puts them in ${CMAKE_BINARY_DIR}/shaders/
+        if (!text_renderer.initialize(vk_ctx, "shaders")) {
+            fprintf(stderr, "Warning: BitmapTextRenderer init failed (stats overlay disabled)\n");
+        }
+    }
+#endif
+
+    StatsOverlay stats_overlay;
+    stats_overlay.initialize(vk_ctx.swapchain_extent().width, vk_ctx.swapchain_extent().height);
+    stats_overlay.set_visible(true);
+#ifdef PICTOR_HAS_VULKAN
+    stats_overlay.set_text_renderer(&text_renderer);
+#endif
+
     // ---- Orbit Camera State ----
     struct OrbitCamera {
         float yaw   = 0.0f;
@@ -125,13 +146,19 @@ int main() {
 
     GLFWwindow* win = surface_provider.glfw_window();
 
-    // Store renderer pointer so GLFW callbacks can access it
-    glfwSetWindowUserPointer(win, &renderer);
+    // Store stats overlay pointer so GLFW callbacks can access it
+    struct CallbackData {
+        PictorRenderer* renderer;
+        StatsOverlay*   stats;
+    };
+    static CallbackData cb_data{&renderer, &stats_overlay};
+    glfwSetWindowUserPointer(win, &cb_data);
 
     glfwSetKeyCallback(win, [](GLFWwindow* w, int key, int /*scancode*/, int action, int /*mods*/) {
         if (key == GLFW_KEY_S && action == GLFW_PRESS) {
-            auto* r = static_cast<PictorRenderer*>(glfwGetWindowUserPointer(w));
-            r->toggle_stats_overlay();
+            auto* d = static_cast<CallbackData*>(glfwGetWindowUserPointer(w));
+            d->stats->toggle();
+            d->renderer->toggle_stats_overlay();
         }
     });
 
@@ -210,6 +237,18 @@ int main() {
 
         vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
         // (Future: Pictor would record draw commands here)
+
+        // Stats overlay text rendering (inside render pass)
+        if (stats_overlay.is_visible()) {
+            stats_overlay.begin_render(cmd, vk_ctx.swapchain_extent());
+            SceneSummary summary;
+            summary.batch_count = renderer.get_frame_stats().batch_count;
+            summary.polygon_count = renderer.get_frame_stats().triangle_count;
+            summary.draw_call_count = renderer.get_frame_stats().draw_call_count;
+            stats_overlay.render(renderer.get_frame_stats(), summary);
+            stats_overlay.end_render();
+        }
+
         vkCmdEndRenderPass(cmd);
 
         vkEndCommandBuffer(cmd);
@@ -257,6 +296,9 @@ int main() {
 
     // ---- 6. Cleanup ----
     vk_ctx.device_wait_idle();
+#ifdef PICTOR_HAS_VULKAN
+    text_renderer.shutdown();
+#endif
     renderer.shutdown();
     vk_ctx.shutdown();
     surface_provider.destroy();

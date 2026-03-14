@@ -4,6 +4,10 @@
 #include "pictor/profiler/profiler.h"
 #include <cstdio>
 
+#ifdef PICTOR_HAS_VULKAN
+#include "pictor/profiler/bitmap_text_renderer.h"
+#endif
+
 namespace pictor {
 
 /// Scene summary information for stats overlay display.
@@ -39,6 +43,12 @@ public:
     /// Initialize overlay resources
     void initialize(uint32_t screen_width, uint32_t screen_height);
 
+#ifdef PICTOR_HAS_VULKAN
+    /// Set the bitmap text renderer for Vulkan-based text rendering.
+    /// Must be called after initialize() and before render().
+    void set_text_renderer(BitmapTextRenderer* renderer) { text_renderer_ = renderer; }
+#endif
+
     /// Toggle visibility (bound to S key)
     void toggle() { visible_ = !visible_; }
 
@@ -49,18 +59,28 @@ public:
     /// Call after all scene rendering is complete.
     void render(const FrameStats& stats, const SceneSummary& summary);
 
+#ifdef PICTOR_HAS_VULKAN
+    /// Begin text rendering within an active render pass.
+    void begin_render(VkCommandBuffer cmd, VkExtent2D extent);
+
+    /// End text rendering (flushes batched draw call).
+    void end_render();
+#endif
+
     /// Update screen dimensions on resize
     void resize(uint32_t width, uint32_t height);
 
 private:
-    /// Render a single line of text at (x, y) using SDF text pipeline.
-    /// In the current stub implementation, outputs to stdout for debugging.
     void draw_text(float x, float y, const char* text);
 
     uint32_t screen_width_  = 1920;
     uint32_t screen_height_ = 1080;
     bool     initialized_   = false;
     bool     visible_       = false;
+
+#ifdef PICTOR_HAS_VULKAN
+    BitmapTextRenderer* text_renderer_ = nullptr;
+#endif
 
     // Layout constants (pixels, top-left origin)
     static constexpr float MARGIN_X    = 10.0f;
