@@ -31,7 +31,7 @@ enum class CharSet : uint32_t {
     ARABIC           = 1 << 8,   // U+0600..U+06FF
     DEVANAGARI       = 1 << 9,   // U+0900..U+097F
     SYMBOLS          = 1 << 10,  // Box drawing, math, arrows, emoji subset
-    FULL_UNICODE     = 1 << 31,  // All available glyphs in the font
+    FULL_UNICODE     = 1u << 31,  // All available glyphs in the font
 
     // Convenience combinations
     JAPANESE         = static_cast<uint32_t>(HIRAGANA) |
