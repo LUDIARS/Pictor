@@ -95,6 +95,12 @@ add_library(pictor STATIC
     src/data/data_handler.cpp
     src/data/data_query_api.cpp
 
+    # Text Rendering
+    src/text/font_loader.cpp
+    src/text/text_image_renderer.cpp
+    src/text/text_svg_renderer.cpp
+    src/text/text_rasterizer.cpp
+
     # Public API
     src/core/pictor_renderer.cpp
 )
