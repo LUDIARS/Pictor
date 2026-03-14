@@ -148,7 +148,11 @@ if(PICTOR_BUILD_DEMO)
         add_executable(pictor_graphics_demo demo/graphics/main.cpp)
         target_link_libraries(pictor_graphics_demo PRIVATE pictor)
 
-        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics)")
+        # Ocean wave tessellation demo
+        add_executable(pictor_ocean_demo demo/ocean/main.cpp)
+        target_link_libraries(pictor_ocean_demo PRIVATE pictor)
+
+        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
     endif()
@@ -161,6 +165,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.frag
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.vert
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tesc
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tese
+        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -184,5 +192,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_graphics_demo)
         add_dependencies(pictor_graphics_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_ocean_demo)
+        add_dependencies(pictor_ocean_demo pictor_shaders)
     endif()
 endif()

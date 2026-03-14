@@ -330,6 +330,11 @@ bool VulkanContext::create_logical_device() {
     queue_info.pQueuePriorities = &priority;
 
     VkPhysicalDeviceFeatures features{};
+    // Query supported features and enable tessellation + fillModeNonSolid
+    VkPhysicalDeviceFeatures supported;
+    vkGetPhysicalDeviceFeatures(physical_device_, &supported);
+    if (supported.tessellationShader) features.tessellationShader = VK_TRUE;
+    if (supported.fillModeNonSolid)  features.fillModeNonSolid  = VK_TRUE;
 
     const char* dev_extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
