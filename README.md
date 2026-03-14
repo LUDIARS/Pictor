@@ -79,6 +79,9 @@ cmake --build build
 
 - `libpictor.a` — 静的ライブラリ
 - `pictor_demo` — Vulkan ウィンドウデモ（オプション、Vulkan + GLFW 必要）
+- `pictor_graphics_demo` — PBR グラフィクスデモ（シャドウ・GI・メタリックシーン）
+- `pictor_ocean_demo` — オーシャンテッセレーションデモ（3段階テッセレーション + オービットカメラ）
+- `pictor_text_demo` — テキストレンダリングデモ（SVGベクター / ラスタライズ モード切替）
 - `pictor_benchmark` — ベンチマーク実行ファイル（オプション）
 
 ### プロジェクトへの組み込み
@@ -230,6 +233,8 @@ renderer.end_frame();
 | **RenderPassScheduler** | PipelineProfileに基づくパス順序決定と実行 |
 | **CommandEncoder** | DrawCommand生成とVkCommandBuffer記録 |
 | **Profiler** | FPS, パス別GPU/CPU時間, メモリ統計, オーバーレイUI |
+| **StatsOverlay** | Sキーでトグル可能なオンスクリーン統計表示（MINIMAL/STANDARD/DETAILED/TIMELINE/OFF） |
+| **BitmapFont / BitmapTextRenderer** | 埋め込み8x16モノスペースフォントによるVulkanテキストレンダリング |
 | **DataHandler** | テクスチャ・頂点データの統合管理ファサード |
 | **DataQueryAPI** | 外部ツール向け読み取り専用クエリAPI |
 | **TextureRegistry** | テクスチャ登録・GPUメモリ管理 |
@@ -238,6 +243,7 @@ renderer.end_frame();
 | **MaterialRegistry** | BuiltMaterial の一元管理・O(1)ルックアップ |
 | **GILightingSystem** | シャドウマップ(CSM)・SSAO・Light Probe による GI プリパス |
 | **GIBakeSystem** | 静的オブジェクトのオフライン GI ベイク (Shadow/AO/Irradiance/Lightmap) |
+| **TextRenderingSystem** | TTF/OTFフォントロード、CPU ラスタライズ、テクスチャ / SVGベクター テキスト描画 |
 | **VulkanContext** | Vulkan インスタンス・デバイス・スワップチェーン管理 |
 
 ### SoAデータモデル
@@ -416,6 +422,31 @@ GIBakeResult loaded = renderer.load_bake("scene_gi.bin");
 
 ---
 
+## テキストレンダリング
+
+Pictorはテキスト描画のための統合モジュールを提供します。FreeType経由でTTF/OTFフォントをロードし、複数の描画方式をサポートします。
+
+### フォントロード
+
+```cpp
+FontLoader loader;
+FontHandle font = loader.load("path/to/font.ttf", 24.0f);
+```
+
+### 描画方式
+
+| 方式 | クラス | 特徴 |
+|------|--------|------|
+| テクスチャベース | `TextImageRenderer` | フォントアトラスにラスタライズし、クアッド描画。高速 |
+| SVGベクター | `TextSvgRenderer` | ベクターパスベースの高品質描画。スケーラブル |
+| CPUラスタライズ | `TextRasterizer` | CPU上でビットマップに直接レンダリング |
+
+### 対応文字セット
+
+ASCII, Latin Extended, CJK (中日韓), Japanese (ひらがな・カタカナ), Korean, Arabic, Cyrillic, Devanagari 等
+
+---
+
 ## サーフェスプロバイダ
 
 `ISurfaceProvider` インタフェースにより、Pictorをウィンドウシステムから分離しています。
@@ -459,15 +490,20 @@ Pictor/
 │   ├── culling/                  # CullingSystem, FlatBVH
 │   ├── gpu/                      # GPUDrivenPipeline, GPUBufferManager
 │   ├── pipeline/                 # PipelineProfile, RenderPassScheduler, CommandEncoder
-│   ├── profiler/                 # Profiler, Overlay, DataExporter
+│   ├── profiler/                 # Profiler, Overlay, StatsOverlay, BitmapFont, DataExporter
 │   ├── data/                     # DataHandler, TextureRegistry, VertexDataUploader, DataQueryAPI
 │   ├── material/                 # BaseMaterialBuilder, MaterialProperty, MaterialRegistry
 │   ├── gi/                       # GILightingSystem, GIBakeSystem
-│   └── surface/                  # ISurfaceProvider, VulkanContext, GlfwSurfaceProvider
+│   ├── surface/                  # ISurfaceProvider, VulkanContext, GlfwSurfaceProvider
+│   └── text/                     # FontLoader, TextImageRenderer, TextRasterizer, TextSvgRenderer
 ├── src/                          # 実装
 ├── shaders/                      # Compute Shader (.comp), サンプルシェーダ
-├── demo/                         # Vulkan ウィンドウデモ
-├── benchmark/                    # 1M Spheres ベンチマーク
+├── demo/
+│   ├── main.cpp                  # メインレンダラーデモ
+│   ├── benchmark/                # 1M Spheres ヘッドレスベンチマーク
+│   ├── graphics/                 # PBR グラフィクスデモ
+│   ├── ocean/                    # オーシャンテッセレーションデモ
+│   └── text/                     # テキストレンダリングデモ
 ├── docs/
 │   ├── api/                      # 外部インタフェース・クラス定義ドキュメント
 │   └── design/                   # 設計ドキュメント (WebGL バックエンド等)
