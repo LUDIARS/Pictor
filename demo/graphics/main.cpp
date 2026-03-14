@@ -13,6 +13,7 @@
 #include "pictor/pictor.h"
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
+#include <GLFW/glfw3.h>
 
 #include <cstdio>
 #include <cmath>

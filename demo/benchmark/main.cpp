@@ -14,6 +14,7 @@
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/surface/simple_renderer.h"
+#include <GLFW/glfw3.h>
 #endif
 
 using namespace pictor;
