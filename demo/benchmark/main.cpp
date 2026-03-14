@@ -255,12 +255,52 @@ int main(int argc, char* argv[]) {
     camera.frustum.planes[4] = {{0, 0, 1}, 0.1f};
     camera.frustum.planes[5] = {{0, 0, -1}, 1000.0f};
 
+    // ---- Orbit Camera State ----
+    struct OrbitCamera {
+        float yaw   = 0.0f;
+        float pitch = 0.55f;
+        float radius = 250.0f;
+        float center[3] = {0.0f, 0.0f, 0.0f};
+        double lastMouseX = 0.0, lastMouseY = 0.0;
+        bool dragging = false;
+    };
+    static OrbitCamera orbit_cam;
+
+#ifdef PICTOR_HAS_VULKAN
+    if (!headless) {
+        GLFWwindow* win = surface_provider.glfw_window();
+        glfwSetMouseButtonCallback(win, [](GLFWwindow* w, int button, int action, int /*mods*/) {
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                orbit_cam.dragging = (action == GLFW_PRESS);
+                if (orbit_cam.dragging)
+                    glfwGetCursorPos(w, &orbit_cam.lastMouseX, &orbit_cam.lastMouseY);
+            }
+        });
+        glfwSetCursorPosCallback(win, [](GLFWwindow*, double xpos, double ypos) {
+            if (!orbit_cam.dragging) return;
+            double dx = xpos - orbit_cam.lastMouseX;
+            double dy = ypos - orbit_cam.lastMouseY;
+            orbit_cam.lastMouseX = xpos;
+            orbit_cam.lastMouseY = ypos;
+            orbit_cam.yaw   -= static_cast<float>(dx) * 0.005f;
+            orbit_cam.pitch += static_cast<float>(dy) * 0.005f;
+            if (orbit_cam.pitch > 1.5f)  orbit_cam.pitch = 1.5f;
+            if (orbit_cam.pitch < -1.5f) orbit_cam.pitch = -1.5f;
+        });
+        glfwSetScrollCallback(win, [](GLFWwindow*, double /*xoffset*/, double yoffset) {
+            orbit_cam.radius -= static_cast<float>(yoffset) * 15.0f;
+            if (orbit_cam.radius < 50.0f)  orbit_cam.radius = 50.0f;
+            if (orbit_cam.radius > 500.0f) orbit_cam.radius = 500.0f;
+        });
+        printf("Mouse drag: orbit camera, Scroll: zoom\n");
+    }
+#endif
+
     // View/Projection matrices for rendering
     float view_mat[16], proj_mat[16];
     float eye[3] = {0.0f, 150.0f, 250.0f};
-    float center[3] = {0.0f, 0.0f, 0.0f};
     float up[3] = {0.0f, 1.0f, 0.0f};
-    mat4_look_at(view_mat, eye, center, up);
+    mat4_look_at(view_mat, eye, orbit_cam.center, up);
 
     renderer.begin_profiler_recording("benchmark_results");
 
@@ -273,6 +313,16 @@ int main(int argc, char* argv[]) {
     auto bench_start = std::chrono::high_resolution_clock::now();
 
     for (uint32_t frame = 0; frame < BENCHMARK_FRAMES; ++frame) {
+        // Update camera position from orbit state
+        {
+            float cos_pitch = std::cos(orbit_cam.pitch);
+            camera.position = {
+                orbit_cam.center[0] + orbit_cam.radius * cos_pitch * std::sin(orbit_cam.yaw),
+                orbit_cam.center[1] + orbit_cam.radius * std::sin(orbit_cam.pitch),
+                orbit_cam.center[2] + orbit_cam.radius * cos_pitch * std::cos(orbit_cam.yaw)
+            };
+        }
+
         // Run Pictor data pipeline
         renderer.begin_frame(delta_time);
         renderer.render(camera);
@@ -288,11 +338,12 @@ int main(int argc, char* argv[]) {
                          / static_cast<float>(vk_ctx.swapchain_extent().height);
             mat4_perspective(proj_mat, 0.7854f, aspect, 0.1f, 2000.0f); // 45 deg FOV
 
-            // Orbit camera
-            float angle = static_cast<float>(frame) * 0.005f;
-            eye[0] = 250.0f * std::sin(angle);
-            eye[2] = 250.0f * std::cos(angle);
-            mat4_look_at(view_mat, eye, center, up);
+            // Update eye from orbit camera
+            float cos_pitch = std::cos(orbit_cam.pitch);
+            eye[0] = orbit_cam.center[0] + orbit_cam.radius * cos_pitch * std::sin(orbit_cam.yaw);
+            eye[1] = orbit_cam.center[1] + orbit_cam.radius * std::sin(orbit_cam.pitch);
+            eye[2] = orbit_cam.center[2] + orbit_cam.radius * cos_pitch * std::cos(orbit_cam.yaw);
+            mat4_look_at(view_mat, eye, orbit_cam.center, up);
 
             // Upload instance positions
             simple_renderer.update_instances(update_callback.instance_data.data(), OBJECT_COUNT);

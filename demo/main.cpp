@@ -111,10 +111,47 @@ int main() {
     camera.frustum.planes[4] = {{0, 0, 1}, 0.1f};
     camera.frustum.planes[5] = {{0, 0, -1}, 500.0f};
 
+    // ---- Orbit Camera State ----
+    struct OrbitCamera {
+        float yaw   = 0.0f;
+        float pitch = 0.5f;
+        float radius = 40.0f;
+        float center[3] = {0.0f, 0.0f, 0.0f};
+        double lastMouseX = 0.0, lastMouseY = 0.0;
+        bool dragging = false;
+    };
+    static OrbitCamera orbit_cam;
+
+    GLFWwindow* win = surface_provider.glfw_window();
+    glfwSetMouseButtonCallback(win, [](GLFWwindow* w, int button, int action, int /*mods*/) {
+        if (button == GLFW_MOUSE_BUTTON_LEFT) {
+            orbit_cam.dragging = (action == GLFW_PRESS);
+            if (orbit_cam.dragging)
+                glfwGetCursorPos(w, &orbit_cam.lastMouseX, &orbit_cam.lastMouseY);
+        }
+    });
+    glfwSetCursorPosCallback(win, [](GLFWwindow*, double xpos, double ypos) {
+        if (!orbit_cam.dragging) return;
+        double dx = xpos - orbit_cam.lastMouseX;
+        double dy = ypos - orbit_cam.lastMouseY;
+        orbit_cam.lastMouseX = xpos;
+        orbit_cam.lastMouseY = ypos;
+        orbit_cam.yaw   -= static_cast<float>(dx) * 0.005f;
+        orbit_cam.pitch += static_cast<float>(dy) * 0.005f;
+        if (orbit_cam.pitch > 1.5f)  orbit_cam.pitch = 1.5f;
+        if (orbit_cam.pitch < -1.5f) orbit_cam.pitch = -1.5f;
+    });
+    glfwSetScrollCallback(win, [](GLFWwindow*, double /*xoffset*/, double yoffset) {
+        orbit_cam.radius -= static_cast<float>(yoffset) * 3.0f;
+        if (orbit_cam.radius < 5.0f)   orbit_cam.radius = 5.0f;
+        if (orbit_cam.radius > 200.0f) orbit_cam.radius = 200.0f;
+    });
+
     // ---- 5. Main loop ----
     auto start = std::chrono::high_resolution_clock::now();
     uint64_t frame_count = 0;
 
+    printf("Mouse drag: orbit camera, Scroll: zoom\n");
     printf("Entering main loop. Close the window to exit.\n");
 
     while (!surface_provider.should_close()) {
@@ -124,6 +161,14 @@ int main() {
         auto now = std::chrono::high_resolution_clock::now();
         float elapsed = std::chrono::duration<float>(now - start).count();
         float hue = std::fmod(elapsed * 0.1f, 1.0f); // one full cycle every 10s
+
+        // Update camera from orbit state
+        float cos_pitch = std::cos(orbit_cam.pitch);
+        camera.position = {
+            orbit_cam.center[0] + orbit_cam.radius * cos_pitch * std::sin(orbit_cam.yaw),
+            orbit_cam.center[1] + orbit_cam.radius * std::sin(orbit_cam.pitch),
+            orbit_cam.center[2] + orbit_cam.radius * cos_pitch * std::cos(orbit_cam.yaw)
+        };
 
         float r, g, b;
         hue_to_rgb(hue, r, g, b);

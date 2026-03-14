@@ -14,11 +14,12 @@ layout(set = 0, binding = 0) uniform SceneParams {
     mat4  viewProjection;
     vec4  cameraPosition;
     float time;
-    float maxTessLevel;
-    float minTessLevel;
-    float tessNearDist;
-    float tessFarDist;
-    float pad0, pad1, pad2;
+    float tessLevelHigh;
+    float tessLevelMedium;
+    float tessLevelLow;
+    float tessDistNearMid;
+    float tessDistMidFar;
+    float pad0, pad1;
 };
 
 layout(location = 0) in vec3 fragWorldPos;
