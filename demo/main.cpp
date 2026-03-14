@@ -124,6 +124,17 @@ int main() {
     static OrbitCamera orbit_cam;
 
     GLFWwindow* win = surface_provider.glfw_window();
+
+    // Store renderer pointer so GLFW callbacks can access it
+    glfwSetWindowUserPointer(win, &renderer);
+
+    glfwSetKeyCallback(win, [](GLFWwindow* w, int key, int /*scancode*/, int action, int /*mods*/) {
+        if (key == GLFW_KEY_S && action == GLFW_PRESS) {
+            auto* r = static_cast<PictorRenderer*>(glfwGetWindowUserPointer(w));
+            r->toggle_stats_overlay();
+        }
+    });
+
     glfwSetMouseButtonCallback(win, [](GLFWwindow* w, int button, int action, int /*mods*/) {
         if (button == GLFW_MOUSE_BUTTON_LEFT) {
             orbit_cam.dragging = (action == GLFW_PRESS);
@@ -152,7 +163,7 @@ int main() {
     auto start = std::chrono::high_resolution_clock::now();
     uint64_t frame_count = 0;
 
-    printf("Mouse drag: orbit camera, Scroll: zoom\n");
+    printf("Mouse drag: orbit camera, Scroll: zoom, S: toggle stats\n");
     printf("Entering main loop. Close the window to exit.\n");
 
     while (!surface_provider.should_close()) {
