@@ -159,7 +159,11 @@ if(PICTOR_BUILD_DEMO)
         add_executable(pictor_ocean_demo demo/ocean/main.cpp)
         target_link_libraries(pictor_ocean_demo PRIVATE pictor)
 
-        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean)")
+        # Text rendering demo
+        add_executable(pictor_text_demo demo/text/main.cpp)
+        target_link_libraries(pictor_text_demo PRIVATE pictor)
+
+        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
     endif()
@@ -177,6 +181,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tese
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.frag
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean_wireframe.frag
+        ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.vert
+        ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -203,5 +209,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_ocean_demo)
         add_dependencies(pictor_ocean_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_text_demo)
+        add_dependencies(pictor_text_demo pictor_shaders)
     endif()
 endif()
