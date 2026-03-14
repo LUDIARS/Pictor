@@ -5,9 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(PICTOR_BUILD_BENCHMARK     "Build 1M Spheres benchmark"       ON)
-option(PICTOR_BUILD_DEMO          "Build Vulkan window demo"         ON)
-option(PICTOR_BUILD_GRAPHICS_DEMO "Build PBR graphics demo"         ON)
+option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 
@@ -136,29 +134,28 @@ if(glfw3_FOUND)
     target_link_libraries(pictor PUBLIC glfw)
 endif()
 
-if(PICTOR_BUILD_BENCHMARK)
+if(PICTOR_BUILD_DEMO)
+    # Benchmark (headless capable, no Vulkan/GLFW required)
     add_executable(pictor_benchmark demo/benchmark/main.cpp)
     target_link_libraries(pictor_benchmark PRIVATE pictor)
+
+    if(Vulkan_FOUND AND glfw3_FOUND)
+        # Vulkan window demo
+        add_executable(pictor_demo demo/main.cpp)
+        target_link_libraries(pictor_demo PRIVATE pictor)
+
+        # PBR graphics demo
+        add_executable(pictor_graphics_demo demo/graphics/main.cpp)
+        target_link_libraries(pictor_graphics_demo PRIVATE pictor)
+
+        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics)")
+    else()
+        message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
+    endif()
 endif()
 
-if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND glfw3_FOUND)
-    add_executable(pictor_demo demo/main.cpp)
-    target_link_libraries(pictor_demo PRIVATE pictor)
-    message(STATUS "Pictor: Vulkan window demo enabled")
-elseif(PICTOR_BUILD_DEMO)
-    message(STATUS "Pictor: Demo disabled (requires Vulkan + GLFW3)")
-endif()
-
-if(PICTOR_BUILD_GRAPHICS_DEMO AND Vulkan_FOUND AND glfw3_FOUND)
-    add_executable(pictor_graphics_demo demo/graphics/main.cpp)
-    target_link_libraries(pictor_graphics_demo PRIVATE pictor)
-    message(STATUS "Pictor: PBR graphics demo enabled")
-elseif(PICTOR_BUILD_GRAPHICS_DEMO)
-    message(STATUS "Pictor: Graphics demo disabled (requires Vulkan + GLFW3)")
-endif()
-
-# Shader compilation
-if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
+# Shader compilation (demo shaders only)
+if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     set(PICTOR_SHADER_SOURCES
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.vert
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.frag
