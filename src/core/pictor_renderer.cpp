@@ -77,10 +77,14 @@ void PictorRenderer::initialize(const RendererConfig& config) {
     overlay_ = std::make_unique<OverlayRenderer>();
     overlay_->initialize(config.screen_width, config.screen_height);
 
-    // 14. Data Exporter
+    // 14. Stats Overlay
+    stats_overlay_ = std::make_unique<StatsOverlay>();
+    stats_overlay_->initialize(config.screen_width, config.screen_height);
+
+    // 15. Data Exporter
     data_exporter_ = std::make_unique<DataExporter>();
 
-    // 15. Data Handler
+    // 16. Data Handler
     data_handler_ = std::make_unique<DataHandler>(
         memory_->gpu_allocator(), *gpu_buffer_manager_);
 
@@ -93,6 +97,7 @@ void PictorRenderer::shutdown() {
     // §12: Release all resources, GPU sync
     data_handler_.reset();
     data_exporter_.reset();
+    stats_overlay_.reset();
     overlay_.reset();
     profiler_.reset();
     command_encoder_.reset();
@@ -198,6 +203,11 @@ void PictorRenderer::render(const Camera& camera) {
     if (profiler_->is_enabled() && profiler_->overlay_mode() != OverlayMode::OFF) {
         overlay_->render(profiler_->overlay_mode(),
                          profiler_->get_frame_stats(), *profiler_);
+    }
+
+    // Render stats overlay (S key toggle)
+    if (stats_overlay_ && stats_overlay_->is_visible()) {
+        stats_overlay_->render(profiler_->get_frame_stats(), get_scene_summary());
     }
 }
 
@@ -317,6 +327,40 @@ void PictorRenderer::set_overlay_mode(OverlayMode mode) {
 
 const FrameStats& PictorRenderer::get_frame_stats() const {
     return profiler_->get_frame_stats();
+}
+
+// ---- Stats Overlay ----
+
+void PictorRenderer::toggle_stats_overlay() {
+    if (stats_overlay_) stats_overlay_->toggle();
+}
+
+void PictorRenderer::set_stats_overlay_visible(bool visible) {
+    if (stats_overlay_) stats_overlay_->set_visible(visible);
+}
+
+bool PictorRenderer::is_stats_overlay_visible() const {
+    return stats_overlay_ && stats_overlay_->is_visible();
+}
+
+SceneSummary PictorRenderer::get_scene_summary() const {
+    SceneSummary s;
+    const auto& fs = profiler_->get_frame_stats();
+    s.batch_count     = fs.batch_count;
+    s.polygon_count   = fs.triangle_count;
+    s.draw_call_count = fs.draw_call_count;
+
+    // GI system state
+    const auto& profile = profile_manager_->current_profile();
+    s.light_enabled = gi_system_ != nullptr;
+    s.gi_enabled    = profile.gi_config.gi_probes_enabled && gi_system_ != nullptr;
+
+    s.shadow_enabled     = profile.gi_config.shadow_enabled && gi_system_ != nullptr;
+    s.shadow_filter_mode = profile.gi_config.shadow.filter_mode;
+    s.shadow_cascades    = profile.gi_config.shadow.cascade_count;
+    s.shadow_resolution  = profile.gi_config.shadow.resolution;
+
+    return s;
 }
 
 // ---- Extension Points ----

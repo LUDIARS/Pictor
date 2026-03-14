@@ -81,6 +81,7 @@ add_library(pictor STATIC
     src/profiler/gpu_timer.cpp
     src/profiler/profiler.cpp
     src/profiler/overlay_renderer.cpp
+    src/profiler/stats_overlay.cpp
     src/profiler/data_exporter.cpp
 
     # Surface Abstraction

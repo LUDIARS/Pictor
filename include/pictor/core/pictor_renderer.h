@@ -13,6 +13,7 @@
 #include "pictor/pipeline/command_encoder.h"
 #include "pictor/profiler/profiler.h"
 #include "pictor/profiler/overlay_renderer.h"
+#include "pictor/profiler/stats_overlay.h"
 #include "pictor/profiler/data_exporter.h"
 #include "pictor/data/data_handler.h"
 #include "pictor/data/data_query_api.h"
@@ -98,6 +99,20 @@ public:
     void set_profiler_enabled(bool enabled);
     void set_overlay_mode(OverlayMode mode);
     const FrameStats& get_frame_stats() const;
+
+    // ---- Stats Overlay (S key toggle) ----
+
+    /// Toggle stats overlay visibility
+    void toggle_stats_overlay();
+
+    /// Set stats overlay visibility explicitly
+    void set_stats_overlay_visible(bool visible);
+
+    /// Check if stats overlay is visible
+    bool is_stats_overlay_visible() const;
+
+    /// Build current scene summary for external queries
+    SceneSummary get_scene_summary() const;
 
     // ---- Extension Points (§12.2) ----
 
@@ -194,6 +209,7 @@ private:
     std::unique_ptr<CommandEncoder>         command_encoder_;
     std::unique_ptr<Profiler>               profiler_;
     std::unique_ptr<OverlayRenderer>        overlay_;
+    std::unique_ptr<StatsOverlay>           stats_overlay_;
     std::unique_ptr<DataExporter>           data_exporter_;
     std::unique_ptr<DataHandler>            data_handler_;
     std::unique_ptr<GILightingSystem>       gi_system_;
