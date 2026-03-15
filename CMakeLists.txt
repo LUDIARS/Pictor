@@ -109,6 +109,19 @@ add_library(pictor STATIC
     src/text/text_svg_renderer.cpp
     src/text/text_rasterizer.cpp
 
+    # Animation System
+    src/animation/animation_clip.cpp
+    src/animation/skeleton.cpp
+    src/animation/ik_solver.cpp
+    src/animation/motion_estimator.cpp
+    src/animation/fbx_importer.cpp
+    src/animation/bvh_importer.cpp
+    src/animation/animation_2d.cpp
+    src/animation/rive_animation.cpp
+    src/animation/lottie_animation.cpp
+    src/animation/vector_animation.cpp
+    src/animation/animation_system.cpp
+
     # Public API
     src/core/pictor_renderer.cpp
 )

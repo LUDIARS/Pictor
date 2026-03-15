@@ -20,6 +20,7 @@
 #include "pictor/gi/gi_lighting_system.h"
 #include "pictor/gi/gi_bake.h"
 #include "pictor/postprocess/postprocess_pipeline.h"
+#include "pictor/animation/animation_system.h"
 #include <memory>
 
 namespace pictor {
@@ -114,6 +115,12 @@ public:
 
     /// Build current scene summary for external queries
     SceneSummary get_scene_summary() const;
+
+    // ---- Animation System ----
+
+    /// Access the animation system
+    AnimationSystem&       animation()       { return *animation_system_; }
+    const AnimationSystem& animation() const { return *animation_system_; }
 
     // ---- Extension Points (§12.2) ----
 
@@ -225,6 +232,7 @@ private:
     std::unique_ptr<GILightingSystem>       gi_system_;
     std::unique_ptr<GIBakeSystem>           bake_system_;
     std::unique_ptr<PostProcessPipeline>    postprocess_;
+    std::unique_ptr<AnimationSystem>        animation_system_;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;
