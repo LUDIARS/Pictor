@@ -1,0 +1,84 @@
+// Pictor — Separable Gaussian Blur (Compute Shader)
+// Single-direction blur pass. Run twice (horizontal + vertical) for full 2D blur.
+// Uses shared memory for efficient neighborhood access.
+
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inputTexture;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform BlurParams {
+    vec2  direction;     // (1/w, 0) for horizontal, (0, 1/h) for vertical
+    int   kernelRadius;  // half kernel size (kernel_size / 2)
+    float intensity;
+};
+
+// Kernel weights uploaded via SSBO
+layout(std430, set = 0, binding = 2) readonly buffer KernelWeights {
+    float weights[];
+};
+
+// Shared memory tile for cooperative loading
+// Max supported kernel radius = 63 (kernel_size = 127)
+// Tile size = workgroup_size + 2 * max_radius = 256 + 126 = 382
+shared vec4 sharedTile[382];
+
+void main() {
+    ivec2 outputSize = imageSize(outputImage);
+    int lineLength = (direction.x > 0.0) ? outputSize.x : outputSize.y;
+    int lineIndex  = (direction.x > 0.0)
+        ? int(gl_WorkGroupID.y)
+        : int(gl_WorkGroupID.x);
+
+    if (lineIndex >= ((direction.x > 0.0) ? outputSize.y : outputSize.x))
+        return;
+
+    int localIdx = int(gl_LocalInvocationID.x);
+    int tileStart = int(gl_WorkGroupID.x) * 256 - kernelRadius;
+
+    // Cooperative load: each thread loads 1-2 elements into shared memory
+    int tileSize = 256 + 2 * kernelRadius;
+    for (int i = localIdx; i < tileSize; i += 256) {
+        int samplePos = tileStart + i;
+        samplePos = clamp(samplePos, 0, lineLength - 1);
+
+        vec2 uv;
+        if (direction.x > 0.0) {
+            uv = (vec2(samplePos, lineIndex) + 0.5) / vec2(outputSize);
+        } else {
+            uv = (vec2(lineIndex, samplePos) + 0.5) / vec2(outputSize);
+        }
+
+        sharedTile[i] = textureLod(inputTexture, uv, 0.0);
+    }
+
+    barrier();
+
+    // Compute output pixel position
+    int globalPos = int(gl_WorkGroupID.x) * 256 + localIdx;
+    if (globalPos >= lineLength) return;
+
+    // Weighted sum using kernel weights from shared memory
+    vec4 result = vec4(0.0);
+    int kernelSize = 2 * kernelRadius + 1;
+
+    for (int k = 0; k < kernelSize; ++k) {
+        int tileIdx = localIdx + k;  // offset from tile start = localIdx + (k - radius) + radius
+        result += sharedTile[tileIdx] * weights[k];
+    }
+
+    result.rgb *= intensity;
+
+    ivec2 pixel;
+    if (direction.x > 0.0) {
+        pixel = ivec2(globalPos, lineIndex);
+    } else {
+        pixel = ivec2(lineIndex, globalPos);
+    }
+
+    if (pixel.x < outputSize.x && pixel.y < outputSize.y) {
+        imageStore(outputImage, pixel, result);
+    }
+}

@@ -54,6 +54,14 @@
 #include "pictor/gi/gi_lighting_system.h"
 #include "pictor/gi/gi_bake.h"
 
+// Post-process pipeline
+#include "pictor/postprocess/postprocess_effect.h"
+#include "pictor/postprocess/bloom_effect.h"
+#include "pictor/postprocess/depth_of_field_effect.h"
+#include "pictor/postprocess/tone_mapping_effect.h"
+#include "pictor/postprocess/gaussian_blur_effect.h"
+#include "pictor/postprocess/postprocess_pipeline.h"
+
 // Surface abstraction
 #include "pictor/surface/surface_provider.h"
 #include "pictor/surface/vulkan_context.h"

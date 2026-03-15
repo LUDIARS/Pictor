@@ -1,0 +1,105 @@
+// Pictor — Depth of Field (Compute Shader)
+// Combined CoC computation + disc blur + composite.
+// Supports separate near/far field blur with variable-radius bokeh.
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D colorTexture;
+layout(set = 0, binding = 1) uniform sampler2D depthTexture;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform DoFParams {
+    float focusDistance;
+    float focusRange;
+    float bokehRadius;
+    float nearStart;
+    float nearEnd;
+    float farStart;
+    float farEnd;
+    uint  sampleCount;
+    vec2  texelSize;
+};
+
+// Poisson disc samples (16 points, normalized to unit disc)
+const vec2 poissonDisc[16] = vec2[](
+    vec2(-0.94201,  -0.39906),
+    vec2( 0.94558,  -0.76890),
+    vec2(-0.09418,  -0.92938),
+    vec2( 0.34495,   0.29387),
+    vec2(-0.91588,   0.45771),
+    vec2(-0.81544,  -0.87912),
+    vec2( 0.19984,  -0.29614),
+    vec2(-0.24188,   0.99706),
+    vec2( 0.44323,   0.93427),
+    vec2( 0.78583,   0.00399),
+    vec2(-0.52389,  -0.22294),
+    vec2( 0.36291,  -0.67380),
+    vec2(-0.54532,   0.63536),
+    vec2( 0.13980,   0.56616),
+    vec2(-0.30654,  -0.60812),
+    vec2( 0.74882,   0.56394)
+);
+
+float computeCoC(float depth) {
+    // Near field (negative CoC)
+    float nearCoC = smoothstep(nearEnd, nearStart, depth);
+    // Far field (positive CoC)
+    float farCoC = smoothstep(farStart, farEnd, depth);
+
+    // Focus region
+    float halfRange = focusRange * 0.5;
+    if (depth >= focusDistance - halfRange && depth <= focusDistance + halfRange) {
+        return 0.0;
+    }
+
+    return depth < focusDistance ? -nearCoC * bokehRadius : farCoC * bokehRadius;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(outputImage);
+    if (pixel.x >= outputSize.x || pixel.y >= outputSize.y) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(outputSize);
+
+    float centerDepth = texture(depthTexture, uv).r;
+    float coc = computeCoC(centerDepth);
+    float absCoC = abs(coc);
+
+    // If CoC is negligible, output sharp color
+    if (absCoC < 0.5) {
+        vec3 sharp = texture(colorTexture, uv).rgb;
+        imageStore(outputImage, pixel, vec4(sharp, 1.0));
+        return;
+    }
+
+    // Variable-radius disc blur
+    vec3 colorSum = vec3(0.0);
+    float weightSum = 0.0;
+    uint samples = min(sampleCount, 16u);
+
+    for (uint i = 0; i < samples; ++i) {
+        vec2 offset = poissonDisc[i] * absCoC * texelSize;
+        vec2 sampleUV = uv + offset;
+
+        vec3 sampleColor = texture(colorTexture, sampleUV).rgb;
+        float sampleDepth = texture(depthTexture, sampleUV).r;
+        float sampleCoC = abs(computeCoC(sampleDepth));
+
+        // Weight: accept sample if its CoC covers the center pixel
+        float weight = smoothstep(0.0, 2.0, sampleCoC);
+        colorSum += sampleColor * weight;
+        weightSum += weight;
+    }
+
+    vec3 blurred = colorSum / max(weightSum, 0.001);
+
+    // Blend between sharp and blurred based on CoC magnitude
+    vec3 sharp = texture(colorTexture, uv).rgb;
+    float blendFactor = smoothstep(0.5, 2.0, absCoC);
+    vec3 result = mix(sharp, blurred, blendFactor);
+
+    imageStore(outputImage, pixel, vec4(result, 1.0));
+}

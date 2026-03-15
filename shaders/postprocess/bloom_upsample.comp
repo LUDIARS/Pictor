@@ -1,0 +1,47 @@
+// Pictor — Bloom Progressive Upsample (Compute Shader)
+// 9-tap tent filter for smooth upsampling with mip-level scatter blending.
+// Accumulates bloom contribution from smaller mip levels upward.
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inputTexture;   // smaller mip (to upsample)
+layout(set = 0, binding = 1) uniform sampler2D currentMip;     // current mip (to blend with)
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform UpsampleParams {
+    vec2  inputTexelSize;  // 1.0 / input (smaller mip) resolution
+    float scatter;         // blend weight for upsampled contribution
+};
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(outputImage);
+    if (pixel.x >= outputSize.x || pixel.y >= outputSize.y) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(outputSize);
+    vec2 ts = inputTexelSize;
+
+    // 9-tap tent filter (3x3 bilinear, normalized):
+    //   1 2 1
+    //   2 4 2
+    //   1 2 1  (÷ 16)
+    vec3 upsampled = vec3(0.0);
+    upsampled += textureLod(inputTexture, uv + vec2(-1, -1) * ts, 0.0).rgb * 1.0;
+    upsampled += textureLod(inputTexture, uv + vec2( 0, -1) * ts, 0.0).rgb * 2.0;
+    upsampled += textureLod(inputTexture, uv + vec2( 1, -1) * ts, 0.0).rgb * 1.0;
+    upsampled += textureLod(inputTexture, uv + vec2(-1,  0) * ts, 0.0).rgb * 2.0;
+    upsampled += textureLod(inputTexture, uv,                      0.0).rgb * 4.0;
+    upsampled += textureLod(inputTexture, uv + vec2( 1,  0) * ts, 0.0).rgb * 2.0;
+    upsampled += textureLod(inputTexture, uv + vec2(-1,  1) * ts, 0.0).rgb * 1.0;
+    upsampled += textureLod(inputTexture, uv + vec2( 0,  1) * ts, 0.0).rgb * 2.0;
+    upsampled += textureLod(inputTexture, uv + vec2( 1,  1) * ts, 0.0).rgb * 1.0;
+    upsampled /= 16.0;
+
+    // Blend with current mip level using scatter weight
+    vec3 existing = textureLod(currentMip, uv, 0.0).rgb;
+    vec3 result = mix(existing, upsampled, scatter);
+
+    imageStore(outputImage, pixel, vec4(result, 1.0));
+}
