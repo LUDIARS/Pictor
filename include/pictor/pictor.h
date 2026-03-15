@@ -72,5 +72,19 @@
 #include "pictor/text/text_svg_renderer.h"
 #include "pictor/text/text_rasterizer.h"
 
+// Animation system
+#include "pictor/animation/animation_types.h"
+#include "pictor/animation/animation_clip.h"
+#include "pictor/animation/skeleton.h"
+#include "pictor/animation/ik_solver.h"
+#include "pictor/animation/motion_estimator.h"
+#include "pictor/animation/fbx_importer.h"
+#include "pictor/animation/bvh_importer.h"
+#include "pictor/animation/animation_2d.h"
+#include "pictor/animation/rive_animation.h"
+#include "pictor/animation/lottie_animation.h"
+#include "pictor/animation/vector_animation.h"
+#include "pictor/animation/animation_system.h"
+
 // Public API
 #include "pictor/core/pictor_renderer.h"

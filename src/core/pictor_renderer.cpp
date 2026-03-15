@@ -88,6 +88,9 @@ void PictorRenderer::initialize(const RendererConfig& config) {
     data_handler_ = std::make_unique<DataHandler>(
         memory_->gpu_allocator(), *gpu_buffer_manager_);
 
+    // 17. Animation System
+    animation_system_ = std::make_unique<AnimationSystem>(AnimationSystemConfig{});
+
     initialized_ = true;
 }
 
@@ -95,6 +98,7 @@ void PictorRenderer::shutdown() {
     if (!initialized_) return;
 
     // §12: Release all resources, GPU sync
+    animation_system_.reset();
     data_handler_.reset();
     data_exporter_.reset();
     stats_overlay_.reset();
@@ -135,7 +139,14 @@ void PictorRenderer::render(const Camera& camera) {
 
     auto& frame_alloc = memory_->frame_allocator();
 
-    // §11.3 Step 2: Data Update
+    // §11.3 Step 2a: Animation Update
+    profiler_->begin_cpu_section("AnimationUpdate");
+    if (animation_system_) {
+        animation_system_->update(delta_time_);
+    }
+    profiler_->end_cpu_section("AnimationUpdate");
+
+    // §11.3 Step 2b: Data Update
     profiler_->begin_cpu_section("DataUpdate");
     update_scheduler_->update(delta_time_);
     profiler_->end_cpu_section("DataUpdate");
