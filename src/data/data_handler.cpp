@@ -2,9 +2,11 @@
 
 namespace pictor {
 
-DataHandler::DataHandler(GpuMemoryAllocator& gpu_allocator, GPUBufferManager& buffer_manager)
+DataHandler::DataHandler(GpuMemoryAllocator& gpu_allocator, GPUBufferManager& buffer_manager,
+                         AnimationSystem& animation_system)
     : texture_registry_(std::make_unique<TextureRegistry>(gpu_allocator))
     , vertex_uploader_(std::make_unique<VertexDataUploader>(buffer_manager))
+    , model_handler_(std::make_unique<ModelDataHandler>(*vertex_uploader_, animation_system))
 {
 }
 
@@ -48,12 +50,23 @@ void DataHandler::unregister_mesh(MeshHandle handle) {
     vertex_uploader_->unregister_mesh(handle);
 }
 
+// ---- Model Operations ----
+
+ModelHandle DataHandler::register_model(const ModelDescriptor& desc) {
+    return model_handler_->register_model(desc);
+}
+
+void DataHandler::unregister_model(ModelHandle handle) {
+    model_handler_->unregister_model(handle);
+}
+
 // ---- Stats ----
 
 DataHandler::Stats DataHandler::get_stats() const {
     Stats stats;
     stats.texture_stats = texture_registry_->get_stats();
     stats.mesh_stats = vertex_uploader_->get_stats();
+    stats.model_stats = model_handler_->get_stats();
     return stats;
 }
 
