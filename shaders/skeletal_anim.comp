@@ -1,0 +1,100 @@
+#version 450
+
+// GPU Compute Shader for Skeletal Animation Skinning
+// Computes skinned vertex positions in parallel on the GPU.
+// Each invocation processes one vertex, applying bone influences.
+
+layout(local_size_x = 256) in;
+
+// Skinning matrices (one per bone, max 256 bones)
+layout(std430, binding = 0) readonly buffer BoneMatrices {
+    mat4 bone_matrices[];
+};
+
+// Input vertex positions (bind pose)
+layout(std430, binding = 1) readonly buffer InputPositions {
+    vec4 in_positions[];
+};
+
+// Input vertex normals (bind pose)
+layout(std430, binding = 2) readonly buffer InputNormals {
+    vec4 in_normals[];
+};
+
+// Joint indices (4 per vertex, packed as uvec4)
+layout(std430, binding = 3) readonly buffer JointIndices {
+    uvec4 joint_indices[];
+};
+
+// Joint weights (4 per vertex)
+layout(std430, binding = 4) readonly buffer JointWeights {
+    vec4 joint_weights[];
+};
+
+// Output skinned positions
+layout(std430, binding = 5) writeonly buffer OutputPositions {
+    vec4 out_positions[];
+};
+
+// Output skinned normals
+layout(std430, binding = 6) writeonly buffer OutputNormals {
+    vec4 out_normals[];
+};
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    uint vertex_count;
+    uint bone_count;
+    uint pad0;
+    uint pad1;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.vertex_count) return;
+
+    vec4 pos = in_positions[idx];
+    vec4 norm = in_normals[idx];
+    uvec4 joints = joint_indices[idx];
+    vec4 weights = joint_weights[idx];
+
+    // Compute skinned position and normal
+    vec4 skinned_pos = vec4(0.0);
+    vec4 skinned_norm = vec4(0.0);
+
+    // Bone influence 0
+    if (weights.x > 0.0) {
+        mat4 m = bone_matrices[joints.x];
+        skinned_pos  += m * pos * weights.x;
+        skinned_norm += m * vec4(norm.xyz, 0.0) * weights.x;
+    }
+
+    // Bone influence 1
+    if (weights.y > 0.0) {
+        mat4 m = bone_matrices[joints.y];
+        skinned_pos  += m * pos * weights.y;
+        skinned_norm += m * vec4(norm.xyz, 0.0) * weights.y;
+    }
+
+    // Bone influence 2
+    if (weights.z > 0.0) {
+        mat4 m = bone_matrices[joints.z];
+        skinned_pos  += m * pos * weights.z;
+        skinned_norm += m * vec4(norm.xyz, 0.0) * weights.z;
+    }
+
+    // Bone influence 3
+    if (weights.w > 0.0) {
+        mat4 m = bone_matrices[joints.w];
+        skinned_pos  += m * pos * weights.w;
+        skinned_norm += m * vec4(norm.xyz, 0.0) * weights.w;
+    }
+
+    // Normalize the skinned normal
+    skinned_norm.xyz = normalize(skinned_norm.xyz);
+    skinned_norm.w = 0.0;
+    skinned_pos.w = 1.0;
+
+    out_positions[idx] = skinned_pos;
+    out_normals[idx] = skinned_norm;
+}
