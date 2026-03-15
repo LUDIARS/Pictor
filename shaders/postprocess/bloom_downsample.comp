@@ -1,0 +1,64 @@
+// Pictor — Bloom Progressive Downsample (Compute Shader)
+// 13-tap filter for high-quality downsampling through the bloom mip chain.
+// Based on the technique from Call of Duty: Advanced Warfare (Jimenez, 2014).
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inputTexture;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform DownsampleParams {
+    vec2 inputTexelSize;  // 1.0 / input resolution
+};
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(outputImage);
+    if (pixel.x >= outputSize.x || pixel.y >= outputSize.y) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(outputSize);
+
+    // 13-tap downsampling filter
+    // Sample pattern (. = texel center, X = sample position):
+    //
+    //   A . B . C
+    //   . D . E .
+    //   F . G . H
+    //   . I . J .
+    //   K . L . M
+    //
+    // Weights are designed to match a 4x4 box filter with bilinear sampling
+
+    vec2 ts = inputTexelSize;
+
+    vec3 A = textureLod(inputTexture, uv + vec2(-2, -2) * ts, 0.0).rgb;
+    vec3 B = textureLod(inputTexture, uv + vec2( 0, -2) * ts, 0.0).rgb;
+    vec3 C = textureLod(inputTexture, uv + vec2( 2, -2) * ts, 0.0).rgb;
+
+    vec3 D = textureLod(inputTexture, uv + vec2(-1, -1) * ts, 0.0).rgb;
+    vec3 E = textureLod(inputTexture, uv + vec2( 1, -1) * ts, 0.0).rgb;
+
+    vec3 F = textureLod(inputTexture, uv + vec2(-2,  0) * ts, 0.0).rgb;
+    vec3 G = textureLod(inputTexture, uv,                      0.0).rgb;
+    vec3 H = textureLod(inputTexture, uv + vec2( 2,  0) * ts, 0.0).rgb;
+
+    vec3 I = textureLod(inputTexture, uv + vec2(-1,  1) * ts, 0.0).rgb;
+    vec3 J = textureLod(inputTexture, uv + vec2( 1,  1) * ts, 0.0).rgb;
+
+    vec3 K = textureLod(inputTexture, uv + vec2(-2,  2) * ts, 0.0).rgb;
+    vec3 L = textureLod(inputTexture, uv + vec2( 0,  2) * ts, 0.0).rgb;
+    vec3 M = textureLod(inputTexture, uv + vec2( 2,  2) * ts, 0.0).rgb;
+
+    // Weighted average (total = 1.0)
+    // Center cross: (D+E+I+J) * 0.125 * 2 = 0.5
+    // Corners:      (A+B+F+G) * 0.03125 etc.
+    vec3 result = vec3(0.0);
+    result += (D + E + I + J) * 0.125;     // 4 inner samples × 0.125 = 0.5
+    result += (A + C + K + M) * 0.03125;   // 4 corners × 0.03125 = 0.125
+    result += (B + F + H + L) * 0.0625;    // 4 edges × 0.0625 = 0.25
+    result += G * 0.125;                    // center × 0.125
+
+    imageStore(outputImage, pixel, vec4(result, 1.0));
+}
