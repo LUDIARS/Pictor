@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pictor WebGL2 Demo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #141416; }
+        #canvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        #stats {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            color: #e0e0e0;
+            font: 13px/1.5 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+            background: rgba(20, 20, 22, 0.85);
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #aaa;
+            font: 16px/1.5 sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="stats">Pictor WebGL2 — Loading...</div>
+    <div id="loading">Loading WASM module...</div>
+
+    <script>
+        // Stats overlay
+        const statsEl = document.getElementById('stats');
+        const loadingEl = document.getElementById('loading');
+
+        // Module callbacks (Emscripten integration)
+        var Module = {
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                return canvas;
+            })(),
+            onRuntimeInitialized: function() {
+                loadingEl.style.display = 'none';
+                statsEl.textContent = 'Pictor WebGL2 — Running';
+            },
+            print: function(text) {
+                console.log('[Pictor]', text);
+            },
+            printErr: function(text) {
+                console.error('[Pictor]', text);
+            }
+        };
+    </script>
+    {{{ SCRIPT }}}
+</body>
+</html>
