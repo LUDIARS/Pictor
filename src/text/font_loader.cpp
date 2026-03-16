@@ -211,20 +211,32 @@ std::vector<FontLoader::TableRecord> FontLoader::read_table_directory(
     if (size < 12) return records;
 
     uint32_t sfVersion = read_u32(data);
-    // Accept TrueType (0x00010000), OpenType ('OTTO'), TrueType Collection ('ttcf')
-    (void)sfVersion;
 
-    uint16_t num_tables = read_u16(data + 4);
+    // TrueType Collection (.ttc): navigate to the first font's OffsetTable
+    const uint8_t* font_data = data;
+    if (sfVersion == make_tag('t','t','c','f')) {
+        // TTC header: tag(4) + majorVersion(2) + minorVersion(2) + numFonts(4)
+        if (size < 16) return records;
+        uint32_t num_fonts = read_u32(data + 8);
+        if (num_fonts == 0) return records;
+        // offsetTable[0] at byte 12
+        if (size < 16) return records;
+        uint32_t first_font_offset = read_u32(data + 12);
+        if (first_font_offset + 12 > size) return records;
+        font_data = data + first_font_offset;
+    }
+
+    uint16_t num_tables = read_u16(font_data + 4);
     size_t dir_offset = 12; // After offset-table header
 
     for (uint16_t i = 0; i < num_tables; ++i) {
         size_t rec_offset = dir_offset + i * 16;
-        if (rec_offset + 16 > size) break;
+        if (font_data + rec_offset + 16 > data + size) break;
 
         TableRecord rec;
-        rec.tag    = read_u32(data + rec_offset);
-        rec.offset = read_u32(data + rec_offset + 8);
-        rec.length = read_u32(data + rec_offset + 12);
+        rec.tag    = read_u32(font_data + rec_offset);
+        rec.offset = read_u32(font_data + rec_offset + 8);
+        rec.length = read_u32(font_data + rec_offset + 12);
         records.push_back(rec);
     }
 
