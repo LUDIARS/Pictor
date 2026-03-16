@@ -84,11 +84,14 @@ void PictorRenderer::initialize(const RendererConfig& config) {
     // 15. Data Exporter
     data_exporter_ = std::make_unique<DataExporter>();
 
-    // 16. Data Handler
-    data_handler_ = std::make_unique<DataHandler>(
-        memory_->gpu_allocator(), *gpu_buffer_manager_);
+    // 16. Animation System (before DataHandler, which depends on it)
+    animation_system_ = std::make_unique<AnimationSystem>(AnimationSystemConfig{});
 
-    // 17. Post-Process Pipeline
+    // 17. Data Handler
+    data_handler_ = std::make_unique<DataHandler>(
+        memory_->gpu_allocator(), *gpu_buffer_manager_, *animation_system_);
+
+    // 18. Post-Process Pipeline
     postprocess_ = std::make_unique<PostProcessPipeline>();
     {
         // Build default post-process config from profile's post_process_stack
@@ -111,9 +114,6 @@ void PictorRenderer::initialize(const RendererConfig& config) {
 
         postprocess_->initialize(config.screen_width, config.screen_height, pp_config);
     }
-
-    // 18. Animation System
-    animation_system_ = std::make_unique<AnimationSystem>(AnimationSystemConfig{});
 
     initialized_ = true;
 }
@@ -451,6 +451,16 @@ MeshHandle PictorRenderer::register_mesh_data(const MeshDataDescriptor& desc) {
 void PictorRenderer::unregister_mesh_data(MeshHandle handle) {
     if (!initialized_) return;
     data_handler_->unregister_mesh(handle);
+}
+
+ModelHandle PictorRenderer::register_model(const ModelDescriptor& desc) {
+    if (!initialized_) return INVALID_MODEL;
+    return data_handler_->register_model(desc);
+}
+
+void PictorRenderer::unregister_model(ModelHandle handle) {
+    if (!initialized_) return;
+    data_handler_->unregister_model(handle);
 }
 
 // ---- GI Lighting ----

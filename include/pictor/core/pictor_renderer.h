@@ -140,6 +140,10 @@ public:
     MeshHandle register_mesh_data(const MeshDataDescriptor& desc);
     void unregister_mesh_data(MeshHandle handle);
 
+    /// Register a 3D model (skin meshes, rig, animations) via the data handler
+    ModelHandle register_model(const ModelDescriptor& desc);
+    void unregister_model(ModelHandle handle);
+
     /// Access the data handler directly
     DataHandler&       data_handler()       { return *data_handler_; }
     const DataHandler& data_handler() const { return *data_handler_; }
