@@ -126,6 +126,17 @@ private:
     void destroy_quad_textures();
     bool upload_texture(const ImageBuffer& img, QuadTexture& out);
 
+    /// Release partially initialized resources (when initialize fails mid-way)
+    void shutdown_partial() {
+        if (!device_) return;
+        vkDeviceWaitIdle(device_);
+        if (sampler_)         { vkDestroySampler(device_, sampler_, nullptr); sampler_ = VK_NULL_HANDLE; }
+        if (pipeline_)        { vkDestroyPipeline(device_, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
+        if (pipeline_layout_) { vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr); pipeline_layout_ = VK_NULL_HANDLE; }
+        if (desc_set_layout_) { vkDestroyDescriptorSetLayout(device_, desc_set_layout_, nullptr); desc_set_layout_ = VK_NULL_HANDLE; }
+        if (desc_pool_)       { vkDestroyDescriptorPool(device_, desc_pool_, nullptr); desc_pool_ = VK_NULL_HANDLE; }
+    }
+
     VulkanContext* vk_ctx_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
 
@@ -566,12 +577,15 @@ void TextDemoRenderer::destroy_quad_textures() {
 }
 
 bool TextDemoRenderer::initialize(VulkanContext& vk_ctx, const char* shader_dir) {
+    // Clean up any previous partial initialization
+    if (device_) shutdown_partial();
+
     vk_ctx_ = &vk_ctx;
     device_ = vk_ctx.device();
 
-    if (!create_descriptor_layout()) return false;
-    if (!create_sampler()) return false;
-    if (!create_pipeline(shader_dir)) return false;
+    if (!create_descriptor_layout()) { shutdown_partial(); return false; }
+    if (!create_sampler()) { shutdown_partial(); return false; }
+    if (!create_pipeline(shader_dir)) { shutdown_partial(); return false; }
 
     // Descriptor pool — enough for many textures
     VkDescriptorPoolSize pool_size{};
@@ -585,8 +599,10 @@ bool TextDemoRenderer::initialize(VulkanContext& vk_ctx, const char* shader_dir)
     pool_info.poolSizeCount = 1;
     pool_info.pPoolSizes    = &pool_size;
 
-    if (vkCreateDescriptorPool(device_, &pool_info, nullptr, &desc_pool_) != VK_SUCCESS)
+    if (vkCreateDescriptorPool(device_, &pool_info, nullptr, &desc_pool_) != VK_SUCCESS) {
+        shutdown_partial();
         return false;
+    }
 
     initialized_ = true;
     return true;
@@ -1023,28 +1039,35 @@ static std::vector<TexturedQuad> build_rasterized_demo(FontLoader& font_loader,
 // ============================================================
 
 /// Try to find a system font for the demo
-static std::string find_system_font() {
-    const char* candidates[] = {
-        // Linux — common CJK-capable fonts
+static std::string find_default_font() {
+    // Search for bundled default font (relative to exe: fonts/ and ../fonts/)
+    const char* bundled[] = {
+        "fonts/default.ttf",
+        "fonts/default.otf",
+        "../fonts/default.ttf",
+        "../fonts/default.otf",
+    };
+    for (const char* path : bundled) {
+        FILE* f = fopen(path, "rb");
+        if (f) { fclose(f); return path; }
+    }
+
+    // Fallback: system fonts
+    const char* system_fonts[] = {
+        // Linux
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
         // macOS
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
         "/System/Library/Fonts/HelveticaNeue.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
         // Windows
         "C:\\Windows\\Fonts\\msgothic.ttc",
         "C:\\Windows\\Fonts\\meiryo.ttc",
         "C:\\Windows\\Fonts\\arial.ttf",
     };
-    for (const char* path : candidates) {
+    for (const char* path : system_fonts) {
         FILE* f = fopen(path, "rb");
         if (f) { fclose(f); return path; }
     }
@@ -1099,7 +1122,7 @@ int main() {
 
     // ---- 4. Font loading ----
     FontLoader font_loader;
-    std::string font_path = find_system_font();
+    std::string font_path = find_default_font();
     FontHandle font = INVALID_FONT;
 
     if (!font_path.empty()) {
@@ -1124,10 +1147,12 @@ int main() {
 #ifdef PICTOR_HAS_VULKAN
     TextDemoRenderer text_renderer;
     if (!text_renderer.initialize(vk_ctx, "shaders")) {
-        fprintf(stderr, "Failed to initialize text demo renderer\n");
-        vk_ctx.shutdown();
-        surface_provider.destroy();
-        return 1;
+        if (!text_renderer.initialize(vk_ctx, "../shaders")) {
+            fprintf(stderr, "Failed to initialize text demo renderer\n");
+            vk_ctx.shutdown();
+            surface_provider.destroy();
+            return 1;
+        }
     }
 #endif
 

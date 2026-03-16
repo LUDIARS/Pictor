@@ -1,6 +1,5 @@
 // Pictor — Post-Process Demo Scene Vertex Shader
-// Renders HDR-lit scene objects to an offscreen framebuffer.
-// Outputs to RGBA16F for post-processing.
+// Transforms world positions and normals for PBR scene rendering.
 
 #version 450
 
@@ -23,7 +22,9 @@ layout(set = 0, binding = 0) uniform SceneParams {
     vec4  sunColor;
 
     float time;
-    float pad0, pad1, pad2;
+    float dofFocusDistance;
+    float dofFocusRange;
+    float exposure;
 };
 
 // Instance data

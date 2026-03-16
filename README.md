@@ -466,6 +466,7 @@ Pictor/
 │   └── surface/                  # ISurfaceProvider, VulkanContext, GlfwSurfaceProvider
 ├── src/                          # 実装
 ├── shaders/                      # Compute Shader (.comp), サンプルシェーダ
+├── fonts/                        # デフォルトフォント (default.ttf)
 ├── demo/                         # Vulkan ウィンドウデモ
 ├── benchmark/                    # 1M Spheres ベンチマーク
 ├── docs/
@@ -473,6 +474,17 @@ Pictor/
 │   └── design/                   # 設計ドキュメント (WebGL バックエンド等)
 └── plan.md                       # 技術設計書
 ```
+
+## フォント
+
+デモで使用するデフォルトフォントは `fonts/default.ttf` に配置されています。ビルド時に自動的にビルドディレクトリへコピーされます。
+
+- **使用フォント:** [WDXL Lubrifont JP N](https://fonts.google.com/specimen/WDXL+Lubrifont+TC+N) (Google Fonts)
+- **ライセンス:** SIL Open Font License 1.1
+
+カスタムフォントを使用する場合は、`fonts/default.ttf` または `fonts/default.otf` を置き換えてください。
+
+---
 
 ## ライセンス
 

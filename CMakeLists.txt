@@ -305,3 +305,17 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         add_dependencies(pictor_postprocess_demo pictor_shaders)
     endif()
 endif()
+
+# Copy fonts directory to build output
+if(EXISTS ${CMAKE_SOURCE_DIR}/fonts)
+    add_custom_target(pictor_fonts ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/fonts ${CMAKE_BINARY_DIR}/fonts
+        COMMENT "Copying fonts to build directory"
+    )
+    foreach(_target pictor_demo pictor_text_demo pictor_graphics_demo pictor_postprocess_demo pictor_ocean_demo)
+        if(TARGET ${_target})
+            add_dependencies(${_target} pictor_fonts)
+        endif()
+    endforeach()
+endif()
