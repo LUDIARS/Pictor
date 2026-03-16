@@ -100,6 +100,7 @@ add_library(pictor STATIC
     # Data Handler
     src/data/texture_registry.cpp
     src/data/vertex_data_uploader.cpp
+    src/data/model_data_handler.cpp
     src/data/data_handler.cpp
     src/data/data_query_api.cpp
 

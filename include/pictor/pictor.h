@@ -70,6 +70,8 @@
 // Data handler
 #include "pictor/data/texture_registry.h"
 #include "pictor/data/vertex_data_uploader.h"
+#include "pictor/data/model_data_types.h"
+#include "pictor/data/model_data_handler.h"
 #include "pictor/data/data_handler.h"
 #include "pictor/data/data_query_api.h"
 
