@@ -124,6 +124,10 @@ add_library(pictor STATIC
     src/animation/vector_animation.cpp
     src/animation/animation_system.cpp
 
+    # UI Overlay
+    src/ui/screen_overlay_group.cpp
+    src/ui/ui_overlay_pipeline.cpp
+
     # Public API
     src/core/pictor_renderer.cpp
 )
@@ -190,7 +194,16 @@ if(PICTOR_BUILD_DEMO)
         add_executable(pictor_postprocess_demo demo/postprocess/main.cpp)
         target_link_libraries(pictor_postprocess_demo PRIVATE pictor)
 
-        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess)")
+        # 2D Texture rendering demo
+        add_executable(pictor_texture2d_demo
+            demo/texture2d/main.cpp
+            demo/texture2d/texture2d_renderer.cpp
+            third_party/stb/stb_image_impl.cpp
+        )
+        target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
+        target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
+
+        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
     endif()
@@ -271,6 +284,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/gaussian_blur.comp
         ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.vert
         ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
+        ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.vert
+        ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.frag
+        ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
+        ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -304,6 +321,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     if(TARGET pictor_postprocess_demo)
         add_dependencies(pictor_postprocess_demo pictor_shaders)
     endif()
+    if(TARGET pictor_texture2d_demo)
+        add_dependencies(pictor_texture2d_demo pictor_shaders)
+    endif()
 endif()
 
 # Copy fonts directory to build output
@@ -313,9 +333,23 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/fonts)
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/fonts ${CMAKE_BINARY_DIR}/fonts
         COMMENT "Copying fonts to build directory"
     )
-    foreach(_target pictor_demo pictor_text_demo pictor_graphics_demo pictor_postprocess_demo pictor_ocean_demo)
+    foreach(_target pictor_demo pictor_text_demo pictor_graphics_demo pictor_postprocess_demo pictor_ocean_demo pictor_texture2d_demo)
         if(TARGET ${_target})
             add_dependencies(${_target} pictor_fonts)
         endif()
     endforeach()
+endif()
+
+# Copy texture2d demo textures to build output
+if(EXISTS ${CMAKE_SOURCE_DIR}/demo/texture2d/textures)
+    add_custom_target(pictor_texture2d_assets ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/textures
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/demo/texture2d/textures
+            ${CMAKE_BINARY_DIR}/textures
+        COMMENT "Copying texture2d demo assets to build directory"
+    )
+    if(TARGET pictor_texture2d_demo)
+        add_dependencies(pictor_texture2d_demo pictor_texture2d_assets)
+    endif()
 endif()
