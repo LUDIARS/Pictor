@@ -36,6 +36,7 @@ struct TextureEntry {
     GpuAllocation gpu_allocation;
     size_t        total_size = 0;  // Total GPU memory in bytes
     bool          uploaded   = false;
+    std::vector<uint8_t> cpu_data;  // CPU-side pixel data for staging upload
 };
 
 /// Texture registration and GPU memory management.

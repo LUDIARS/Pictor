@@ -6,6 +6,192 @@
 namespace pictor {
 
 // ============================================================
+// TrueType outline parsing and scanline rasterization
+// (Shared logic with TextRasterizer — extracted into both
+//  translation units to avoid cross-component coupling.)
+// ============================================================
+
+namespace {
+
+inline uint16_t rd_u16(const uint8_t* p) {
+    return static_cast<uint16_t>((p[0] << 8) | p[1]);
+}
+inline int16_t rd_i16(const uint8_t* p) {
+    return static_cast<int16_t>(rd_u16(p));
+}
+inline uint32_t rd_u32(const uint8_t* p) {
+    return (static_cast<uint32_t>(p[0]) << 24) |
+           (static_cast<uint32_t>(p[1]) << 16) |
+           (static_cast<uint32_t>(p[2]) <<  8) |
+            static_cast<uint32_t>(p[3]);
+}
+inline uint32_t mk_tag(char a, char b, char c, char d) {
+    return (static_cast<uint32_t>(static_cast<uint8_t>(a)) << 24) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 16) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(c)) <<  8) |
+            static_cast<uint32_t>(static_cast<uint8_t>(d));
+}
+
+struct RasterEdge {
+    float x0, y0, x1, y1;
+    int direction;
+};
+
+void add_edge(std::vector<RasterEdge>& edges,
+              float x0, float y0, float x1, float y1) {
+    if (std::abs(y1 - y0) < 0.001f) return;
+    if (y0 < y1) edges.push_back({x0, y0, x1, y1, 1});
+    else          edges.push_back({x1, y1, x0, y0, -1});
+}
+
+void flatten_quad_bezier(std::vector<RasterEdge>& edges,
+                         float x0, float y0, float cx, float cy,
+                         float x1, float y1, float tol = 0.25f) {
+    float mx = (x0 + x1) * 0.5f, my = (y0 + y1) * 0.5f;
+    float dx = cx - mx, dy = cy - my;
+    if (dx*dx + dy*dy <= tol*tol) { add_edge(edges, x0, y0, x1, y1); return; }
+    float x01=(x0+cx)*0.5f, y01=(y0+cy)*0.5f;
+    float x12=(cx+x1)*0.5f, y12=(cy+y1)*0.5f;
+    float xm=(x01+x12)*0.5f, ym=(y01+y12)*0.5f;
+    flatten_quad_bezier(edges, x0,y0, x01,y01, xm,ym, tol);
+    flatten_quad_bezier(edges, xm,ym, x12,y12, x1,y1, tol);
+}
+
+bool extract_glyph_edges(const uint8_t* data, size_t data_size,
+                          uint16_t glyph_index,
+                          float scale, float ascender_px,
+                          std::vector<RasterEdge>& out) {
+    if (data_size < 12) return false;
+    uint16_t num_tables = rd_u16(data + 4);
+    uint32_t glyf_off = 0, loca_off = 0;
+    uint16_t num_glyphs = 0; int16_t loc_fmt = 0;
+    for (uint16_t t = 0; t < num_tables; ++t) {
+        size_t r = 12 + t * 16;
+        if (r + 16 > data_size) break;
+        uint32_t tag = rd_u32(data+r), off = rd_u32(data+r+8);
+        if (tag == mk_tag('g','l','y','f'))                              glyf_off = off;
+        else if (tag == mk_tag('l','o','c','a'))                         loca_off = off;
+        else if (tag == mk_tag('m','a','x','p') && off+6 <= data_size)   num_glyphs = rd_u16(data+off+4);
+        else if (tag == mk_tag('h','e','a','d') && off+54 <= data_size)  loc_fmt = rd_i16(data+off+50);
+    }
+    if (!glyf_off || !loca_off || glyph_index >= num_glyphs) return false;
+    uint32_t g_off, g_end;
+    if (loc_fmt == 0) {
+        uint32_t li = loca_off + glyph_index*2;
+        if (li+4 > data_size) return false;
+        g_off = static_cast<uint32_t>(rd_u16(data+li)) * 2;
+        g_end = static_cast<uint32_t>(rd_u16(data+li+2)) * 2;
+    } else {
+        uint32_t li = loca_off + glyph_index*4;
+        if (li+8 > data_size) return false;
+        g_off = rd_u32(data+li); g_end = rd_u32(data+li+4);
+    }
+    if (g_off == g_end) return false;
+    uint32_t abs_ = glyf_off + g_off;
+    if (abs_+10 > data_size) return false;
+    const uint8_t* g = data + abs_;
+    int16_t nc = rd_i16(g);
+    if (nc <= 0) return false;
+    uint32_t p = 10;
+    std::vector<uint16_t> ends(nc);
+    for (int16_t c = 0; c < nc; ++c) {
+        if (abs_+p+2 > data_size) return false;
+        ends[c] = rd_u16(g+p); p += 2;
+    }
+    uint16_t total = ends.back()+1;
+    if (abs_+p+2 > data_size) return false;
+    p += 2 + rd_u16(g+p);
+    std::vector<uint8_t> fl(total);
+    for (uint16_t i = 0; i < total;) {
+        if (abs_+p >= data_size) return false;
+        uint8_t f = g[p++]; fl[i++] = f;
+        if (f & 0x08) { if (abs_+p >= data_size) return false;
+            uint8_t rep = g[p++];
+            for (uint8_t rr = 0; rr < rep && i < total; ++rr) fl[i++] = f;
+        }
+    }
+    std::vector<int16_t> xs(total,0); int16_t xv=0;
+    for (uint16_t i=0;i<total;++i) {
+        if (fl[i]&0x02) { if(abs_+p>=data_size) return false; uint8_t d=g[p++];
+            xv += (fl[i]&0x10)?d:-static_cast<int16_t>(d);
+        } else if (!(fl[i]&0x10)) { if(abs_+p+1>=data_size) return false;
+            xv += rd_i16(g+p); p+=2; }
+        xs[i]=xv;
+    }
+    std::vector<int16_t> ys(total,0); int16_t yv_=0;
+    for (uint16_t i=0;i<total;++i) {
+        if (fl[i]&0x04) { if(abs_+p>=data_size) return false; uint8_t d=g[p++];
+            yv_ += (fl[i]&0x20)?d:-static_cast<int16_t>(d);
+        } else if (!(fl[i]&0x20)) { if(abs_+p+1>=data_size) return false;
+            yv_ += rd_i16(g+p); p+=2; }
+        ys[i]=yv_;
+    }
+    auto tx=[&](float fx)->float{ return fx*scale; };
+    auto ty=[&](float fy)->float{ return ascender_px - fy*scale; };
+    uint16_t cs=0;
+    for (int16_t c=0; c<nc; ++c) {
+        uint16_t ce = ends[c]; if (ce<cs) break;
+        bool fon = (fl[cs]&1)!=0; float sx,sy;
+        if (fon) { sx=tx(xs[cs]); sy=ty(ys[cs]); }
+        else { bool lon=(fl[ce]&1)!=0;
+            if (lon) { sx=tx(xs[ce]); sy=ty(ys[ce]); }
+            else { sx=tx((xs[cs]+xs[ce])*0.5f); sy=ty((ys[cs]+ys[ce])*0.5f); } }
+        float cx_=sx, cy_=sy;
+        for (uint16_t i=cs; i<=ce; ++i) {
+            uint16_t nxt=(i<ce)?i+1:cs;
+            bool co=(fl[i]&1)!=0, no=(fl[nxt]&1)!=0;
+            if (co&&no) { float nx=tx(xs[nxt]),ny=ty(ys[nxt]);
+                add_edge(out,cx_,cy_,nx,ny); cx_=nx; cy_=ny; }
+            else if (co&&!no) { uint16_t nn=(nxt<ce)?nxt+1:cs;
+                bool nno=(fl[nn]&1)!=0; float cpx=tx(xs[nxt]),cpy=ty(ys[nxt]); float ex,ey;
+                if (nno) { ex=tx(xs[nn]); ey=ty(ys[nn]); i=nxt; }
+                else { ex=(cpx+tx(xs[nn]))*0.5f; ey=(cpy+ty(ys[nn]))*0.5f; i=nxt; }
+                flatten_quad_bezier(out,cx_,cy_,cpx,cpy,ex,ey); cx_=ex; cy_=ey; }
+        }
+        add_edge(out,cx_,cy_,sx,sy); cs=ce+1;
+    }
+    return !out.empty();
+}
+
+// Rasterize edges into a standalone ImageBuffer (1-channel alpha)
+void scanline_rasterize_buffer(const std::vector<RasterEdge>& edges,
+                               uint8_t* pixels, uint32_t w, uint32_t h) {
+    if (!w || !h || edges.empty()) return;
+    constexpr int OV = 4;
+    uint32_t sh = h * OV;
+    std::vector<float> cross(static_cast<size_t>(w)*sh, 0.0f);
+    for (const auto& e : edges) {
+        int s0 = std::max(0, static_cast<int>(std::ceil(e.y0*OV)));
+        int s1 = std::min(static_cast<int>(sh), static_cast<int>(std::ceil(e.y1*OV)));
+        float dy = e.y1-e.y0; if (std::abs(dy)<0.001f) continue;
+        float inv = 1.0f/dy;
+        for (int sy=s0; sy<s1; ++sy) {
+            float y = (sy+0.5f)/static_cast<float>(OV);
+            float x = e.x0 + (e.x1-e.x0)*(y-e.y0)*inv;
+            int ix = static_cast<int>(std::floor(x));
+            if (ix>=0 && ix<static_cast<int>(w))
+                cross[static_cast<size_t>(sy)*w+ix] += static_cast<float>(e.direction);
+        }
+    }
+    for (uint32_t y=0; y<h; ++y) {
+        std::vector<float> alpha(w, 0.0f);
+        for (int s=0; s<OV; ++s) {
+            uint32_t sy = y*OV+s; float wn=0.0f;
+            for (uint32_t x=0; x<w; ++x) {
+                wn += cross[static_cast<size_t>(sy)*w+x];
+                alpha[x] += std::min(std::abs(wn), 1.0f);
+            }
+        }
+        for (uint32_t x=0; x<w; ++x) {
+            float a = std::min(alpha[x]/static_cast<float>(OV), 1.0f);
+            pixels[y*w+x] = static_cast<uint8_t>(a*255.0f+0.5f);
+        }
+    }
+}
+
+} // anonymous namespace
+
+// ============================================================
 // Construction
 // ============================================================
 
@@ -221,23 +407,25 @@ ImageBuffer TextImageRenderer::rasterize_glyph(FontHandle font,
 
     result.allocate(w, h, 1);
 
-    // Simple box rasterization: fill the glyph bounding box with full alpha.
-    // A production implementation would parse glyph contours from 'glyf' table
-    // and rasterize using scanline coverage / SDF generation.
-    // For now this provides a functional placeholder that correctly computes
-    // metrics and layout while actual outline rasterization is added incrementally.
+    // Rasterize actual glyph outlines from the TrueType 'glyf' table
     const FontTableEntry* entry = font_loader_.get_entry(font);
     if (!entry) return result;
 
-    // Fill with solid alpha (simple box glyph)
-    // Glyph shape is approximated as a filled rectangle.
-    // Whitespace characters get no fill.
     if (codepoint > ' ') {
-        uint32_t pad_x = w > 2 ? 1 : 0;
-        uint32_t pad_y = h > 2 ? 1 : 0;
-        for (uint32_t py = pad_y; py < h - pad_y; ++py) {
-            for (uint32_t px = pad_x; px < w - pad_x; ++px) {
-                result.pixels[py * w + px] = 255;
+        const FontMetrics* fm = font_loader_.get_metrics(font);
+        if (fm && fm->units_per_em > 0) {
+            float scale = font_size / static_cast<float>(fm->units_per_em);
+            float ascender_px = fm->ascender * scale;
+            uint16_t glyph_index =
+                font_loader_.codepoint_to_glyph_index(font, codepoint);
+
+            std::vector<RasterEdge> edges;
+            if (glyph_index != 0 &&
+                extract_glyph_edges(entry->raw_data.data(),
+                                    entry->raw_data.size(),
+                                    glyph_index, scale, ascender_px,
+                                    edges)) {
+                scanline_rasterize_buffer(edges, result.pixels.data(), w, h);
             }
         }
     }

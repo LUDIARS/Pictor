@@ -39,10 +39,13 @@ TextureHandle TextureRegistry::register_texture(const TextureDescriptor& desc) {
         // Stage data for GPU upload via staging buffer
         GpuAllocation staging = allocator_.allocate_staging(desc.data_size);
         if (staging.valid) {
-            // In a real Vulkan implementation, we would:
-            // 1. memcpy data into staging buffer mapped memory
-            // 2. Record a vkCmdCopyBufferToImage command
-            // Here we mark it as uploaded since staging succeeded
+            // Copy source data to CPU-side buffer.
+            // The Vulkan integration layer reads cpu_data to create
+            // VkImage, map a staging VkBuffer, memcpy, and record
+            // vkCmdCopyBufferToImage + layout transitions.
+            entry.cpu_data.assign(
+                static_cast<const uint8_t*>(desc.initial_data),
+                static_cast<const uint8_t*>(desc.initial_data) + desc.data_size);
             entry.uploaded = true;
             allocator_.free(staging);
         }
@@ -66,7 +69,11 @@ bool TextureRegistry::upload_texture_data(TextureHandle handle, const void* data
             GpuAllocation staging = allocator_.allocate_staging(size);
             if (!staging.valid) return false;
 
-            // Stage and transfer (Vulkan commands would be recorded here)
+            // Copy to CPU-side buffer; Vulkan layer performs the actual
+            // staging-buffer memcpy and vkCmdCopyBufferToImage transfer.
+            entry.cpu_data.assign(
+                static_cast<const uint8_t*>(data),
+                static_cast<const uint8_t*>(data) + size);
             entry.uploaded = true;
             allocator_.free(staging);
             return true;
