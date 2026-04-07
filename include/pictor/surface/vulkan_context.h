@@ -68,6 +68,10 @@ public:
     VkCommandPool    command_pool() const { return command_pool_; }
     const std::vector<VkCommandBuffer>& command_buffers() const { return command_buffers_; }
 
+    // Single-time command buffer helpers (for uploads, layout transitions, etc.)
+    VkCommandBuffer begin_single_time_commands();
+    void            end_single_time_commands(VkCommandBuffer cmd);
+
     // Per-frame sync objects
     VkSemaphore image_available_semaphore() const { return image_available_sem_; }
     VkSemaphore render_finished_semaphore() const { return render_finished_sem_; }
