@@ -8,6 +8,10 @@ namespace pictor {
 
 /// Flat BVH node — 32 bytes, 2 nodes per cache line (§10.2).
 /// Pointerless; children referenced by array index.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4324)
+#endif
 struct alignas(32) BVHNode {
     float3   aabb_min;
     uint32_t child_or_object_index; // internal: left child / leaf: object index
@@ -80,3 +84,7 @@ private:
 };
 
 } // namespace pictor
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif

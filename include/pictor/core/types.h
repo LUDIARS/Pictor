@@ -4,6 +4,38 @@
 #include <cstddef>
 #include <limits>
 
+// ============================================================
+// Cache-Line Alignment Configuration
+//
+// PICTOR_CACHE_LINE_SIZE controls the alignment of hot data structures
+// for Data-Oriented Design (DoD) cache optimization.
+//
+// Typical values:
+//   64  — x86/x64, Apple Silicon (default)
+//   32  — some ARM/embedded
+//   128 — some server CPUs (Intel Ice Lake L2)
+//
+// Override via compiler define: -DPICTOR_CACHE_LINE_SIZE=32
+// Set to 0 to disable cache-line alignment entirely.
+// ============================================================
+
+#ifndef PICTOR_CACHE_LINE_SIZE
+#define PICTOR_CACHE_LINE_SIZE 64
+#endif
+
+#if PICTOR_CACHE_LINE_SIZE > 0
+#define PICTOR_CACHE_ALIGN alignas(PICTOR_CACHE_LINE_SIZE)
+#else
+#define PICTOR_CACHE_ALIGN
+#endif
+
+// Suppress MSVC C4324 "structure was padded due to alignment specifier"
+// This is expected and intentional for DoD cache optimization.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4324)
+#endif
+
 namespace pictor {
 
 // ============================================================
@@ -25,7 +57,7 @@ struct float4 {
     float x = 0.0f, y = 0.0f, z = 0.0f, w = 0.0f;
 };
 
-struct alignas(64) float4x4 {
+struct PICTOR_CACHE_ALIGN float4x4 {
     float m[4][4] = {};
 
     static float4x4 identity() {
@@ -326,3 +358,7 @@ enum class ShadowFilterMode : uint8_t {
 };
 
 } // namespace pictor
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
