@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/memory/frame_allocator.h"
 #include "pictor/memory/pool_allocator.h"

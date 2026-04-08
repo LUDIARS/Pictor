@@ -1,4 +1,4 @@
-#include "pictor/core/types.h"
+﻿#include "pictor/core/types.h"
 
 // Type definitions are header-only.
 // This translation unit ensures the types header compiles cleanly

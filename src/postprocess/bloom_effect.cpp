@@ -1,4 +1,4 @@
-#include "pictor/postprocess/bloom_effect.h"
+﻿#include "pictor/postprocess/bloom_effect.h"
 #include <algorithm>
 #include <cmath>
 

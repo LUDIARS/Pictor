@@ -1,4 +1,4 @@
-#include "pictor/animation/animation_2d.h"
+﻿#include "pictor/animation/animation_2d.h"
 #include <cmath>
 #include <algorithm>
 

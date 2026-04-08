@@ -1,4 +1,4 @@
-#include "texture2d_renderer.h"
+﻿#include "texture2d_renderer.h"
 
 #ifdef PICTOR_HAS_VULKAN
 

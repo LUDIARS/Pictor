@@ -1,4 +1,4 @@
-#include "pictor/animation/bvh_importer.h"
+﻿#include "pictor/animation/bvh_importer.h"
 #include <fstream>
 #include <sstream>
 #include <cstring>

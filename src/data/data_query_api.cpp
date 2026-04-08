@@ -1,4 +1,4 @@
-#include "pictor/data/data_query_api.h"
+﻿#include "pictor/data/data_query_api.h"
 #include <sstream>
 
 namespace pictor {

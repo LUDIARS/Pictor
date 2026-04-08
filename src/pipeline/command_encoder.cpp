@@ -1,4 +1,4 @@
-#include "pictor/pipeline/command_encoder.h"
+﻿#include "pictor/pipeline/command_encoder.h"
 
 namespace pictor {
 

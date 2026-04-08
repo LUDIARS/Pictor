@@ -1,4 +1,4 @@
-/// Pictor Text Rendering Demo
+﻿/// Pictor Text Rendering Demo
 ///
 /// Demonstrates two text rendering approaches:
 ///

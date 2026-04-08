@@ -1,4 +1,4 @@
-#include "pictor/profiler/stats_overlay.h"
+﻿#include "pictor/profiler/stats_overlay.h"
 #include <cstdio>
 #include <cstring>
 

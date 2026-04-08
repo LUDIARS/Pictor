@@ -1,4 +1,4 @@
-#include "pictor/text/text_rasterizer.h"
+﻿#include "pictor/text/text_rasterizer.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>

@@ -1,4 +1,4 @@
-#include "pictor/profiler/gpu_timer.h"
+﻿#include "pictor/profiler/gpu_timer.h"
 #include <algorithm>
 
 namespace pictor {

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/data/texture_registry.h"
 #include "pictor/data/vertex_data_uploader.h"
