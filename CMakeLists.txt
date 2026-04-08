@@ -60,6 +60,7 @@ add_library(pictor STATIC
     src/culling/flat_bvh.cpp
     src/culling/frustum_culler.cpp
     src/culling/culling_system.cpp
+    src/culling/world_partition.cpp
 
     # GPU Driven
     src/gpu/gpu_buffer_manager.cpp
