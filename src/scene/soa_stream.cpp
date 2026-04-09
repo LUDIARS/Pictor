@@ -1,4 +1,4 @@
-#include "pictor/scene/soa_stream.h"
+﻿#include "pictor/scene/soa_stream.h"
 
 // SoAStream is fully template-based (header-only).
 // This translation unit ensures the header compiles cleanly.

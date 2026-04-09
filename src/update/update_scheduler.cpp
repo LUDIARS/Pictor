@@ -1,4 +1,4 @@
-#include "pictor/update/update_scheduler.h"
+﻿#include "pictor/update/update_scheduler.h"
 #include <cstring>
 
 #ifdef __AVX2__

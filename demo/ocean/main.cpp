@@ -1,4 +1,4 @@
-/// Pictor Ocean Demo — Tessellation + Gerstner Waves
+﻿/// Pictor Ocean Demo — Tessellation + Gerstner Waves
 ///
 /// Demonstrates:
 ///   - Hardware tessellation (TCS + TES) for adaptive LOD

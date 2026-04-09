@@ -1,9 +1,311 @@
-#include "pictor/text/text_rasterizer.h"
+﻿#include "pictor/text/text_rasterizer.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace pictor {
+
+// ============================================================
+// TrueType outline parsing and scanline rasterization
+// ============================================================
+
+namespace {
+
+// Big-endian read helpers (TrueType is always big-endian)
+inline uint16_t rd_u16(const uint8_t* p) {
+    return static_cast<uint16_t>((p[0] << 8) | p[1]);
+}
+inline int16_t rd_i16(const uint8_t* p) {
+    return static_cast<int16_t>(rd_u16(p));
+}
+inline uint32_t rd_u32(const uint8_t* p) {
+    return (static_cast<uint32_t>(p[0]) << 24) |
+           (static_cast<uint32_t>(p[1]) << 16) |
+           (static_cast<uint32_t>(p[2]) <<  8) |
+            static_cast<uint32_t>(p[3]);
+}
+inline uint32_t mk_tag(char a, char b, char c, char d) {
+    return (static_cast<uint32_t>(static_cast<uint8_t>(a)) << 24) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 16) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(c)) <<  8) |
+            static_cast<uint32_t>(static_cast<uint8_t>(d));
+}
+
+// Directed edge for scanline rasterization (y0 < y1 always)
+struct RasterEdge {
+    float x0, y0, x1, y1;
+    int direction; // +1 or -1 (original winding direction)
+};
+
+void add_edge(std::vector<RasterEdge>& edges,
+              float x0, float y0, float x1, float y1) {
+    if (std::abs(y1 - y0) < 0.001f) return; // skip horizontal
+    if (y0 < y1) {
+        edges.push_back({x0, y0, x1, y1, 1});
+    } else {
+        edges.push_back({x1, y1, x0, y0, -1});
+    }
+}
+
+void flatten_quad_bezier(std::vector<RasterEdge>& edges,
+                         float x0, float y0,
+                         float cx, float cy,
+                         float x1, float y1,
+                         float tolerance = 0.25f) {
+    float mx = (x0 + x1) * 0.5f;
+    float my = (y0 + y1) * 0.5f;
+    float dx = cx - mx;
+    float dy = cy - my;
+    if (dx * dx + dy * dy <= tolerance * tolerance) {
+        add_edge(edges, x0, y0, x1, y1);
+        return;
+    }
+    float x01  = (x0 + cx) * 0.5f, y01  = (y0 + cy) * 0.5f;
+    float x12  = (cx + x1) * 0.5f, y12  = (cy + y1) * 0.5f;
+    float x012 = (x01 + x12) * 0.5f, y012 = (y01 + y12) * 0.5f;
+    flatten_quad_bezier(edges, x0, y0, x01, y01, x012, y012, tolerance);
+    flatten_quad_bezier(edges, x012, y012, x12, y12, x1, y1, tolerance);
+}
+
+// Parse 'glyf' table contours and return directed edges in pixel coordinates.
+// Transform: pixel_x = font_x * scale, pixel_y = ascender_px - font_y * scale
+bool extract_glyph_edges(const uint8_t* data, size_t data_size,
+                          uint16_t glyph_index,
+                          float scale, float ascender_px,
+                          std::vector<RasterEdge>& out) {
+    if (data_size < 12) return false;
+
+    // Locate glyf, loca, maxp, head tables
+    uint16_t num_tables = rd_u16(data + 4);
+    uint32_t glyf_off = 0, loca_off = 0;
+    uint16_t num_glyphs = 0;
+    int16_t  loc_fmt = 0;
+
+    for (uint16_t t = 0; t < num_tables; ++t) {
+        size_t r = 12 + t * 16;
+        if (r + 16 > data_size) break;
+        uint32_t tag = rd_u32(data + r);
+        uint32_t off = rd_u32(data + r + 8);
+        uint32_t len = rd_u32(data + r + 12);
+        if (tag == mk_tag('g','l','y','f'))                              glyf_off = off;
+        else if (tag == mk_tag('l','o','c','a'))                         loca_off = off;
+        else if (tag == mk_tag('m','a','x','p') && off + 6 <= data_size) num_glyphs = rd_u16(data + off + 4);
+        else if (tag == mk_tag('h','e','a','d') && off + 54 <= data_size) loc_fmt = rd_i16(data + off + 50);
+    }
+    if (glyf_off == 0 || loca_off == 0 || glyph_index >= num_glyphs)
+        return false;
+
+    // Resolve glyph offset via 'loca'
+    uint32_t g_off, g_end;
+    if (loc_fmt == 0) {
+        uint32_t li = loca_off + glyph_index * 2;
+        if (li + 4 > data_size) return false;
+        g_off = static_cast<uint32_t>(rd_u16(data + li)) * 2;
+        g_end = static_cast<uint32_t>(rd_u16(data + li + 2)) * 2;
+    } else {
+        uint32_t li = loca_off + glyph_index * 4;
+        if (li + 8 > data_size) return false;
+        g_off = rd_u32(data + li);
+        g_end = rd_u32(data + li + 4);
+    }
+    if (g_off == g_end) return false; // empty glyph (space etc.)
+
+    uint32_t abs = glyf_off + g_off;
+    if (abs + 10 > data_size) return false;
+
+    const uint8_t* g = data + abs;
+    int16_t n_contours = rd_i16(g);
+    if (n_contours <= 0) return false; // composite or empty
+
+    // End-points array
+    uint32_t p = 10;
+    std::vector<uint16_t> ends(n_contours);
+    for (int16_t c = 0; c < n_contours; ++c) {
+        if (abs + p + 2 > data_size) return false;
+        ends[c] = rd_u16(g + p);
+        p += 2;
+    }
+    uint16_t total_pts = ends.back() + 1;
+
+    // Skip instructions
+    if (abs + p + 2 > data_size) return false;
+    uint16_t instr_len = rd_u16(g + p);
+    p += 2 + instr_len;
+
+    // Flags
+    std::vector<uint8_t> fl(total_pts);
+    for (uint16_t i = 0; i < total_pts;) {
+        if (abs + p >= data_size) return false;
+        uint8_t f = g[p++];
+        fl[i++] = f;
+        if (f & 0x08) {
+            if (abs + p >= data_size) return false;
+            uint8_t rep = g[p++];
+            for (uint8_t r = 0; r < rep && i < total_pts; ++r) fl[i++] = f;
+        }
+    }
+
+    // X coordinates (delta-encoded)
+    std::vector<int16_t> xs(total_pts, 0);
+    int16_t xv = 0;
+    for (uint16_t i = 0; i < total_pts; ++i) {
+        if (fl[i] & 0x02) {
+            if (abs + p >= data_size) return false;
+            uint8_t d = g[p++];
+            xv += (fl[i] & 0x10) ? d : -static_cast<int16_t>(d);
+        } else if (!(fl[i] & 0x10)) {
+            if (abs + p + 1 >= data_size) return false;
+            xv += rd_i16(g + p); p += 2;
+        }
+        xs[i] = xv;
+    }
+
+    // Y coordinates (delta-encoded)
+    std::vector<int16_t> ys(total_pts, 0);
+    int16_t yv = 0;
+    for (uint16_t i = 0; i < total_pts; ++i) {
+        if (fl[i] & 0x04) {
+            if (abs + p >= data_size) return false;
+            uint8_t d = g[p++];
+            yv += (fl[i] & 0x20) ? d : -static_cast<int16_t>(d);
+        } else if (!(fl[i] & 0x20)) {
+            if (abs + p + 1 >= data_size) return false;
+            yv += rd_i16(g + p); p += 2;
+        }
+        ys[i] = yv;
+    }
+
+    // Transform helpers: font-units → pixel coords
+    auto tx = [&](float fx) -> float { return fx * scale; };
+    auto ty = [&](float fy) -> float { return ascender_px - fy * scale; };
+
+    // Walk contours and emit edges
+    uint16_t cstart = 0;
+    for (int16_t c = 0; c < n_contours; ++c) {
+        uint16_t cend = ends[c];
+        if (cend < cstart) break;
+
+        // Determine starting on-curve point
+        bool first_on = (fl[cstart] & 0x01) != 0;
+        float sx, sy;
+        if (first_on) {
+            sx = tx(xs[cstart]); sy = ty(ys[cstart]);
+        } else {
+            bool last_on = (fl[cend] & 0x01) != 0;
+            if (last_on) {
+                sx = tx(xs[cend]); sy = ty(ys[cend]);
+            } else {
+                sx = tx((xs[cstart] + xs[cend]) * 0.5f);
+                sy = ty((ys[cstart] + ys[cend]) * 0.5f);
+            }
+        }
+
+        float cx_ = sx, cy_ = sy;
+        for (uint16_t i = cstart; i <= cend; ++i) {
+            uint16_t nxt = (i < cend) ? i + 1 : cstart;
+            bool cur_on = (fl[i] & 0x01) != 0;
+            bool nxt_on = (fl[nxt] & 0x01) != 0;
+
+            if (cur_on && nxt_on) {
+                float nx = tx(xs[nxt]), ny = ty(ys[nxt]);
+                add_edge(out, cx_, cy_, nx, ny);
+                cx_ = nx; cy_ = ny;
+            } else if (cur_on && !nxt_on) {
+                uint16_t nn = (nxt < cend) ? nxt + 1 : cstart;
+                bool nn_on = (fl[nn] & 0x01) != 0;
+                float cpx = tx(xs[nxt]), cpy = ty(ys[nxt]);
+                float ex, ey;
+                if (nn_on) {
+                    ex = tx(xs[nn]); ey = ty(ys[nn]);
+                    i = nxt; // skip off-curve point
+                } else {
+                    ex = (cpx + tx(xs[nn])) * 0.5f;
+                    ey = (cpy + ty(ys[nn])) * 0.5f;
+                    i = nxt;
+                }
+                flatten_quad_bezier(out, cx_, cy_, cpx, cpy, ex, ey);
+                cx_ = ex; cy_ = ey;
+            }
+            // !cur_on case: handled by prior cur_on && !nxt_on
+        }
+        // Close contour
+        add_edge(out, cx_, cy_, sx, sy);
+        cstart = cend + 1;
+    }
+
+    return !out.empty();
+}
+
+// Non-zero-winding scanline rasterization with 4x Y oversampling (AA).
+// Writes alpha into an atlas page at (dst_x, dst_y) with glyph size (gw, gh).
+void scanline_rasterize(const std::vector<RasterEdge>& edges,
+                        uint8_t* pixels, uint32_t page_w, uint32_t channels,
+                        uint32_t dst_x, uint32_t dst_y,
+                        uint32_t gw, uint32_t gh) {
+    if (gw == 0 || gh == 0 || edges.empty()) return;
+
+    constexpr int OVERSAMPLE = 4;
+    uint32_t sub_h = gh * OVERSAMPLE;
+
+    // Crossing buffer: winding increment per (sub-scanline, x)
+    std::vector<float> crossings(static_cast<size_t>(gw) * sub_h, 0.0f);
+
+    for (const auto& e : edges) {
+        float sy0 = e.y0 * OVERSAMPLE;
+        float sy1 = e.y1 * OVERSAMPLE;
+        int s_start = std::max(0, static_cast<int>(std::ceil(sy0)));
+        int s_end   = std::min(static_cast<int>(sub_h),
+                               static_cast<int>(std::ceil(sy1)));
+
+        float dy = e.y1 - e.y0;
+        if (std::abs(dy) < 0.001f) continue;
+        float inv_dy = 1.0f / dy;
+
+        for (int sy = s_start; sy < s_end; ++sy) {
+            float y = (static_cast<float>(sy) + 0.5f) /
+                      static_cast<float>(OVERSAMPLE);
+            float t = (y - e.y0) * inv_dy;
+            float x = e.x0 + (e.x1 - e.x0) * t;
+            int ix = static_cast<int>(std::floor(x));
+            if (ix >= 0 && ix < static_cast<int>(gw)) {
+                crossings[static_cast<size_t>(sy) * gw + ix] +=
+                    static_cast<float>(e.direction);
+            }
+        }
+    }
+
+    // Sweep per sub-row, accumulate coverage, average for AA
+    for (uint32_t y = 0; y < gh; ++y) {
+        std::vector<float> alpha(gw, 0.0f);
+        for (int s = 0; s < OVERSAMPLE; ++s) {
+            uint32_t sy = y * OVERSAMPLE + static_cast<uint32_t>(s);
+            float winding = 0.0f;
+            for (uint32_t x = 0; x < gw; ++x) {
+                winding += crossings[static_cast<size_t>(sy) * gw + x];
+                alpha[x] += std::min(std::abs(winding), 1.0f);
+            }
+        }
+
+        for (uint32_t x = 0; x < gw; ++x) {
+            float a = alpha[x] / static_cast<float>(OVERSAMPLE);
+            uint8_t av = static_cast<uint8_t>(
+                std::min(a, 1.0f) * 255.0f + 0.5f);
+            if (av == 0) continue;
+
+            uint32_t ax = dst_x + x;
+            uint32_t ay = dst_y + y;
+            size_t idx = (static_cast<size_t>(ay) * page_w + ax) * channels;
+            if (channels == 1) {
+                pixels[idx] = std::max(pixels[idx], av);
+            } else {
+                for (uint32_t ch = 0; ch < channels; ++ch)
+                    pixels[idx + ch] = std::max(pixels[idx + ch], av);
+            }
+        }
+    }
+}
+
+} // anonymous namespace
 
 // ============================================================
 // Construction
@@ -206,7 +508,9 @@ bool TextRasterizer::pack_glyph(FontHandle font, uint32_t codepoint) {
         entry.uv_y0 = 0.0f;
         entry.uv_x1 = 0.0f;
         entry.uv_y1 = 0.0f;
-        entry.atlas_page = static_cast<uint32_t>(atlas_pages_.size()) - 1;
+        entry.atlas_page = atlas_pages_.empty()
+                           ? 0
+                           : static_cast<uint32_t>(atlas_pages_.size()) - 1;
         glyph_map_[codepoint] = entry;
         return true;
     }
@@ -228,26 +532,26 @@ bool TextRasterizer::pack_glyph(FontHandle font, uint32_t codepoint) {
     uint32_t page_idx = static_cast<uint32_t>(atlas_pages_.size()) - 1;
     ImageBuffer& page = atlas_pages_[page_idx];
 
-    // Rasterize glyph into atlas page at (px, py)
-    // Simple box rasterization (same approach as TextImageRenderer).
-    // A production implementation would use actual outline rasterization.
+    // Rasterize glyph outline into atlas page at (px, py)
     if (codepoint > ' ') {
-        uint32_t channels = page.channels;
-        for (uint32_t gy = 0; gy < gh; ++gy) {
-            for (uint32_t gx = 0; gx < gw; ++gx) {
-                uint32_t ax = px + gx;
-                uint32_t ay = py + gy;
-                if (ax >= page.width || ay >= page.height) continue;
+        const FontTableEntry* font_entry = font_loader_.get_entry(font);
+        const FontMetrics* fm = font_loader_.get_metrics(font);
+        if (font_entry && fm && fm->units_per_em > 0) {
+            float scale = config_.font_size /
+                          static_cast<float>(fm->units_per_em);
+            float ascender_px = fm->ascender * scale;
+            uint16_t glyph_index =
+                font_loader_.codepoint_to_glyph_index(font, codepoint);
 
-                size_t idx = (static_cast<size_t>(ay) * page.width + ax) * channels;
-                if (channels == 1) {
-                    page.pixels[idx] = 255;
-                } else {
-                    page.pixels[idx + 0] = 255;
-                    page.pixels[idx + 1] = 255;
-                    page.pixels[idx + 2] = 255;
-                    page.pixels[idx + 3] = 255;
-                }
+            std::vector<RasterEdge> edges;
+            if (glyph_index != 0 &&
+                extract_glyph_edges(font_entry->raw_data.data(),
+                                    font_entry->raw_data.size(),
+                                    glyph_index, scale, ascender_px,
+                                    edges)) {
+                scanline_rasterize(edges, page.pixels.data(),
+                                   page.width, page.channels,
+                                   px, py, gw, gh);
             }
         }
     }

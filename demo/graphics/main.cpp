@@ -1,4 +1,4 @@
-/// Pictor Graphics Demo — PBR + Shadow + GI
+﻿/// Pictor Graphics Demo — PBR + Shadow + GI
 ///
 /// Demonstrates:
 ///   - PBR metallic cube (high metalness Cook-Torrance BRDF)

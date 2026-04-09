@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/surface/surface_provider.h"
 #include <cstdint>
@@ -67,6 +67,10 @@ public:
     const std::vector<VkFramebuffer>& framebuffers() const { return framebuffers_; }
     VkCommandPool    command_pool() const { return command_pool_; }
     const std::vector<VkCommandBuffer>& command_buffers() const { return command_buffers_; }
+
+    // Single-time command buffer helpers (for uploads, layout transitions, etc.)
+    VkCommandBuffer begin_single_time_commands();
+    void            end_single_time_commands(VkCommandBuffer cmd);
 
     // Per-frame sync objects
     VkSemaphore image_available_semaphore() const { return image_available_sem_; }
