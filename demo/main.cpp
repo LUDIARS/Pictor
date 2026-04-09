@@ -1,4 +1,4 @@
-/// Pictor Vulkan Window Demo
+﻿/// Pictor Vulkan Window Demo
 ///
 /// Opens a GLFW window, initializes a Vulkan swapchain via
 /// the ISurfaceProvider abstraction, and renders a clear-color

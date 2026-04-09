@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // Pictor — Rendering Pipeline Module v2.1
 // Data-Driven, GPU-Optimized Rendering Architecture

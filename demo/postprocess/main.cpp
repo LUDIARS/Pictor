@@ -1,4 +1,4 @@
-/// Pictor Post-Process Demo
+﻿/// Pictor Post-Process Demo
 ///
 /// Demonstrates the post-processing pipeline with:
 ///   - HDR rendering with bright emissive objects (for bloom)

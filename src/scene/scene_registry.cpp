@@ -1,4 +1,4 @@
-#include "pictor/scene/scene_registry.h"
+﻿#include "pictor/scene/scene_registry.h"
 
 namespace pictor {
 

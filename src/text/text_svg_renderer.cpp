@@ -1,4 +1,4 @@
-#include "pictor/text/text_svg_renderer.h"
+﻿#include "pictor/text/text_svg_renderer.h"
 #include <cmath>
 #include <sstream>
 #include <iomanip>

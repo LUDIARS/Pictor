@@ -1,4 +1,4 @@
-#include "pictor/profiler/cpu_timer.h"
+﻿#include "pictor/profiler/cpu_timer.h"
 
 // CpuTimer and ScopedCpuTimer are fully inline (header-only).
 // This translation unit ensures the header compiles cleanly.

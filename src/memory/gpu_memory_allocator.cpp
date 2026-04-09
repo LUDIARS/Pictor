@@ -1,4 +1,4 @@
-#include "pictor/memory/gpu_memory_allocator.h"
+﻿#include "pictor/memory/gpu_memory_allocator.h"
 #include <algorithm>
 
 namespace pictor {

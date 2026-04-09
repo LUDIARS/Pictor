@@ -1,4 +1,4 @@
-#include "pictor/data/vertex_data_uploader.h"
+﻿#include "pictor/data/vertex_data_uploader.h"
 
 namespace pictor {
 

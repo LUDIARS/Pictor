@@ -1,4 +1,4 @@
-#include "pictor/animation/motion_estimator.h"
+﻿#include "pictor/animation/motion_estimator.h"
 #include <cmath>
 #include <algorithm>
 

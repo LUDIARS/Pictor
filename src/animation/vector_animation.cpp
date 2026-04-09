@@ -1,4 +1,4 @@
-#include "pictor/animation/vector_animation.h"
+﻿#include "pictor/animation/vector_animation.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>

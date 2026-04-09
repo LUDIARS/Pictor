@@ -1,4 +1,4 @@
-#include "pictor/surface/vulkan_context.h"
+﻿#include "pictor/surface/vulkan_context.h"
 
 #ifdef PICTOR_HAS_VULKAN
 
@@ -598,6 +598,44 @@ void VulkanContext::cleanup_swapchain() {
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);
         swapchain_ = VK_NULL_HANDLE;
     }
+}
+
+VkCommandBuffer VulkanContext::begin_single_time_commands() {
+    VkCommandBufferAllocateInfo alloc_info{};
+    alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc_info.commandPool        = command_pool_;
+    alloc_info.commandBufferCount = 1;
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(device_, &alloc_info, &cmd) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    if (vkBeginCommandBuffer(cmd, &begin_info) != VK_SUCCESS) {
+        vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
+        return VK_NULL_HANDLE;
+    }
+
+    return cmd;
+}
+
+void VulkanContext::end_single_time_commands(VkCommandBuffer cmd) {
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers    = &cmd;
+
+    vkQueueSubmit(graphics_queue_, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphics_queue_);
+
+    vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
 }
 
 } // namespace pictor

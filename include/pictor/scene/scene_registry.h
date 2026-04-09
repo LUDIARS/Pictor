@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/core/types.h"
 #include "pictor/scene/object_pool.h"

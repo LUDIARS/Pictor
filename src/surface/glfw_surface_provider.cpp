@@ -1,4 +1,4 @@
-#include "pictor/surface/glfw_surface_provider.h"
+﻿#include "pictor/surface/glfw_surface_provider.h"
 
 #ifdef PICTOR_HAS_VULKAN
 

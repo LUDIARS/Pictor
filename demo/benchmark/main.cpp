@@ -1,4 +1,4 @@
-/// Pictor 1M Spheres Benchmark (§14)
+﻿/// Pictor 1M Spheres Benchmark (§14)
 ///
 /// Stress test: 1,000,000 independent spheres moving on 3D Lissajous curves.
 /// All updates via GPU Compute Shader. CPU frame time target: < 0.5ms.

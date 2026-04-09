@@ -1,4 +1,4 @@
-#include "pictor/animation/rive_animation.h"
+﻿#include "pictor/animation/rive_animation.h"
 #include <fstream>
 #include <cstring>
 #include <algorithm>

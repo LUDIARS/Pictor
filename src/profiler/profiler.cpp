@@ -1,4 +1,4 @@
-#include "pictor/profiler/profiler.h"
+﻿#include "pictor/profiler/profiler.h"
 #include <numeric>
 #include <algorithm>
 

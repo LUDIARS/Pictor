@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/animation/animation_types.h"
 #include <string>

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/postprocess/postprocess_effect.h"
 #include "pictor/postprocess/bloom_effect.h"

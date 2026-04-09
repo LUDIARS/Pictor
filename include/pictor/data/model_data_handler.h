@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/data/model_data_types.h"
 #include "pictor/data/vertex_data_uploader.h"

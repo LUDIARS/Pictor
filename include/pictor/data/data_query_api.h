@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/data/data_handler.h"
 #include <string>

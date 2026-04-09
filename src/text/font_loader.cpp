@@ -1,4 +1,4 @@
-#include "pictor/text/font_loader.h"
+﻿#include "pictor/text/font_loader.h"
 #include <fstream>
 #include <cstring>
 #include <algorithm>

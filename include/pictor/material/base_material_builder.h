@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/material/material_property.h"
 #include <array>

@@ -1,4 +1,4 @@
-#include "pictor/animation/skeleton.h"
+﻿#include "pictor/animation/skeleton.h"
 
 namespace pictor {
 

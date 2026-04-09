@@ -1,4 +1,4 @@
-#include "pictor/profiler/overlay_renderer.h"
+﻿#include "pictor/profiler/overlay_renderer.h"
 #include <cstdio>
 
 namespace pictor {

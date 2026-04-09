@@ -1,4 +1,4 @@
-#include "pictor/surface/simple_renderer.h"
+﻿#include "pictor/surface/simple_renderer.h"
 
 #ifdef PICTOR_HAS_VULKAN
 

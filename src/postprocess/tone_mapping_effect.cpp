@@ -1,4 +1,4 @@
-#include "pictor/postprocess/tone_mapping_effect.h"
+﻿#include "pictor/postprocess/tone_mapping_effect.h"
 #include <cmath>
 
 namespace pictor {

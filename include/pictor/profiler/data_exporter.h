@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/profiler/profiler.h"
 #include <string>

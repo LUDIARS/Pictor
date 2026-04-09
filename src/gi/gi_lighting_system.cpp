@@ -1,4 +1,4 @@
-#include "pictor/gi/gi_lighting_system.h"
+﻿#include "pictor/gi/gi_lighting_system.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>

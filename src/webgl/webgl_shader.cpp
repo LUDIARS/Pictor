@@ -1,4 +1,4 @@
-#ifdef PICTOR_HAS_WEBGL
+﻿#ifdef PICTOR_HAS_WEBGL
 
 #include "pictor/webgl/webgl_shader.h"
 #include <cstdio>
