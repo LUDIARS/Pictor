@@ -1,4 +1,4 @@
-#include "pictor/data/texture_registry.h"
+﻿#include "pictor/data/texture_registry.h"
 
 namespace pictor {
 

@@ -1,4 +1,4 @@
-#include "pictor/batch/batch_builder.h"
+﻿#include "pictor/batch/batch_builder.h"
 
 namespace pictor {
 

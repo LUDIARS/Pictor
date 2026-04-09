@@ -1,4 +1,4 @@
-/// Pictor 2D Texture Rendering Demo
+﻿/// Pictor 2D Texture Rendering Demo
 ///
 /// Loads sample1-5.png textures and renders them as 2D quads.
 /// Controls:

@@ -1,4 +1,4 @@
-#include "pictor/postprocess/gaussian_blur_effect.h"
+﻿#include "pictor/postprocess/gaussian_blur_effect.h"
 #include <algorithm>
 #include <cmath>
 

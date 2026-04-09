@@ -1,4 +1,4 @@
-#include "pictor/animation/fbx_importer.h"
+﻿#include "pictor/animation/fbx_importer.h"
 #include <fstream>
 #include <cstring>
 #include <sstream>

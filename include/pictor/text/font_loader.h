@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/text/text_types.h"
 #include <string>

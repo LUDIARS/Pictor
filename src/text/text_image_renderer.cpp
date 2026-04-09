@@ -1,4 +1,4 @@
-#include "pictor/text/text_image_renderer.h"
+﻿#include "pictor/text/text_image_renderer.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>

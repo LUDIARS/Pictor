@@ -1,4 +1,4 @@
-#include "pictor/animation/animation_system.h"
+﻿#include "pictor/animation/animation_system.h"
 #include <algorithm>
 
 namespace pictor {

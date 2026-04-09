@@ -1,4 +1,4 @@
-#include "pictor/update/job_dispatcher.h"
+﻿#include "pictor/update/job_dispatcher.h"
 #include <algorithm>
 
 namespace pictor {

@@ -1,4 +1,4 @@
-#include "pictor/animation/ik_solver.h"
+﻿#include "pictor/animation/ik_solver.h"
 #include <cmath>
 #include <algorithm>
 

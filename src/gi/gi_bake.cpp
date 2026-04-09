@@ -1,4 +1,4 @@
-#include "pictor/gi/gi_bake.h"
+﻿#include "pictor/gi/gi_bake.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>

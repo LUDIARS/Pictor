@@ -1,4 +1,4 @@
-#include "pictor/pipeline/pipeline_profile.h"
+﻿#include "pictor/pipeline/pipeline_profile.h"
 #include <algorithm>
 
 namespace pictor {

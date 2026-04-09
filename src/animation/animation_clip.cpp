@@ -1,4 +1,4 @@
-#include "pictor/animation/animation_clip.h"
+﻿#include "pictor/animation/animation_clip.h"
 #include <cmath>
 #include <algorithm>
 

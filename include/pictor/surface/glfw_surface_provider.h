@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "pictor/surface/surface_provider.h"
 #include <string>

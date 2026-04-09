@@ -1,4 +1,4 @@
-#include "pictor/profiler/bitmap_text_renderer.h"
+﻿#include "pictor/profiler/bitmap_text_renderer.h"
 
 #ifdef PICTOR_HAS_VULKAN
 

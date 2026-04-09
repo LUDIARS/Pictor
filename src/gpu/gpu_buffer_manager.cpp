@@ -1,4 +1,4 @@
-#include "pictor/gpu/gpu_buffer_manager.h"
+﻿#include "pictor/gpu/gpu_buffer_manager.h"
 
 namespace pictor {
 
