@@ -180,6 +180,12 @@ if(PICTOR_BUILD_DEMO)
     add_executable(pictor_fbx_demo demo/fbx/main.cpp)
     target_link_libraries(pictor_fbx_demo PRIVATE pictor)
 
+    # FBX viewer demo (Vulkan + skinning, general-purpose lit shader)
+    if(Vulkan_FOUND AND glfw3_FOUND)
+        add_executable(pictor_fbx_viewer demo/fbx_viewer/main.cpp)
+        target_link_libraries(pictor_fbx_viewer PRIVATE pictor)
+    endif()
+
     if(Vulkan_FOUND AND glfw3_FOUND)
         # Vulkan window demo
         add_executable(pictor_demo demo/main.cpp)
@@ -270,6 +276,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     set(PICTOR_SHADER_SOURCES
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.vert
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.frag
+        ${CMAKE_SOURCE_DIR}/shaders/lit.vert
+        ${CMAKE_SOURCE_DIR}/shaders/lit.frag
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.vert
@@ -330,6 +338,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_texture2d_demo)
         add_dependencies(pictor_texture2d_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_fbx_viewer)
+        add_dependencies(pictor_fbx_viewer pictor_shaders)
     endif()
 endif()
 
