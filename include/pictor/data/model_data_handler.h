@@ -10,6 +10,8 @@
 
 namespace pictor {
 
+class FBXScene;
+
 /// Configuration for the model data handler
 struct ModelDataHandlerConfig {
     uint32_t max_models     = 256;
@@ -42,6 +44,24 @@ public:
 
     /// Unregister a model and all its sub-resources.
     void unregister_model(ModelHandle handle);
+
+    // ============================================================
+    // FBX Loading (convenience)
+    // ============================================================
+
+    /// Load and register an FBX file. Returns INVALID_MODEL on failure.
+    /// Error message is available via last_load_error().
+    ModelHandle load_model_from_fbx(const std::string& path);
+    /// Load and register an FBX from memory.
+    ModelHandle load_model_from_fbx_memory(const uint8_t* data, size_t size,
+                                            const std::string& name);
+
+    /// Retrieve the FBXScene associated with a model previously loaded via
+    /// load_model_from_fbx(). Returns nullptr if the model was not FBX-sourced.
+    std::shared_ptr<FBXScene> get_fbx_scene(ModelHandle handle) const;
+
+    /// Last error message from a load_* call (empty on success).
+    const std::string& last_load_error() const noexcept { return last_load_error_; }
 
     // ============================================================
     // Skin Mesh Operations
@@ -138,6 +158,10 @@ private:
     ModelHandle    next_model_handle_     = 0;
     SkinMeshHandle next_skin_mesh_handle_ = 0;
     RigHandle      next_rig_handle_       = 0;
+
+    /// ModelHandle -> owning FBXScene (only populated via load_model_from_fbx).
+    std::unordered_map<ModelHandle, std::shared_ptr<FBXScene>> fbx_scenes_;
+    std::string last_load_error_;
 };
 
 } // namespace pictor

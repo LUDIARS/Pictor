@@ -1,66 +1,73 @@
-﻿#pragma once
+﻿// FBX Importer -- Level 4 (Facade)
+//
+// Uses FBXDocument (Level 1) + FBXScene (Level 2+3) to project the full
+// FBX content into Pictor runtime descriptors (Skeleton, AnimationClip,
+// SkinMesh, material slots, texture paths).
+#pragma once
 
-#include "pictor/animation/animation_types.h"
 #include "pictor/animation/animation_clip.h"
+#include "pictor/animation/animation_types.h"
+#include "pictor/animation/fbx_scene.h"
 #include "pictor/animation/skeleton.h"
+#include "pictor/data/model_data_types.h"
+
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace pictor {
 
-/// Result of an FBX animation import
+/// Result of an FBX import.
+/// Backward-compatible with the previous skeleton-only fields.
 struct FBXImportResult {
-    bool                          success = false;
-    std::string                   error_message;
-    SkeletonDescriptor            skeleton;
+    bool             success         = false;
+    std::string      error_message;
+    AnimationFormat  detected_format = AnimationFormat::UNKNOWN;
+
+    /// Full typed scene (owns all parsed data).
+    std::shared_ptr<FBXScene>            scene;
+
+    // Projected Pictor runtime descriptors.
+    SkeletonDescriptor                   skeleton;
     std::vector<AnimationClipDescriptor> clips;
-    AnimationFormat               detected_format = AnimationFormat::UNKNOWN;
+    std::vector<SkinMeshDescriptor>      skin_meshes;
+    std::vector<std::string>             material_slots;
+    std::vector<std::string>             texture_paths;
+    std::vector<IKChainDescriptor>       ik_chains;
+
+    /// Materialize a ModelDescriptor suitable for
+    /// ModelDataHandler::register_model().
+    ModelDescriptor to_model_descriptor(const std::string& name) const;
+
+    // Resource ID access (forwards to scene).
+    const FBXObject*         get_resource(FBXObjectId id) const noexcept;
+    std::vector<FBXObjectId> all_resource_ids() const;
+    std::vector<FBXObjectId> resource_ids_of_type(FBXObjectType type) const;
 };
 
-/// FBX animation file importer.
-/// Supports both binary FBX and ASCII FBX formats.
-/// Extracts skeleton hierarchy, bind poses, and animation clips.
 class FBXImporter {
 public:
     FBXImporter() = default;
     ~FBXImporter() = default;
 
-    /// Import from file path
+    /// Import from file path.
     FBXImportResult import_file(const std::string& path) const;
-
-    /// Import from memory buffer
+    /// Import from memory buffer.
     FBXImportResult import_memory(const uint8_t* data, size_t size) const;
-
-    /// Detect whether the data is binary or ASCII FBX
+    /// Detect whether the data is binary or ASCII FBX.
     static AnimationFormat detect_format(const uint8_t* data, size_t size);
 
 private:
-    /// Parse binary FBX format
-    FBXImportResult parse_binary(const uint8_t* data, size_t size) const;
-
-    /// Parse ASCII FBX format
-    FBXImportResult parse_ascii(const uint8_t* data, size_t size) const;
-
-    /// Extract skeleton from FBX node hierarchy
-    bool extract_skeleton(const uint8_t* data, size_t size,
-                          SkeletonDescriptor& out_skeleton) const;
-
-    /// Extract animation curves from FBX takes
-    bool extract_animations(const uint8_t* data, size_t size,
-                            const SkeletonDescriptor& skeleton,
-                            std::vector<AnimationClipDescriptor>& out_clips) const;
-
-    /// Parse FBX node (binary format)
-    struct FBXNode {
-        std::string name;
-        uint64_t    end_offset   = 0;
-        uint32_t    num_properties = 0;
-        std::vector<FBXNode> children;
-    };
-
-    /// Read a binary FBX node
-    bool read_node(const uint8_t* data, size_t size, size_t& offset,
-                   FBXNode& out_node, uint32_t version) const;
+    /// Core projection: consume an FBXScene and populate `out`.
+    void project(const FBXScene& scene, FBXImportResult& out) const;
+    /// Build skeleton from LimbNode Models + (optional) Clusters for bind matrices.
+    void build_skeleton(const FBXScene& scene, FBXImportResult& out) const;
+    /// Build animation clips from AnimationStack / Layer / CurveNode / Curve.
+    void build_clips(const FBXScene& scene, FBXImportResult& out) const;
+    /// Build skinned meshes from Geometry + Skin + Cluster.
+    void build_skin_meshes(const FBXScene& scene, FBXImportResult& out) const;
+    /// Collect material names and texture paths.
+    void collect_materials(const FBXScene& scene, FBXImportResult& out) const;
 };
 
 } // namespace pictor

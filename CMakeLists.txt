@@ -176,6 +176,10 @@ if(PICTOR_BUILD_DEMO)
     add_executable(pictor_benchmark demo/benchmark/main.cpp)
     target_link_libraries(pictor_benchmark PRIVATE pictor)
 
+    # FBX loading + animation demo (headless, console output)
+    add_executable(pictor_fbx_demo demo/fbx/main.cpp)
+    target_link_libraries(pictor_fbx_demo PRIVATE pictor)
+
     if(Vulkan_FOUND AND glfw3_FOUND)
         # Vulkan window demo
         add_executable(pictor_demo demo/main.cpp)
