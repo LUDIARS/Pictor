@@ -118,6 +118,7 @@ add_library(pictor STATIC
     src/animation/ik_solver.cpp
     src/animation/motion_estimator.cpp
     src/animation/fbx_importer.cpp
+    src/animation/fbx_document.cpp
     src/animation/bvh_importer.cpp
     src/animation/animation_2d.cpp
     src/animation/rive_animation.cpp
@@ -162,8 +163,7 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(pictor PRIVATE -Wall -Wextra -mavx2)
 elseif(MSVC)
-    target_compile_options(pictor PRIVATE /W4 /arch:AVX2)
-    add_compile_options(/utf-8)
+    target_compile_options(pictor PRIVATE /W4 /arch:AVX2 /utf-8)
 endif()
 
 if(glfw3_FOUND)
