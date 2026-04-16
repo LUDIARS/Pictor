@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifndef PICTOR_HAS_VULKAN
@@ -106,40 +107,112 @@ struct PackedMesh {
     float                      radius = 1.0f;
 };
 
+/// Pack the largest renderable geometry from an FBX scene.
+///
+/// The previous implementation picked the largest SkinMeshDescriptor by
+/// vertex_count and then re-searched for a matching FBXGeometry by identical
+/// vertex_count. That pairing is unreliable: multiple geometries can share a
+/// vertex count, and the SkinMeshDescriptor list may be shorter than the
+/// geometry list (some geometries skip the descriptor pass). Going directly
+/// through the FBXScene guarantees positions, normals, weights and the bone
+/// index table all come from the SAME geometry.
 PackedMesh pack_mesh_from_fbx(const FBXImportResult& r) {
     PackedMesh out;
     if (!r.scene) return out;
 
-    const SkinMeshDescriptor* best = nullptr;
-    for (const auto& sm : r.skin_meshes) {
-        if (!best || sm.vertex_count > best->vertex_count) best = &sm;
-    }
-    if (!best || best->vertex_count == 0) return out;
-
-    // Triangulated cache lives inside FBXScene, owned by geometry objects.
-    // We need to find the FBXGeometry that produced this SkinMeshDescriptor.
-    // Simpler: iterate all geometries and use the one matching vertex_count.
-    const FBXGeometry::Triangulated* tri = nullptr;
+    // Find the geometry with the most triangulated vertices.
+    FBXObjectId                       best_gid = 0;
+    const FBXGeometry::Triangulated*  best_tri = nullptr;
     for (FBXObjectId gid : r.scene->ids_of_type(FBXObjectType::GEOMETRY)) {
+        const FBXObject* g = r.scene->get(gid);
+        if (!g || !g->geometry) continue;
         const FBXGeometry::Triangulated* t = r.scene->triangulate(gid);
-        if (t && t->valid && t->positions.size() == best->vertex_count) {
-            tri = t;
-            break;
+        if (!t || !t->valid || t->positions.empty()) continue;
+        if (!best_tri || t->positions.size() > best_tri->positions.size()) {
+            best_tri = t;
+            best_gid = gid;
         }
     }
-    if (!tri) return out;
+    if (!best_tri) return out;
+    const FBXObject* best_geo_obj = r.scene->get(best_gid);
+    if (!best_geo_obj || !best_geo_obj->geometry) return out;
+    const FBXGeometry& g = *best_geo_obj->geometry;
 
-    // Normals might be empty; synthesize flat ones from adjacent triangle.
-    std::vector<float3> normals = tri->normals;
-    if (normals.size() != tri->positions.size()) {
-        normals.assign(tri->positions.size(), {0, 1, 0});
-        for (size_t i = 0; i + 2 < tri->indices.size(); i += 3) {
-            const int32_t ia = tri->indices[i + 0];
-            const int32_t ib = tri->indices[i + 1];
-            const int32_t ic = tri->indices[i + 2];
-            const float3& A = tri->positions[ia];
-            const float3& B = tri->positions[ib];
-            const float3& C = tri->positions[ic];
+    // Build skin weights in original-vertex space for this specific geometry,
+    // then expand to per-tri-vertex using tri->original_vertex.
+    const uint32_t orig_vcount = static_cast<uint32_t>(g.positions.size());
+    std::unordered_map<std::string, uint32_t> bone_by_name;
+    for (size_t i = 0; i < r.skeleton.bones.size(); ++i) {
+        bone_by_name[r.skeleton.bones[i].name] = static_cast<uint32_t>(i);
+    }
+    std::vector<SkinWeight> weights_orig(orig_vcount);
+    auto insert_weight = [&](SkinWeight& sw, uint32_t bone, float w) {
+        int min_slot = 0;
+        for (int s = 1; s < 4; ++s)
+            if (sw.weights[s] < sw.weights[min_slot]) min_slot = s;
+        if (w > sw.weights[min_slot]) {
+            sw.weights[min_slot]      = w;
+            sw.bone_indices[min_slot] = bone;
+        }
+    };
+    for (FBXObjectId skin_id : r.scene->children_of(best_gid)) {
+        const FBXObject* s = r.scene->get(skin_id);
+        if (!s || !s->skin) continue;
+        for (FBXObjectId cid : s->skin->cluster_ids) {
+            const FBXObject* co = r.scene->get(cid);
+            if (!co || !co->cluster) continue;
+            const FBXCluster& cl = *co->cluster;
+            const FBXObject* bone_obj = r.scene->get(cl.bone_model_id);
+            if (!bone_obj) continue;
+            auto bi = bone_by_name.find(bone_obj->name);
+            if (bi == bone_by_name.end()) continue;
+            const uint32_t bone_index = bi->second;
+            const size_t n = std::min(cl.indices.size(), cl.weights.size());
+            for (size_t k = 0; k < n; ++k) {
+                const int32_t vi = cl.indices[k];
+                if (vi < 0 || static_cast<uint32_t>(vi) >= orig_vcount) continue;
+                insert_weight(weights_orig[vi], bone_index, static_cast<float>(cl.weights[k]));
+            }
+        }
+    }
+    // Normalize; fall back to root bone for orphan vertices.
+    for (SkinWeight& sw : weights_orig) {
+        float sum = sw.weights[0] + sw.weights[1] + sw.weights[2] + sw.weights[3];
+        if (sum <= 0.0f) {
+            sw.bone_indices[0] = 0;
+            sw.weights[0]      = 1.0f;
+        } else {
+            for (int k = 0; k < 4; ++k) sw.weights[k] /= sum;
+        }
+    }
+
+    // Per-tri-vertex skin weights (matches tri->positions[] layout).
+    std::vector<SkinWeight> weights_tri(best_tri->positions.size());
+    for (size_t i = 0; i < best_tri->positions.size(); ++i) {
+        int32_t orig = (i < best_tri->original_vertex.size()) ? best_tri->original_vertex[i] : -1;
+        if (orig >= 0 && static_cast<uint32_t>(orig) < orig_vcount) {
+            weights_tri[i] = weights_orig[orig];
+        } else {
+            weights_tri[i].bone_indices[0] = 0;
+            weights_tri[i].weights[0]      = 1.0f;
+        }
+    }
+
+    // Normals: use triangulated cache when it matches, otherwise synthesize
+    // flat shading so the mesh is at least visible.
+    std::vector<float3> normals = best_tri->normals;
+    if (normals.size() != best_tri->positions.size()) {
+        normals.assign(best_tri->positions.size(), {0, 1, 0});
+        for (size_t i = 0; i + 2 < best_tri->indices.size(); i += 3) {
+            const int32_t ia = best_tri->indices[i + 0];
+            const int32_t ib = best_tri->indices[i + 1];
+            const int32_t ic = best_tri->indices[i + 2];
+            if (ia < 0 || static_cast<size_t>(ia) >= best_tri->positions.size() ||
+                ib < 0 || static_cast<size_t>(ib) >= best_tri->positions.size() ||
+                ic < 0 || static_cast<size_t>(ic) >= best_tri->positions.size()) continue;
+            const float3& A = best_tri->positions[ia];
+            const float3& B = best_tri->positions[ib];
+            const float3& C = best_tri->positions[ic];
             float3 e1{B.x - A.x, B.y - A.y, B.z - A.z};
             float3 e2{C.x - A.x, C.y - A.y, C.z - A.z};
             float3 n{e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x};
@@ -150,16 +223,15 @@ PackedMesh pack_mesh_from_fbx(const FBXImportResult& r) {
     }
 
     out.vertices = pack_skinned_vertices(
-        tri->positions.data(), tri->positions.size(),
-        normals.data(),        normals.size(),
-        best->skin_weights.data(), best->skin_weights.size());
+        best_tri->positions.data(), best_tri->positions.size(),
+        normals.data(),             normals.size(),
+        weights_tri.data(),         weights_tri.size());
+    out.indices.assign(best_tri->indices.begin(), best_tri->indices.end());
 
-    out.indices.assign(tri->indices.begin(), tri->indices.end());
-
-    // Bounding sphere (for camera fit).
-    float3 mn = tri->positions.empty() ? float3{} : tri->positions[0];
+    // Bounding sphere (for camera fit). Only consider valid indices.
+    float3 mn = best_tri->positions.empty() ? float3{} : best_tri->positions[0];
     float3 mx = mn;
-    for (const auto& p : tri->positions) {
+    for (const auto& p : best_tri->positions) {
         mn = {std::min(mn.x, p.x), std::min(mn.y, p.y), std::min(mn.z, p.z)};
         mx = {std::max(mx.x, p.x), std::max(mx.y, p.y), std::max(mx.z, p.z)};
     }
