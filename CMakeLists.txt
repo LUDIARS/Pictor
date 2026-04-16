@@ -119,6 +119,7 @@ add_library(pictor STATIC
     src/animation/motion_estimator.cpp
     src/animation/fbx_importer.cpp
     src/animation/fbx_document.cpp
+    src/animation/fbx_scene.cpp
     src/animation/bvh_importer.cpp
     src/animation/animation_2d.cpp
     src/animation/rive_animation.cpp
