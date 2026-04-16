@@ -82,6 +82,7 @@ add_library(pictor STATIC
 
     # Pipeline
     src/pipeline/pipeline_profile.cpp
+    src/pipeline/pipeline_builder.cpp
     src/pipeline/render_pass_scheduler.cpp
     src/pipeline/command_encoder.cpp
 
@@ -179,6 +180,23 @@ if(PICTOR_BUILD_DEMO)
     # FBX loading + animation demo (headless, console output)
     add_executable(pictor_fbx_demo demo/fbx/main.cpp)
     target_link_libraries(pictor_fbx_demo PRIVATE pictor)
+
+    # Mobile rendering pipeline demo (headless — no Vulkan/GLFW required).
+    # Showcases MobileLow / MobileHigh profiles and the external
+    # PipelineProfileBuilder API, so it builds on CI and on mobile toolchains
+    # where a Vulkan SDK isn't available.
+    add_executable(pictor_mobile_demo demo/mobile/main.cpp)
+    target_link_libraries(pictor_mobile_demo PRIVATE pictor)
+
+    # Copy sample kv-config file next to the binary so --config= works out of
+    # the box from the build tree.
+    add_custom_command(TARGET pictor_mobile_demo POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/profiles
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/demo/mobile/profiles/mobile_custom.ini
+            ${CMAKE_BINARY_DIR}/profiles/mobile_custom.ini
+        COMMENT "Staging mobile demo profile config"
+    )
 
     # FBX viewer demo (Vulkan + skinning, general-purpose lit shader)
     if(Vulkan_FOUND AND glfw3_FOUND)
