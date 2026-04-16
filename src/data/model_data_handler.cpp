@@ -1,4 +1,6 @@
 ﻿#include "pictor/data/model_data_handler.h"
+#include "pictor/animation/fbx_importer.h"
+#include "pictor/animation/fbx_scene.h"
 #include <algorithm>
 #include <cstring>
 
@@ -69,6 +71,8 @@ void ModelDataHandler::unregister_model(ModelHandle handle) {
     if (!it->name.empty()) {
         model_name_map_.erase(it->name);
     }
+
+    fbx_scenes_.erase(handle);
 
     models_.erase(it);
 }
@@ -324,6 +328,57 @@ ModelFormat ModelDataHandler::detect_format(const uint8_t* data, size_t size) {
     }
 
     return ModelFormat::UNKNOWN;
+}
+
+// ============================================================
+// FBX Loading
+// ============================================================
+
+namespace {
+
+std::string derive_model_name_from_path(const std::string& path) {
+    size_t slash = path.find_last_of("/\\");
+    std::string base = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    size_t dot = base.find_last_of('.');
+    if (dot != std::string::npos) base = base.substr(0, dot);
+    return base.empty() ? std::string{"model"} : base;
+}
+
+} // namespace
+
+ModelHandle ModelDataHandler::load_model_from_fbx(const std::string& path) {
+    last_load_error_.clear();
+    FBXImporter importer;
+    FBXImportResult result = importer.import_file(path);
+    if (!result.success) {
+        last_load_error_ = result.error_message;
+        return INVALID_MODEL;
+    }
+    const std::string name = derive_model_name_from_path(path);
+    ModelDescriptor md = result.to_model_descriptor(name);
+    ModelHandle h = register_model(md);
+    if (h != INVALID_MODEL && result.scene) fbx_scenes_[h] = result.scene;
+    return h;
+}
+
+ModelHandle ModelDataHandler::load_model_from_fbx_memory(const uint8_t* data, size_t size,
+                                                         const std::string& name) {
+    last_load_error_.clear();
+    FBXImporter importer;
+    FBXImportResult result = importer.import_memory(data, size);
+    if (!result.success) {
+        last_load_error_ = result.error_message;
+        return INVALID_MODEL;
+    }
+    ModelDescriptor md = result.to_model_descriptor(name.empty() ? std::string{"model"} : name);
+    ModelHandle h = register_model(md);
+    if (h != INVALID_MODEL && result.scene) fbx_scenes_[h] = result.scene;
+    return h;
+}
+
+std::shared_ptr<FBXScene> ModelDataHandler::get_fbx_scene(ModelHandle handle) const {
+    auto it = fbx_scenes_.find(handle);
+    return (it == fbx_scenes_.end()) ? nullptr : it->second;
 }
 
 } // namespace pictor
