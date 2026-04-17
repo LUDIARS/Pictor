@@ -271,4 +271,121 @@ PipelineProfileDef PipelineProfileManager::create_ultra_profile() {
     return def;
 }
 
+// ============================================================
+// Mobile Profile Definitions (§8.1 extension)
+//
+// These presets are tuned for mobile tile-based GPUs (Adreno, Mali, Apple
+// A-series). Compared to Lite, they disable bandwidth-heavy features
+// (MSAA resolve, multi-cascade shadows) that hurt tile-based deferred
+// hardware, and shrink memory footprints to fit mobile DRAM budgets.
+// ============================================================
+
+PipelineProfileDef PipelineProfileManager::create_mobile_low_profile() {
+    PipelineProfileDef def;
+    def.profile_name = "MobileLow";
+    def.rendering_path = RenderingPath::FORWARD;
+    def.gpu_driven_enabled = false;
+    def.compute_update_enabled = false;
+    def.max_lights = 8;
+    def.msaa_samples = 0; // MSAA resolve is expensive on tile-based GPUs
+
+    // Shadows disabled entirely for low-end mobile
+    def.shadow_config.cascade_count = 0;
+    def.shadow_config.resolution    = 0;
+    def.shadow_config.filter_mode   = ShadowFilterMode::NONE;
+
+    // Memory config: sized for ~1-2GB mobile RAM
+    def.memory_config.frame_allocator_size = 1 * 1024 * 1024; // 1MB
+    def.memory_config.flight_count = 2;
+    def.memory_config.gpu_config.mesh_pool_size     = 32 * 1024 * 1024;  // 32MB
+    def.memory_config.gpu_config.ssbo_pool_size     = 16 * 1024 * 1024;  // 16MB
+    def.memory_config.gpu_config.instance_buffer_size = 4 * 1024 * 1024; // 4MB
+    def.memory_config.gpu_config.staging_buffer_size  = 4 * 1024 * 1024; // 4MB
+
+    def.gpu_driven_config = {};
+    def.gpu_driven_config.compute_update = false;
+
+    def.update_config.chunk_size = 4096;
+    def.update_config.nt_store_enabled = false;
+
+    def.profiler_config.enabled      = true;
+    def.profiler_config.overlay_mode = OverlayMode::MINIMAL;
+    def.profiler_config.max_queries  = 16;
+
+    // GI: everything off — no shadows, no SSAO, no probes
+    def.gi_config.shadow_enabled    = false;
+    def.gi_config.ssao_enabled      = false;
+    def.gi_config.gi_probes_enabled = false;
+
+    // Minimal render passes — single forward pass + tonemap
+    def.render_passes = {
+        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"PostProcess",     PassType::POST_PROCESS, INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {}},
+    };
+
+    def.post_process_stack = {
+        {"Tonemapping", true},
+    };
+
+    return def;
+}
+
+PipelineProfileDef PipelineProfileManager::create_mobile_high_profile() {
+    PipelineProfileDef def;
+    def.profile_name = "MobileHigh";
+    def.rendering_path = RenderingPath::FORWARD; // stay on Forward — Forward+ light lists cost bandwidth
+    def.gpu_driven_enabled = false;
+    def.compute_update_enabled = false;
+    def.max_lights = 32;
+    def.msaa_samples = 2; // 2x MSAA is the mobile sweet spot
+
+    // 1 shadow cascade, modest resolution, PCF soft shadows
+    def.shadow_config.cascade_count = 1;
+    def.shadow_config.resolution    = 1024;
+    def.shadow_config.filter_mode   = ShadowFilterMode::PCF;
+
+    // Memory config: sized for mid/high-tier mobile (~4GB RAM devices)
+    def.memory_config.frame_allocator_size = 4 * 1024 * 1024;  // 4MB
+    def.memory_config.flight_count = 2;
+    def.memory_config.gpu_config.mesh_pool_size     = 128 * 1024 * 1024; // 128MB
+    def.memory_config.gpu_config.ssbo_pool_size     = 32 * 1024 * 1024;  // 32MB
+    def.memory_config.gpu_config.instance_buffer_size = 16 * 1024 * 1024;
+    def.memory_config.gpu_config.staging_buffer_size  = 16 * 1024 * 1024;
+
+    def.gpu_driven_config = {};
+    def.gpu_driven_config.compute_update = false;
+
+    def.update_config.chunk_size = 8192;
+    def.update_config.nt_store_enabled = false;
+
+    def.profiler_config.enabled      = true;
+    def.profiler_config.overlay_mode = OverlayMode::STANDARD;
+    def.profiler_config.max_queries  = 32;
+
+    def.gi_config.shadow_enabled    = true;
+    def.gi_config.ssao_enabled      = false; // SSAO is heavy on tile-based GPUs
+    def.gi_config.gi_probes_enabled = false;
+    def.gi_config.shadow.cascade_count = 1;
+    def.gi_config.shadow.resolution    = 1024;
+    def.gi_config.shadow.filter_mode   = ShadowFilterMode::PCF;
+    def.gi_config.shadow.depth_bias    = 0.005f;
+
+    def.render_passes = {
+        {"ShadowPass",      PassType::SHADOW,       INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {"bounds", "transforms"}},
+        {"DepthPrePass",    PassType::DEPTH_ONLY,   INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"bounds", "transforms"}},
+        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"PostProcess",     PassType::POST_PROCESS, INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {}},
+    };
+
+    def.post_process_stack = {
+        {"Bloom",       true},
+        {"Tonemapping", true},
+        {"FXAA",        true},
+    };
+
+    return def;
+}
+
 } // namespace pictor

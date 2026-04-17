@@ -93,6 +93,12 @@ public:
     static PipelineProfileDef create_standard_profile();
     static PipelineProfileDef create_ultra_profile();
 
+    /// Mobile presets (§8.1 extension).
+    /// MobileLow targets bandwidth-bound tile-based GPUs (no shadows, FORWARD, no MSAA).
+    /// MobileHigh targets modern mobile SoCs (FORWARD, 1-cascade PCF shadows, light post-process).
+    static PipelineProfileDef create_mobile_low_profile();
+    static PipelineProfileDef create_mobile_high_profile();
+
 private:
     std::vector<PipelineProfileDef> profiles_;
     const PipelineProfileDef*       current_ = nullptr;
