@@ -147,6 +147,10 @@ public:
     /// Returns nullptr if the instance has no skeleton.
     const float4x4* get_skinning_matrices(AnimationStateHandle handle) const;
 
+    /// Access the per-bone world transforms computed during update().
+    /// Length == get_bone_count(handle). nullptr if handle is invalid.
+    const float4x4* get_world_matrices(AnimationStateHandle handle) const;
+
     /// Get the number of bones for an instance's skeleton
     uint32_t get_bone_count(AnimationStateHandle handle) const;
 

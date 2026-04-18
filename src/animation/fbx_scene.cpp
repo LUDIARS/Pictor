@@ -1101,8 +1101,21 @@ float4x4 FBXScene::evaluate_local_transform(FBXObjectId model_id) const {
     if (!obj || !obj->model) return mat_identity();
     const FBXModel& m = *obj->model;
 
-    // FBX SDK transform assembly:
-    //   M = T * Roff * Rp * Rpre * R * Rpost^-1 * Rp^-1 * Soff * Sp * S * Sp^-1
+    // FBX SDK specifies the local transform in column-vector convention:
+    //   M_col = T * Roff * Rp * Rpre * R * Rpost^-1 * Rp^-1 * Soff * Sp * S * Sp^-1
+    // i.e. applying Sp^-1 first and T last to a column vector.
+    //
+    // Pictor stores matrices in row-vector / row-major form (translation at
+    // m[3][*], `v_row * M` is the application). To produce the same spatial
+    // transformation in row-vector convention, the composition must be
+    // reversed so that Sp^-1 is applied first and T last when a row vector
+    // enters `v_row * M` from the left:
+    //
+    //   M_row = Sp^-1 * S * Sp * Soff * Rp^-1 * Rpost^-1 * R * Rpre * Rp * Roff * T
+    //
+    // Each mat_mul(A, B) returns the row-vector matrix representing "apply
+    // A first, then B", so we accumulate by multiplying new factors on the
+    // right in the order above.
     const float4x4 T     = mat_translation(m.translation);
     const float4x4 Roff  = mat_translation(m.rotation_offset);
     const float4x4 Rp    = mat_translation(m.rotation_pivot);
@@ -1116,16 +1129,58 @@ float4x4 FBXScene::evaluate_local_transform(FBXObjectId model_id) const {
     const float4x4 S     = mat_scale(m.scaling);
     const float4x4 Sp_inv = mat_translation({-m.scaling_pivot.x, -m.scaling_pivot.y, -m.scaling_pivot.z});
 
-    float4x4 local = mat_mul(T, Roff);
-    local = mat_mul(local, Rp);
-    local = mat_mul(local, Rpre);
-    local = mat_mul(local, R);
-    local = mat_mul(local, Rpost_inv);
-    local = mat_mul(local, Rp_inv);
-    local = mat_mul(local, Soff);
-    local = mat_mul(local, Sp);
+    float4x4 local = Sp_inv;
     local = mat_mul(local, S);
-    local = mat_mul(local, Sp_inv);
+    local = mat_mul(local, Sp);
+    local = mat_mul(local, Soff);
+    local = mat_mul(local, Rp_inv);
+    local = mat_mul(local, Rpost_inv);
+    local = mat_mul(local, R);
+    local = mat_mul(local, Rpre);
+    local = mat_mul(local, Rp);
+    local = mat_mul(local, Roff);
+    local = mat_mul(local, T);
+    return local;
+}
+
+float4x4 FBXScene::evaluate_local_transform_with_anim(FBXObjectId model_id,
+                                                       const float3* anim_translation,
+                                                       const float3* anim_rotation_deg,
+                                                       const float3* anim_scaling) const
+{
+    const FBXObject* obj = get(model_id);
+    if (!obj || !obj->model) return mat_identity();
+    const FBXModel& m = *obj->model;
+
+    const float3 T_vec = anim_translation  ? *anim_translation  : m.translation;
+    const float3 R_vec = anim_rotation_deg ? *anim_rotation_deg : m.rotation;
+    const float3 S_vec = anim_scaling      ? *anim_scaling      : m.scaling;
+
+    const float4x4 T     = mat_translation(T_vec);
+    const float4x4 Roff  = mat_translation(m.rotation_offset);
+    const float4x4 Rp    = mat_translation(m.rotation_pivot);
+    const float4x4 Rpre  = mat_rotation_euler(m.pre_rotation,  FBXRotationOrder::XYZ);
+    const float4x4 R     = mat_rotation_euler(R_vec,           m.rotation_order);
+    const float4x4 Rpost = mat_rotation_euler(m.post_rotation, FBXRotationOrder::XYZ);
+    const float4x4 Rp_inv    = mat_translation({-m.rotation_pivot.x, -m.rotation_pivot.y, -m.rotation_pivot.z});
+    const float4x4 Rpost_inv = mat_inverse_rigid(Rpost);
+    const float4x4 Soff  = mat_translation(m.scaling_offset);
+    const float4x4 Sp    = mat_translation(m.scaling_pivot);
+    const float4x4 S     = mat_scale(S_vec);
+    const float4x4 Sp_inv = mat_translation({-m.scaling_pivot.x, -m.scaling_pivot.y, -m.scaling_pivot.z});
+
+    // Row-vector composition: reverse order so T is applied last.
+    float4x4 local = Sp_inv;
+    local = mat_mul(local, S);
+    local = mat_mul(local, Sp);
+    local = mat_mul(local, Soff);
+    local = mat_mul(local, Rp_inv);
+    local = mat_mul(local, Rpost_inv);
+    local = mat_mul(local, R);
+    local = mat_mul(local, Rpre);
+    local = mat_mul(local, Rp);
+    local = mat_mul(local, Roff);
+    local = mat_mul(local, T);
     return local;
 }
 

@@ -31,16 +31,23 @@ void Skeleton::compute_world_matrices(const Transform* local_transforms,
             // Root bone — local is world
             out_world_matrices[i] = local_matrix;
         } else {
-            // Child bone — multiply with parent's world matrix
+            // Child bone — cascade through parent's world matrix.
+            //
+            // Pictor uses row-vector / row-major matrices (translation at
+            // m[3][*], `v_row * M`). A point in the child's local frame
+            // reaches world via:
+            //   v_world = v_child_local * local_matrix * parent_world
+            // which means the stored result is `local * parent` — NOT
+            // `parent * local`. The earlier `parent * local` form is the
+            // column-vector expression and was incorrect for Pictor's
+            // storage convention (see fbx_scene.cpp for the matching fix).
             const float4x4& parent = out_world_matrices[bones_[i].parent_index];
             float4x4& result = out_world_matrices[i];
-
-            // Matrix multiplication: result = parent * local
             for (int r = 0; r < 4; ++r) {
                 for (int c = 0; c < 4; ++c) {
                     result.m[r][c] = 0.0f;
                     for (int k = 0; k < 4; ++k) {
-                        result.m[r][c] += parent.m[r][k] * local_matrix.m[k][c];
+                        result.m[r][c] += local_matrix.m[r][k] * parent.m[k][c];
                     }
                 }
             }
@@ -50,21 +57,33 @@ void Skeleton::compute_world_matrices(const Transform* local_transforms,
 
 void Skeleton::compute_skinning_matrices(const Transform* local_transforms,
                                          float4x4* out_skinning_matrices) const {
-    // First compute world matrices
+    // First compute world matrices.
     std::vector<float4x4> world_matrices(bones_.size());
     compute_world_matrices(local_transforms, world_matrices.data());
 
-    // Then multiply by inverse bind matrix: skinning = world * inverse_bind
+    // Then produce the per-bone skinning transform.
+    //
+    // For a vertex V in mesh world space at bind time, the animated world
+    // position is:
+    //   V_animated = V_bind * inverse_bind * current_world  (row-vector)
+    // i.e. "bring into bone-local at bind", then "re-position by the
+    // current world". The stored skinning matrix is therefore
+    //   S = inverse_bind * current_world                    (row-vector order)
+    // which is `mat_mul(inverse_bind, current_world)`.
+    //
+    // When the caller transposes this for GLSL (column-vector `S * v`),
+    // the uploaded matrix is current_world_col * inverse_bind_col, which
+    // is the canonical column-vector skinning formula.
     for (uint32_t i = 0; i < bones_.size(); ++i) {
-        const float4x4& world = world_matrices[i];
+        const float4x4& world    = world_matrices[i];
         const float4x4& inv_bind = bones_[i].inverse_bind_matrix;
-        float4x4& result = out_skinning_matrices[i];
+        float4x4&       result   = out_skinning_matrices[i];
 
         for (int r = 0; r < 4; ++r) {
             for (int c = 0; c < 4; ++c) {
                 result.m[r][c] = 0.0f;
                 for (int k = 0; k < 4; ++k) {
-                    result.m[r][c] += world.m[r][k] * inv_bind.m[k][c];
+                    result.m[r][c] += inv_bind.m[r][k] * world.m[k][c];
                 }
             }
         }
