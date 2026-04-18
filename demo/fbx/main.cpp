@@ -7,10 +7,14 @@
 //   4. Sample bone transforms over time and print them
 //
 // Usage:
-//   pictor_fbx_demo <path-to-model.fbx>
+//   pictor_fbx_demo [<path-to-model.fbx>]
 //
-// If no file path is provided, the demo synthesizes a minimal skeleton
-// + animation so that the pipeline can be exercised headlessly.
+// With no arguments, iterates over the bundled test set
+// `fbx/model1/model.fbx` ... `fbx/model5/model.fbx` and runs the full
+// pipeline on every one that exists on disk (missing entries are
+// skipped so this works even while only a subset of the models is
+// unzipped). Pass an explicit FBX path to fall back to the single-file
+// mode.
 
 #include "pictor/animation/fbx_importer.h"
 #include "pictor/animation/fbx_scene.h"
@@ -20,8 +24,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
+
+namespace fs = std::filesystem;
 
 using namespace pictor;
 
@@ -155,37 +162,21 @@ void print_bone_matrix(const char* label, const float4x4& m) {
 
 } // namespace
 
-int main(int argc, char** argv) {
-    std::printf("Pictor FBX Demo\n");
-    std::printf("---------------\n");
-
-    FBXImportResult result;
-    if (argc >= 2) {
-        std::printf("Loading: %s\n", argv[1]);
-        FBXImporter importer;
-        result = importer.import_file(argv[1]);
-        if (!result.success) {
-            std::printf("FBX import failed: %s\n", result.error_message.c_str());
-            return 1;
-        }
-    } else {
-        std::printf("No FBX path provided — running with synthetic scene.\n");
-        std::printf("Usage: pictor_fbx_demo <path-to-model.fbx>\n\n");
-        build_synthetic(result);
-    }
-
+/// Run the full FBX → AnimationSystem pipeline for a single result and
+/// print the scene summary plus sampled skinning matrices. Returns true
+/// on success (pipeline exercised), false on import failure.
+bool run_pipeline(FBXImportResult& result) {
     print_scene_summary(result);
 
     if (result.skeleton.bones.empty()) {
         std::printf("No bones extracted — nothing to animate.\n");
-        return 0;
+        return true;
     }
 
-    // ── AnimationSystem ─────────────────────────────────────
     AnimationSystemConfig cfg;
-    cfg.gpu_skinning_enabled = false;           // CPU path for the demo
+    cfg.gpu_skinning_enabled   = false;           // CPU path for the demo
     cfg.max_bones_per_skeleton = 512;
-    cfg.max_active_instances = 16;
+    cfg.max_active_instances   = 16;
     AnimationSystem anim;
     anim.initialize(cfg);
 
@@ -193,7 +184,6 @@ int main(int argc, char** argv) {
     std::vector<AnimationClipHandle> clip_handles;
     for (const auto& c : result.clips) clip_handles.push_back(anim.register_clip(c));
 
-    // Bind an instance to a dummy object id.
     const ObjectId dummy_object = 42;
     AnimationStateHandle inst = anim.create_instance(dummy_object, sk);
     if (!clip_handles.empty()) {
@@ -207,10 +197,9 @@ int main(int argc, char** argv) {
     const uint32_t bone_count = anim.get_bone_count(inst);
     std::printf("Bones in instance: %u\n\n", bone_count);
 
-    // ── Sample animation over a few seconds ────────────────
-    const float dt = 1.0f / 30.0f;                  // 30 fps
-    const int total_frames = 90;                    // 3 seconds
-    const int print_stride = 15;                    // every 0.5s
+    const float dt = 1.0f / 30.0f;               // 30 fps
+    const int total_frames = 90;                 // 3 seconds
+    const int print_stride = 15;                 // every 0.5s
 
     for (int frame = 0; frame <= total_frames; ++frame) {
         anim.update(dt);
@@ -232,7 +221,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── Resource access demo ───────────────────────────────
     if (result.scene) {
         std::printf("\nResource ID access sample:\n");
         auto mids = result.resource_ids_of_type(FBXObjectType::MODEL);
@@ -251,6 +239,62 @@ int main(int argc, char** argv) {
 
     anim.destroy_instance(inst);
     anim.shutdown();
+    return true;
+}
+
+/// Import one FBX file and run the pipeline on it. Prints a banner
+/// with the source path.
+bool run_for_file(const fs::path& path) {
+    std::printf("\n================================================================\n");
+    std::printf("  Loading: %s\n", path.string().c_str());
+    std::printf("================================================================\n");
+
+    FBXImporter importer;
+    FBXImportResult result = importer.import_file(path.string());
+    if (!result.success) {
+        std::printf("FBX import failed: %s\n", result.error_message.c_str());
+        return false;
+    }
+    return run_pipeline(result);
+}
+
+int main(int argc, char** argv) {
+    std::printf("Pictor FBX Demo\n");
+    std::printf("---------------\n");
+
+    if (argc >= 2) {
+        return run_for_file(argv[1]) ? 0 : 1;
+    }
+
+    // No argument: sweep the bundled test set `fbx/model1` .. `fbx/model5`.
+    // Each slot that is present on disk is loaded and exercised; missing
+    // ones are skipped (the repo ships only model1 by default, with the
+    // rest provided separately — see fbx/README.md).
+    int found = 0;
+    int failed = 0;
+    for (int i = 1; i <= 5; ++i) {
+        fs::path p = fs::path("fbx") / ("model" + std::to_string(i)) / "model.fbx";
+        if (!fs::exists(p)) {
+            std::printf("  [skip] %s (not present)\n", p.string().c_str());
+            continue;
+        }
+        ++found;
+        if (!run_for_file(p)) ++failed;
+    }
+
+    if (found == 0) {
+        std::printf("\nNo FBX models found under fbx/model{1..5}/model.fbx.\n");
+        std::printf("Falling back to synthetic scene. Pass a path explicitly\n");
+        std::printf("or unzip the test asset bundle into `fbx/` to enable the\n");
+        std::printf("full sweep (see fbx/README.md).\n\n");
+        FBXImportResult synth;
+        build_synthetic(synth);
+        run_pipeline(synth);
+    } else {
+        std::printf("\n--- Sweep summary: %d FBX processed, %d failed ---\n",
+                    found, failed);
+    }
+
     std::printf("\nDone.\n");
-    return 0;
+    return failed == 0 ? 0 : 1;
 }

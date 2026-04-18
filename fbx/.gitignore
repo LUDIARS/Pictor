@@ -1,0 +1,11 @@
+# Redistributable character assets are distributed separately (zip) to
+# keep the repository lean. Do not commit FBX / texture binaries here.
+*.fbx
+*.tga
+*.png
+*.jpg
+*.jpeg
+*.psd
+*.meta
+# Viewer cache generated at runtime.
+*/.cache/

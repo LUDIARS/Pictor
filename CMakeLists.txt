@@ -198,9 +198,13 @@ if(PICTOR_BUILD_DEMO)
         COMMENT "Staging mobile demo profile config"
     )
 
-    # FBX viewer demo (Vulkan + skinning, general-purpose lit shader)
+    # FBX viewer demo (Vulkan + skinning, textured lit shader)
     if(Vulkan_FOUND AND glfw3_FOUND)
-        add_executable(pictor_fbx_viewer demo/fbx_viewer/main.cpp)
+        add_executable(pictor_fbx_viewer
+            demo/fbx_viewer/main.cpp
+            third_party/stb/stb_image_impl.cpp
+        )
+        target_include_directories(pictor_fbx_viewer PRIVATE third_party/stb)
         target_link_libraries(pictor_fbx_viewer PRIVATE pictor)
     endif()
 
@@ -319,6 +323,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.vert
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.frag
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.vert
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.frag
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.vert
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
     )
@@ -387,5 +395,18 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/demo/texture2d/textures)
     )
     if(TARGET pictor_texture2d_demo)
         add_dependencies(pictor_texture2d_demo pictor_texture2d_assets)
+    endif()
+endif()
+
+# Copy fbx_viewer test assets (UnityChan under UCL — see fbx/model1/LICENSE.md).
+if(EXISTS ${CMAKE_SOURCE_DIR}/fbx)
+    add_custom_target(pictor_fbx_assets ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/fbx
+            ${CMAKE_BINARY_DIR}/fbx
+        COMMENT "Copying fbx test assets to build directory"
+    )
+    if(TARGET pictor_fbx_viewer)
+        add_dependencies(pictor_fbx_viewer pictor_fbx_assets)
     endif()
 endif()

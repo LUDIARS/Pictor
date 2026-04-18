@@ -919,7 +919,8 @@ const FBXGeometry::Triangulated* FBXScene::triangulate(FBXObjectId geometry_id) 
 
     t = FBXGeometry::Triangulated{};
 
-    // Split polygon_vertex_index into polygons using the FBX "XOR -1" rule.
+    // Split polygon_vertex_index into polygons using the FBX "XOR -1" rule:
+    // the last index of each polygon is encoded as ~index (bitwise NOT).
     std::vector<std::pair<int32_t, int32_t>> polygons;  // (start, count)
     int32_t start = 0;
     for (size_t i = 0; i < g.polygon_vertex_index.size(); ++i) {
@@ -928,68 +929,121 @@ const FBXGeometry::Triangulated* FBXScene::triangulate(FBXObjectId geometry_id) 
             start = static_cast<int32_t>(i + 1);
         }
     }
+    // Tolerate exports that forget to terminate the final polygon; pick it up
+    // as a whole trailing run.
+    if (start < static_cast<int32_t>(g.polygon_vertex_index.size())) {
+        polygons.emplace_back(start, static_cast<int32_t>(g.polygon_vertex_index.size()) - start);
+    }
 
     auto vi = [&](int32_t i) -> int32_t {
+        if (i < 0 || i >= static_cast<int32_t>(g.polygon_vertex_index.size())) return -1;
         int32_t v = g.polygon_vertex_index[i];
         return v < 0 ? (~v) : v;
+    };
+
+    const int32_t pv_count = static_cast<int32_t>(g.polygon_vertex_index.size());
+    const int32_t v_count  = static_cast<int32_t>(g.positions.size());
+
+    // Pick a sensible default src index based on which mapping mode fits the
+    // data sizes. Some FBX exporters omit MappingInformationType entirely, or
+    // set it to a value we don't recognize. We fall back to whichever of
+    // (pv_index, vertex_index) lands in-range for the data size.
+    auto fit_src = [&](int32_t pv_index, int32_t poly_index, int32_t vertex_index,
+                       int32_t data_size, FBXMappingMode mapping) -> int32_t {
+        switch (mapping) {
+            case FBXMappingMode::BY_POLYGON_VERTEX: return pv_index;
+            case FBXMappingMode::BY_VERTEX:         return vertex_index;
+            case FBXMappingMode::BY_POLYGON:        return poly_index;
+            case FBXMappingMode::ALL_SAME:          return 0;
+            default: break;
+        }
+        // Heuristic fallback: match by data size.
+        if (data_size == pv_count) return pv_index;
+        if (data_size == v_count)  return vertex_index;
+        if (data_size == 1)        return 0;
+        return pv_index;  // final fallback
     };
 
     // Resolve per-tri-vertex attribute fetch helpers.
     auto resolve_normal = [&](int32_t pv_index, int32_t poly_index, int32_t vertex_index) -> float3 {
         if (g.normals.empty()) return {0, 0, 0};
         const FBXLayerElement<float3>& le = g.normals.front();
-        int32_t src = 0;
-        switch (le.mapping) {
-            case FBXMappingMode::BY_POLYGON_VERTEX: src = pv_index; break;
-            case FBXMappingMode::BY_VERTEX:         src = vertex_index; break;
-            case FBXMappingMode::BY_POLYGON:        src = poly_index; break;
-            case FBXMappingMode::ALL_SAME:          src = 0; break;
-            default: break;
-        }
+        const int32_t data_size = static_cast<int32_t>(le.data.size());
+        int32_t src = fit_src(pv_index, poly_index, vertex_index, data_size, le.mapping);
+        // IndexToDirect: the data size == unique-value count, index[] size
+        // matches the mapping count; look up via index[src] -> data[di].
         if (le.reference == FBXReferenceMode::INDEX_TO_DIRECT && !le.index.empty()) {
-            if (src < 0 || src >= static_cast<int32_t>(le.index.size())) return {};
-            int32_t di = le.index[src];
-            if (di < 0 || di >= static_cast<int32_t>(le.data.size())) return {};
+            if (src < 0 || src >= static_cast<int32_t>(le.index.size())) {
+                // Fallback: try vertex_index if pv_index was chosen but doesn't fit.
+                if (vertex_index >= 0 && vertex_index < static_cast<int32_t>(le.index.size())) src = vertex_index;
+                else return {0, 0, 0};
+            }
+            const int32_t di = le.index[src];
+            if (di < 0 || di >= data_size) return {0, 0, 0};
             return le.data[di];
         }
-        if (src < 0 || src >= static_cast<int32_t>(le.data.size())) return {};
+        // Direct (or INDEX_TO_DIRECT with empty index): data[src] directly.
+        if (src < 0 || src >= data_size) {
+            // Final fallback: try vertex_index.
+            if (vertex_index >= 0 && vertex_index < data_size) return le.data[vertex_index];
+            return {0, 0, 0};
+        }
         return le.data[src];
     };
     auto resolve_color = [&](int32_t pv_index, int32_t poly_index, int32_t vertex_index) -> float4 {
         if (g.colors.empty()) return {1, 1, 1, 1};
         const FBXLayerElement<float4>& le = g.colors.front();
-        int32_t src = 0;
-        switch (le.mapping) {
-            case FBXMappingMode::BY_POLYGON_VERTEX: src = pv_index; break;
-            case FBXMappingMode::BY_VERTEX:         src = vertex_index; break;
-            case FBXMappingMode::BY_POLYGON:        src = poly_index; break;
-            case FBXMappingMode::ALL_SAME:          src = 0; break;
-            default: break;
-        }
+        const int32_t data_size = static_cast<int32_t>(le.data.size());
+        int32_t src = fit_src(pv_index, poly_index, vertex_index, data_size, le.mapping);
         if (le.reference == FBXReferenceMode::INDEX_TO_DIRECT && !le.index.empty()) {
-            if (src < 0 || src >= static_cast<int32_t>(le.index.size())) return {1, 1, 1, 1};
-            int32_t di = le.index[src];
-            if (di < 0 || di >= static_cast<int32_t>(le.data.size())) return {1, 1, 1, 1};
+            if (src < 0 || src >= static_cast<int32_t>(le.index.size())) {
+                if (vertex_index >= 0 && vertex_index < static_cast<int32_t>(le.index.size())) src = vertex_index;
+                else return {1, 1, 1, 1};
+            }
+            const int32_t di = le.index[src];
+            if (di < 0 || di >= data_size) return {1, 1, 1, 1};
             return le.data[di];
         }
-        if (src < 0 || src >= static_cast<int32_t>(le.data.size())) return {1, 1, 1, 1};
+        if (src < 0 || src >= data_size) {
+            if (vertex_index >= 0 && vertex_index < data_size) return le.data[vertex_index];
+            return {1, 1, 1, 1};
+        }
         return le.data[src];
     };
     auto resolve_uv0 = [&](int32_t pv_index, int32_t vertex_index) -> std::pair<float, float> {
         if (g.uv_sets.empty()) return {0, 0};
         const FBXGeometry::UVSet& uv = g.uv_sets.front();
+        const int32_t u_size = static_cast<int32_t>(uv.u.size());
+        // UVs are almost always per-pv-index (ByPolygonVertex + IndexToDirect),
+        // but handle ByVertex and Direct variants as well.
         int32_t src = 0;
         switch (uv.mapping) {
             case FBXMappingMode::BY_POLYGON_VERTEX: src = pv_index; break;
             case FBXMappingMode::BY_VERTEX:         src = vertex_index; break;
-            default: break;
+            case FBXMappingMode::ALL_SAME:          src = 0; break;
+            default:
+                // Heuristic: IndexToDirect with index sized to pv_count implies
+                // BY_POLYGON_VERTEX; direct with u_size == v_count implies BY_VERTEX.
+                if (!uv.index.empty()) {
+                    if (static_cast<int32_t>(uv.index.size()) == pv_count) src = pv_index;
+                    else if (static_cast<int32_t>(uv.index.size()) == v_count) src = vertex_index;
+                    else src = pv_index;
+                } else {
+                    if (u_size == v_count) src = vertex_index;
+                    else src = pv_index;
+                }
+                break;
         }
         int32_t di = src;
-        if (uv.reference == FBXReferenceMode::INDEX_TO_DIRECT) {
-            if (src < 0 || src >= static_cast<int32_t>(uv.index.size())) return {0, 0};
-            di = uv.index[src];
+        if (uv.reference == FBXReferenceMode::INDEX_TO_DIRECT && !uv.index.empty()) {
+            if (src < 0 || src >= static_cast<int32_t>(uv.index.size())) {
+                if (vertex_index >= 0 && vertex_index < static_cast<int32_t>(uv.index.size())) di = uv.index[vertex_index];
+                else return {0, 0};
+            } else {
+                di = uv.index[src];
+            }
         }
-        if (di < 0 || di >= static_cast<int32_t>(uv.u.size())) return {0, 0};
+        if (di < 0 || di >= u_size) return {0, 0};
         return {uv.u[di], uv.v[di]};
     };
     auto resolve_material_per_polygon = [&](int32_t poly_index) -> int32_t {
@@ -1015,7 +1069,7 @@ const FBXGeometry::Triangulated* FBXScene::triangulate(FBXObjectId geometry_id) 
             int32_t c = vi(c_pv);
 
             auto push = [&](int32_t pv_index, int32_t vertex_index) {
-                t.positions.push_back(vertex_index < static_cast<int32_t>(g.positions.size())
+                t.positions.push_back((vertex_index >= 0 && vertex_index < v_count)
                                       ? g.positions[vertex_index]
                                       : float3{});
                 t.normals.push_back(resolve_normal(pv_index, static_cast<int32_t>(pi), vertex_index));
@@ -1047,8 +1101,21 @@ float4x4 FBXScene::evaluate_local_transform(FBXObjectId model_id) const {
     if (!obj || !obj->model) return mat_identity();
     const FBXModel& m = *obj->model;
 
-    // FBX SDK transform assembly:
-    //   M = T * Roff * Rp * Rpre * R * Rpost^-1 * Rp^-1 * Soff * Sp * S * Sp^-1
+    // FBX SDK specifies the local transform in column-vector convention:
+    //   M_col = T * Roff * Rp * Rpre * R * Rpost^-1 * Rp^-1 * Soff * Sp * S * Sp^-1
+    // i.e. applying Sp^-1 first and T last to a column vector.
+    //
+    // Pictor stores matrices in row-vector / row-major form (translation at
+    // m[3][*], `v_row * M` is the application). To produce the same spatial
+    // transformation in row-vector convention, the composition must be
+    // reversed so that Sp^-1 is applied first and T last when a row vector
+    // enters `v_row * M` from the left:
+    //
+    //   M_row = Sp^-1 * S * Sp * Soff * Rp^-1 * Rpost^-1 * R * Rpre * Rp * Roff * T
+    //
+    // Each mat_mul(A, B) returns the row-vector matrix representing "apply
+    // A first, then B", so we accumulate by multiplying new factors on the
+    // right in the order above.
     const float4x4 T     = mat_translation(m.translation);
     const float4x4 Roff  = mat_translation(m.rotation_offset);
     const float4x4 Rp    = mat_translation(m.rotation_pivot);
@@ -1062,16 +1129,58 @@ float4x4 FBXScene::evaluate_local_transform(FBXObjectId model_id) const {
     const float4x4 S     = mat_scale(m.scaling);
     const float4x4 Sp_inv = mat_translation({-m.scaling_pivot.x, -m.scaling_pivot.y, -m.scaling_pivot.z});
 
-    float4x4 local = mat_mul(T, Roff);
-    local = mat_mul(local, Rp);
-    local = mat_mul(local, Rpre);
-    local = mat_mul(local, R);
-    local = mat_mul(local, Rpost_inv);
-    local = mat_mul(local, Rp_inv);
-    local = mat_mul(local, Soff);
-    local = mat_mul(local, Sp);
+    float4x4 local = Sp_inv;
     local = mat_mul(local, S);
-    local = mat_mul(local, Sp_inv);
+    local = mat_mul(local, Sp);
+    local = mat_mul(local, Soff);
+    local = mat_mul(local, Rp_inv);
+    local = mat_mul(local, Rpost_inv);
+    local = mat_mul(local, R);
+    local = mat_mul(local, Rpre);
+    local = mat_mul(local, Rp);
+    local = mat_mul(local, Roff);
+    local = mat_mul(local, T);
+    return local;
+}
+
+float4x4 FBXScene::evaluate_local_transform_with_anim(FBXObjectId model_id,
+                                                       const float3* anim_translation,
+                                                       const float3* anim_rotation_deg,
+                                                       const float3* anim_scaling) const
+{
+    const FBXObject* obj = get(model_id);
+    if (!obj || !obj->model) return mat_identity();
+    const FBXModel& m = *obj->model;
+
+    const float3 T_vec = anim_translation  ? *anim_translation  : m.translation;
+    const float3 R_vec = anim_rotation_deg ? *anim_rotation_deg : m.rotation;
+    const float3 S_vec = anim_scaling      ? *anim_scaling      : m.scaling;
+
+    const float4x4 T     = mat_translation(T_vec);
+    const float4x4 Roff  = mat_translation(m.rotation_offset);
+    const float4x4 Rp    = mat_translation(m.rotation_pivot);
+    const float4x4 Rpre  = mat_rotation_euler(m.pre_rotation,  FBXRotationOrder::XYZ);
+    const float4x4 R     = mat_rotation_euler(R_vec,           m.rotation_order);
+    const float4x4 Rpost = mat_rotation_euler(m.post_rotation, FBXRotationOrder::XYZ);
+    const float4x4 Rp_inv    = mat_translation({-m.rotation_pivot.x, -m.rotation_pivot.y, -m.rotation_pivot.z});
+    const float4x4 Rpost_inv = mat_inverse_rigid(Rpost);
+    const float4x4 Soff  = mat_translation(m.scaling_offset);
+    const float4x4 Sp    = mat_translation(m.scaling_pivot);
+    const float4x4 S     = mat_scale(S_vec);
+    const float4x4 Sp_inv = mat_translation({-m.scaling_pivot.x, -m.scaling_pivot.y, -m.scaling_pivot.z});
+
+    // Row-vector composition: reverse order so T is applied last.
+    float4x4 local = Sp_inv;
+    local = mat_mul(local, S);
+    local = mat_mul(local, Sp);
+    local = mat_mul(local, Soff);
+    local = mat_mul(local, Rp_inv);
+    local = mat_mul(local, Rpost_inv);
+    local = mat_mul(local, R);
+    local = mat_mul(local, Rpre);
+    local = mat_mul(local, Rp);
+    local = mat_mul(local, Roff);
+    local = mat_mul(local, T);
     return local;
 }
 

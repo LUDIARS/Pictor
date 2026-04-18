@@ -378,6 +378,13 @@ public:
     /// FBX local transform assembly following the SDK specification:
     /// T * Roff * Rp * Rpre * R * Rpost^-1 * Rp^-1 * Soff * Sp * S * Sp^-1
     float4x4 evaluate_local_transform(FBXObjectId model_id) const;
+    /// Same as evaluate_local_transform but with T / R / S optionally
+    /// substituted by animated samples (e.g. per-keyframe). Null pointers
+    /// keep the model's static value.
+    float4x4 evaluate_local_transform_with_anim(FBXObjectId model_id,
+                                                const float3* anim_translation,
+                                                const float3* anim_rotation_deg,
+                                                const float3* anim_scaling) const;
     /// Accumulate from root Model. Returns identity if id is not a Model.
     float4x4 evaluate_world_transform(FBXObjectId model_id) const;
 
