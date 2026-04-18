@@ -26,6 +26,18 @@ AnimationFormat format_from_doc(const FBXDocument& doc, bool ok) {
 }
 
 /// Convert FBX Euler (degrees) to Quaternion honoring rotation order.
+///
+/// FBX rotation order XYZ means "apply X first, then Y, then Z", i.e.
+/// `v' = v * Rx * Ry * Rz` in Pictor's row-vector / row-major matrix
+/// convention (see mat_rotation_euler in fbx_scene.cpp).
+///
+/// Pictor's Hamilton quaternion product `q_a * q_b` applied as `q v q^-1`
+/// applies q_b first, then q_a. Equivalently, `(q_a * q_b).to_matrix()` in
+/// row-major is `M_b * M_a` (b is the left operand of row-vector composition).
+///
+/// So the quaternion that reproduces `Rx * Ry * Rz` in row-vector composition
+/// is `qz * qy * qx`, **not** `qx * qy * qz`. All orders are simply the
+/// reverse of the matrix-order product.
 Quaternion euler_deg_to_quat(const float3& deg, FBXRotationOrder order) {
     const float rx = deg.x * kDegToRadF;
     const float ry = deg.y * kDegToRadF;
@@ -34,14 +46,74 @@ Quaternion euler_deg_to_quat(const float3& deg, FBXRotationOrder order) {
     const Quaternion qy = Quaternion::from_axis_angle({0, 1, 0}, ry);
     const Quaternion qz = Quaternion::from_axis_angle({0, 0, 1}, rz);
     switch (order) {
-        case FBXRotationOrder::XYZ: return qx * qy * qz;
-        case FBXRotationOrder::XZY: return qx * qz * qy;
-        case FBXRotationOrder::YZX: return qy * qz * qx;
-        case FBXRotationOrder::YXZ: return qy * qx * qz;
-        case FBXRotationOrder::ZXY: return qz * qx * qy;
-        case FBXRotationOrder::ZYX: return qz * qy * qx;
-        default:                    return qx * qy * qz;
+        case FBXRotationOrder::XYZ: return qz * qy * qx;
+        case FBXRotationOrder::XZY: return qy * qz * qx;
+        case FBXRotationOrder::YZX: return qx * qz * qy;
+        case FBXRotationOrder::YXZ: return qz * qx * qy;
+        case FBXRotationOrder::ZXY: return qy * qx * qz;
+        case FBXRotationOrder::ZYX: return qx * qy * qz;
+        default:                    return qz * qy * qx;
     }
+}
+
+/// Decompose an affine row-major row-vector matrix into T/R/S.
+/// Assumes no shear (FBX local transforms have none when pivots/offsets
+/// compose cleanly). Row lengths are the per-axis scale; the normalized
+/// rows form the rotation basis that `Quaternion::to_matrix()` produces.
+void decompose_trs_row_major(const float4x4& m, Transform& out) {
+    out.translation = {m.m[3][0], m.m[3][1], m.m[3][2]};
+
+    float3 r0{m.m[0][0], m.m[0][1], m.m[0][2]};
+    float3 r1{m.m[1][0], m.m[1][1], m.m[1][2]};
+    float3 r2{m.m[2][0], m.m[2][1], m.m[2][2]};
+    auto length_of = [](const float3& v) {
+        return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    };
+    float sx = length_of(r0);
+    float sy = length_of(r1);
+    float sz = length_of(r2);
+    out.scale = {sx, sy, sz};
+
+    auto normed = [](float3 v, float s) -> float3 {
+        return s > 1e-8f ? float3{v.x / s, v.y / s, v.z / s} : float3{1, 0, 0};
+    };
+    r0 = normed(r0, sx);
+    r1 = normed(r1, sy);
+    r2 = normed(r2, sz);
+
+    // Pictor's Quaternion::to_matrix produces rows:
+    //   r0 = (1-2(yy+zz), 2(xy+wz), 2(xz-wy))
+    //   r1 = (2(xy-wz), 1-2(xx+zz), 2(yz+wx))
+    //   r2 = (2(xz+wy), 2(yz-wx), 1-2(xx+yy))
+    // Invert via trace-based algorithm (Shoemake-style, adapted).
+    float trace = r0.x + r1.y + r2.z;
+    Quaternion q;
+    if (trace > 0.0f) {
+        float s = std::sqrt(trace + 1.0f) * 2.0f;   // s = 4*w
+        q.w = 0.25f * s;
+        q.x = (r1.z - r2.y) / s;                    // (yz+wx) - (yz-wx) = 2wx, scaled
+        q.y = (r2.x - r0.z) / s;                    // (xz+wy) - (xz-wy) = 2wy
+        q.z = (r0.y - r1.x) / s;                    // (xy+wz) - (xy-wz) = 2wz
+    } else if (r0.x > r1.y && r0.x > r2.z) {
+        float s = std::sqrt(1.0f + r0.x - r1.y - r2.z) * 2.0f; // s = 4*x
+        q.x = 0.25f * s;
+        q.y = (r0.y + r1.x) / s;
+        q.z = (r2.x + r0.z) / s;
+        q.w = (r1.z - r2.y) / s;
+    } else if (r1.y > r2.z) {
+        float s = std::sqrt(1.0f + r1.y - r0.x - r2.z) * 2.0f; // s = 4*y
+        q.x = (r0.y + r1.x) / s;
+        q.y = 0.25f * s;
+        q.z = (r1.z + r2.y) / s;
+        q.w = (r2.x - r0.z) / s;
+    } else {
+        float s = std::sqrt(1.0f + r2.z - r0.x - r1.y) * 2.0f; // s = 4*z
+        q.x = (r2.x + r0.z) / s;
+        q.y = (r1.z + r2.y) / s;
+        q.z = 0.25f * s;
+        q.w = (r0.y - r1.x) / s;
+    }
+    out.rotation = q.normalized();
 }
 
 /// Rigid-transform inverse (rotation transpose + -R^T * t).
@@ -211,9 +283,8 @@ void FBXImporter::build_skeleton(const FBXScene& scene, FBXImportResult& out) co
         }
 
         if (obj && obj->model) {
-            b.bind_pose.translation = obj->model->translation;
-            b.bind_pose.rotation    = euler_deg_to_quat(obj->model->rotation, obj->model->rotation_order);
-            b.bind_pose.scale       = obj->model->scaling;
+            const float4x4 local = scene.evaluate_local_transform(id);
+            decompose_trs_row_major(local, b.bind_pose);
         }
 
         auto bt = bone_to_bind.find(id);
@@ -325,10 +396,6 @@ void FBXImporter::build_clips(const FBXScene& scene, FBXImportResult& out) const
             ch.interpolation = InterpolationMode::LINEAR;
             ch.keyframes.reserve(merged.size());
 
-            const FBXObject* model_obj = scene.get(model_id);
-            const FBXRotationOrder order =
-                (model_obj && model_obj->model) ? model_obj->model->rotation_order : FBXRotationOrder::XYZ;
-
             for (int64_t kt : merged) {
                 double sec = FBXScene::ktime_to_seconds(kt);
                 float x = sample_curve(cx, sec, dx);
@@ -337,8 +404,19 @@ void FBXImporter::build_clips(const FBXScene& scene, FBXImportResult& out) const
                 Keyframe k;
                 k.time = static_cast<float>(sec);
                 if (ct == ChannelTarget::ROTATION) {
-                    Quaternion q = euler_deg_to_quat({x, y, z}, order);
-                    k.value[0] = q.x; k.value[1] = q.y; k.value[2] = q.z; k.value[3] = q.w;
+                    // Feed the sampled Euler into the full FBX local
+                    // transform formula (pre/post/pivots honoured), then
+                    // decompose back to T/R/S so the stored quat reproduces
+                    // the correct local rotation via Transform::to_matrix().
+                    const float3 r_anim{x, y, z};
+                    const float4x4 local =
+                        scene.evaluate_local_transform_with_anim(model_id, nullptr, &r_anim, nullptr);
+                    Transform tmp;
+                    decompose_trs_row_major(local, tmp);
+                    k.value[0] = tmp.rotation.x;
+                    k.value[1] = tmp.rotation.y;
+                    k.value[2] = tmp.rotation.z;
+                    k.value[3] = tmp.rotation.w;
                 } else {
                     k.value[0] = x; k.value[1] = y; k.value[2] = z; k.value[3] = 0.0f;
                 }

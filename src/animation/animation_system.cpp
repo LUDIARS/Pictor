@@ -349,6 +349,12 @@ const float4x4* AnimationSystem::get_skinning_matrices(AnimationStateHandle hand
     return it->second->skinning_matrices.data();
 }
 
+const float4x4* AnimationSystem::get_world_matrices(AnimationStateHandle handle) const {
+    auto it = instances_.find(handle);
+    if (it == instances_.end() || it->second->world_matrices.empty()) return nullptr;
+    return it->second->world_matrices.data();
+}
+
 uint32_t AnimationSystem::get_bone_count(AnimationStateHandle handle) const {
     auto it = instances_.find(handle);
     if (it == instances_.end()) return 0;
