@@ -397,3 +397,16 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/demo/texture2d/textures)
         add_dependencies(pictor_texture2d_demo pictor_texture2d_assets)
     endif()
 endif()
+
+# Copy fbx_viewer test assets (UnityChan under UCL — see fbx/model1/LICENSE.md).
+if(EXISTS ${CMAKE_SOURCE_DIR}/fbx)
+    add_custom_target(pictor_fbx_assets ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/fbx
+            ${CMAKE_BINARY_DIR}/fbx
+        COMMENT "Copying fbx test assets to build directory"
+    )
+    if(TARGET pictor_fbx_viewer)
+        add_dependencies(pictor_fbx_viewer pictor_fbx_assets)
+    endif()
+endif()
