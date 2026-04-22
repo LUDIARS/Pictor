@@ -330,11 +330,20 @@ bool VulkanContext::create_logical_device() {
     queue_info.pQueuePriorities = &priority;
 
     VkPhysicalDeviceFeatures features{};
-    // Query supported features and enable tessellation + fillModeNonSolid
     VkPhysicalDeviceFeatures supported;
     vkGetPhysicalDeviceFeatures(physical_device_, &supported);
-    if (supported.tessellationShader) features.tessellationShader = VK_TRUE;
-    if (supported.fillModeNonSolid)  features.fillModeNonSolid  = VK_TRUE;
+    if (supported.tessellationShader)       features.tessellationShader       = VK_TRUE;
+    if (supported.fillModeNonSolid)         features.fillModeNonSolid         = VK_TRUE;
+    // Rive's Vulkan backend (atomic mode) writes to storage buffers from
+    // fragment shaders; enable the feature if the GPU supports it. Without
+    // it, RenderContextVulkanImpl::MakeContext refuses to initialise.
+    if (supported.fragmentStoresAndAtomics) features.fragmentStoresAndAtomics = VK_TRUE;
+    if (supported.vertexPipelineStoresAndAtomics)
+        features.vertexPipelineStoresAndAtomics = VK_TRUE;
+    // Rive also uses these broadly for path clipping / blending variants.
+    if (supported.independentBlend)         features.independentBlend         = VK_TRUE;
+    if (supported.shaderClipDistance)       features.shaderClipDistance       = VK_TRUE;
+    if (supported.dualSrcBlend)             features.dualSrcBlend             = VK_TRUE;
 
     const char* dev_extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 

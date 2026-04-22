@@ -115,14 +115,29 @@ bool load_and_select(RiveRenderer& rive, const std::string& riv_path,
 } // namespace
 
 int main(int argc, char** argv) {
+    // Unbuffered stdout so diagnostic prints reach the terminal / redirect
+    // even when the process is killed with SIGTERM from a test harness.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+    printf("[rive-demo] ==== boot ====\n");
+    printf("[rive-demo] argv[0]=%s  cwd=%s\n",
+           argv[0], std::filesystem::current_path().string().c_str());
+
     std::string rive_dir = resolve_rive_dir();
     if (rive_dir.empty()) {
         fprintf(stderr,
-                "warning: rive/ asset directory not found near the exe cwd.\n"
-                "Samples sample1..sample5.riv are expected next to textures/ / fonts/ /\n"
-                "shaders/ (copied by CMake target `pictor_rive_assets`).\n");
+                "[rive-demo] warning: rive/ asset directory not found.\n"
+                "  tried: ./rive, ../rive, ../../rive (relative to cwd)\n"
+                "  Samples sample1..sample5.riv are expected in the build dir next\n"
+                "  to textures/ / fonts/ / shaders/ (copied by CMake target\n"
+                "  `pictor_rive_assets`).\n");
     } else {
         printf("[rive-demo] sample dir: %s\n", rive_dir.c_str());
+        for (int i = 1; i <= 5; ++i) {
+            std::string p = resolve_sample(i, rive_dir);
+            printf("[rive-demo]   sample%d -> %s\n", i,
+                   p.empty() ? "(not found)" : p.c_str());
+        }
     }
 
     // Argument resolution:
@@ -157,6 +172,7 @@ int main(int argc, char** argv) {
     printf("state machine: %d\n\n", requested_sm);
 
     // ─── 1. GLFW + Vulkan ───────────────────────────────────
+    printf("[rive-demo] creating GLFW window...\n");
     GlfwSurfaceProvider surface;
     GlfwWindowConfig win_cfg;
     win_cfg.width  = 1024;
@@ -164,22 +180,28 @@ int main(int argc, char** argv) {
     win_cfg.title  = "Pictor — Rive Renderer Demo";
     win_cfg.vsync  = true;
     if (!surface.create(win_cfg)) {
-        fprintf(stderr, "GLFW window creation failed\n");
+        fprintf(stderr, "[rive-demo] GLFW window creation failed\n");
         return 1;
     }
+    printf("[rive-demo] GLFW window ok\n");
     glfwSetKeyCallback(surface.glfw_window(), key_callback);
 
+    printf("[rive-demo] initializing VulkanContext...\n");
     VulkanContext vk;
     VulkanContextConfig vk_cfg;
     vk_cfg.app_name   = "Pictor Rive Demo";
     vk_cfg.validation = true;
     if (!vk.initialize(&surface, vk_cfg)) {
-        fprintf(stderr, "Vulkan init failed\n");
+        fprintf(stderr, "[rive-demo] Vulkan init failed\n");
         surface.destroy();
         return 1;
     }
+    printf("[rive-demo] Vulkan ok: extent=%ux%u format=%d\n",
+           vk.swapchain_extent().width, vk.swapchain_extent().height,
+           (int)vk.swapchain_format());
 
     // ─── 2. Rive renderer ──────────────────────────────────
+    printf("[rive-demo] initializing RiveRenderer...\n");
     RiveRenderer rive;
     RiveRenderer::Options opts;
     // Atomic mode is the portable path. Flip to false once Pictor's device
@@ -190,7 +212,7 @@ int main(int argc, char** argv) {
 
     if (!rive.initialize(vk, opts)) {
         fprintf(stderr,
-                "RiveRenderer init failed. Common causes:\n"
+                "[rive-demo] RiveRenderer init failed. Common causes:\n"
                 "  * Pictor was built without PICTOR_ENABLE_RIVE=ON\n"
                 "  * rive-runtime was not built in release mode\n"
                 "  * Required Vulkan device extensions are missing\n");
@@ -198,9 +220,11 @@ int main(int argc, char** argv) {
         surface.destroy();
         return 1;
     }
+    printf("[rive-demo] RiveRenderer initialized\n");
 
     bool using_sm = false;
     if (!load_and_select(rive, riv_path, requested_sm, using_sm)) {
+        fprintf(stderr, "[rive-demo] load_riv_file failed — exiting\n");
         rive.shutdown();
         vk.shutdown();
         surface.destroy();
@@ -211,8 +235,16 @@ int main(int argc, char** argv) {
 
     // ─── 3. Main loop ──────────────────────────────────────
     auto     t_prev         = std::chrono::high_resolution_clock::now();
-    uint64_t frame_number   = 0;
-    uint64_t safe_frame     = 0;
+    // Rive frame accounting:
+    //   currentFrameNumber = the frame about to be recorded
+    //   safeFrameNumber    = largest frame whose GPU work is COMPLETE
+    //                        (Pictor's acquire_next_image waits on the in-flight
+    //                        fence, so at iteration start the previous frame is
+    //                        always complete.)
+    // Start at 1 so safe=0 refers to a synthetic pre-frame that never allocated
+    // anything. This avoids Rive from destroying "frame 0" resources while we
+    // are still recording frame 0.
+    uint64_t frame_number   = 1;
     uint64_t frame_count    = 0;
     int      artboard_index = 0;
 
@@ -262,7 +294,13 @@ int main(int argc, char** argv) {
         rive.advance(dt);
 
         uint32_t image_idx = vk.acquire_next_image();
-        if (image_idx == UINT32_MAX) continue;
+        if (image_idx == UINT32_MAX) {
+            static int miss = 0;
+            if (miss++ < 3) printf("[rive-demo] acquire_next_image returned UINT32_MAX (skip)\n");
+            continue;
+        }
+        if (frame_count < 3) printf("[rive-demo] frame=%llu img_idx=%u\n",
+                                     (unsigned long long)frame_count, image_idx);
 
         VkCommandBuffer cmd = vk.command_buffers()[image_idx];
         vkResetCommandBuffer(cmd, 0);
@@ -284,13 +322,15 @@ int main(int argc, char** argv) {
         // Rive renders and finishes with a layout that depends on the
         // rendering path; the wrapper tracks that internally and emits the
         // correct PRESENT_SRC_KHR transition on our behalf.
+        const uint32_t current_frame = static_cast<uint32_t>(frame_number);
+        const uint32_t safe_frame    = static_cast<uint32_t>(frame_number - 1);
         rive.render(cmd,
                     image,
                     view,
                     vk.swapchain_extent(),
                     vk.swapchain_format(),
-                    static_cast<uint32_t>(frame_number),
-                    static_cast<uint32_t>(safe_frame),
+                    current_frame,
+                    safe_frame,
                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
         vkEndCommandBuffer(cmd);
@@ -312,7 +352,6 @@ int main(int argc, char** argv) {
 
         vk.present(image_idx);
 
-        if (frame_number > 0) safe_frame = frame_number - 1;
         ++frame_number;
         ++frame_count;
 
