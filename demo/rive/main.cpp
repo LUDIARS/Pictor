@@ -1,20 +1,24 @@
 /// Pictor Rive Renderer Demo
 ///
-/// Plays an official .riv file through pictor::RiveRenderer (which wraps
-/// Rive's own GPU renderer). Useful to verify that the Rive runtime
-/// integration — including file import, artboard selection, state machine
-/// advancement, and Vulkan frame plumbing — works end-to-end inside Pictor.
+/// Plays one of the bundled sample `.riv` files through
+/// pictor::RiveRenderer (which wraps Rive's own GPU renderer). The demo
+/// ships 5 samples under `rive/sample1.riv` .. `rive/sample5.riv` next
+/// to the build output (same sibling level as `textures/` / `shaders/`
+/// / `fonts/`), and lets you cycle between them at runtime to verify
+/// that the Rive runtime integration handles file import, artboard
+/// selection, state machine advancement, and Vulkan frame plumbing
+/// end-to-end inside Pictor.
 ///
 /// Usage:
-///   pictor_rive_demo <path/to/file.riv> [state_machine_index]
-///
-/// Official sample .riv files live in rive-runtime/gold/ and
-/// rive-runtime/renderer/path_fiddle/rivs/. Point the demo at any of them.
+///   pictor_rive_demo              — start with sample1.riv
+///   pictor_rive_demo 3            — start with sample3.riv
+///   pictor_rive_demo path.riv     — start with any custom .riv file
 ///
 /// Controls:
-///   Space      — toggle between state machine 0 and animation 0
-///   Left/Right — cycle artboards
-///   Esc        — quit
+///   1..5            — jump to sample{N}.riv from the rive/ folder
+///   Space           — toggle between state machine 0 and animation 0
+///   Left / Right    — cycle artboards within the current file
+///   Esc             — quit
 
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
@@ -25,15 +29,52 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 using namespace pictor;
 
 namespace {
 
+/// Returns the first existing path among several candidates, or empty.
+/// The staged asset directory sits next to the demo exe (copied by
+/// CMake as `pictor_rive_assets`, mirroring `pictor_texture2d_assets`
+/// / `pictor_fonts`), but depending on how the binary is invoked the
+/// cwd may be the exe directory, the build root, or the repo root.
+/// We probe each, in that order.
+std::string resolve_rive_dir() {
+    namespace fs = std::filesystem;
+    const std::vector<fs::path> candidates = {
+        fs::current_path() / "rive",             // cwd/rive
+        fs::current_path() / ".." / "rive",      // Release/.. /rive (= build/rive)
+        fs::current_path() / ".." / ".." / "rive",
+    };
+    for (const auto& p : candidates) {
+        std::error_code ec;
+        if (fs::exists(p, ec) && fs::is_directory(p, ec)) {
+            return fs::absolute(p, ec).string();
+        }
+    }
+    return "";
+}
+
+std::string resolve_sample(int index, const std::string& rive_dir) {
+    if (rive_dir.empty()) return "";
+    char name[64];
+    std::snprintf(name, sizeof(name), "sample%d.riv", index);
+    std::filesystem::path p = std::filesystem::path(rive_dir) / name;
+    std::error_code ec;
+    if (std::filesystem::exists(p, ec)) {
+        return p.string();
+    }
+    return "";
+}
+
 struct Keys {
-    bool toggle_scene = false;
+    bool toggle_scene   = false;
     int  cycle_artboard = 0; // -1, 0, +1
+    int  switch_sample  = 0; // 0 = none, 1..5 = requested index
 };
 static Keys g_keys;
 
@@ -44,26 +85,75 @@ void key_callback(GLFWwindow* w, int key, int /*scan*/, int action, int /*mods*/
     case GLFW_KEY_SPACE:  g_keys.toggle_scene = true;             break;
     case GLFW_KEY_LEFT:   g_keys.cycle_artboard = -1;             break;
     case GLFW_KEY_RIGHT:  g_keys.cycle_artboard = +1;             break;
+    case GLFW_KEY_1:      g_keys.switch_sample = 1;                break;
+    case GLFW_KEY_2:      g_keys.switch_sample = 2;                break;
+    case GLFW_KEY_3:      g_keys.switch_sample = 3;                break;
+    case GLFW_KEY_4:      g_keys.switch_sample = 4;                break;
+    case GLFW_KEY_5:      g_keys.switch_sample = 5;                break;
     default: break;
     }
+}
+
+/// Load a .riv and (re)configure state machine / animation selection.
+/// Returns true on success and prints a one-line descriptor.
+bool load_and_select(RiveRenderer& rive, const std::string& riv_path,
+                     int requested_sm, bool& using_sm_out) {
+    if (!rive.load_riv_file(riv_path)) {
+        fprintf(stderr, "[rive-demo] failed to load %s\n", riv_path.c_str());
+        return false;
+    }
+    // Prefer the requested state machine; fall back to animation 0.
+    using_sm_out = rive.set_state_machine(requested_sm);
+    if (!using_sm_out) {
+        rive.set_animation(0);
+    }
+    printf("[rive-demo] loaded: %s (%s)\n", riv_path.c_str(),
+           using_sm_out ? "state-machine 0" : "animation 0");
+    return true;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
+    std::string rive_dir = resolve_rive_dir();
+    if (rive_dir.empty()) {
         fprintf(stderr,
-                "usage: %s <path/to/file.riv> [state_machine_index]\n\n"
-                "Tip: official sample .riv files ship with rive-runtime under\n"
-                "  rive-runtime/gold/ and rive-runtime/renderer/path_fiddle/rivs/\n",
+                "warning: rive/ asset directory not found near the exe cwd.\n"
+                "Samples sample1..sample5.riv are expected next to textures/ / fonts/ /\n"
+                "shaders/ (copied by CMake target `pictor_rive_assets`).\n");
+    } else {
+        printf("[rive-demo] sample dir: %s\n", rive_dir.c_str());
+    }
+
+    // Argument resolution:
+    //   (none)       → sample1.riv (if dir found)
+    //   <digit 1-5>  → sample<N>.riv
+    //   <path>       → literal path
+    std::string riv_path;
+    int current_sample_idx = 0;  // 0 = custom / none, 1..5 = sample index
+    if (argc >= 2) {
+        std::string a = argv[1];
+        if (a.size() == 1 && a[0] >= '1' && a[0] <= '5') {
+            current_sample_idx = a[0] - '0';
+            riv_path = resolve_sample(current_sample_idx, rive_dir);
+        } else {
+            riv_path = a;
+        }
+    } else if (!rive_dir.empty()) {
+        current_sample_idx = 1;
+        riv_path = resolve_sample(1, rive_dir);
+    }
+    if (riv_path.empty()) {
+        fprintf(stderr,
+                "usage: %s [<1..5> | <path/to/file.riv>]\n\n"
+                "Built-in samples are installed under `<build-dir>/rive/sample{1..5}.riv`.\n",
                 argv[0]);
         return 1;
     }
-    const char* riv_path = argv[1];
-    int requested_sm    = (argc >= 3) ? std::atoi(argv[2]) : 0;
+    int requested_sm = (argc >= 3) ? std::atoi(argv[2]) : 0;
 
     printf("=== Pictor Rive Renderer Demo ===\n");
-    printf("file: %s\n", riv_path);
+    printf("file: %s\n", riv_path.c_str());
     printf("state machine: %d\n\n", requested_sm);
 
     // ─── 1. GLFW + Vulkan ───────────────────────────────────
@@ -109,23 +199,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!rive.load_riv_file(riv_path)) {
-        fprintf(stderr, "failed to load .riv\n");
+    bool using_sm = false;
+    if (!load_and_select(rive, riv_path, requested_sm, using_sm)) {
         rive.shutdown();
         vk.shutdown();
         surface.destroy();
         return 1;
     }
 
-    // Prefer the requested state machine; fall back to animation 0.
-    bool using_sm = rive.set_state_machine(requested_sm);
-    if (!using_sm) {
-        using_sm = rive.set_animation(0);
-        printf("(no state machine %d — falling back to animation 0)\n",
-               requested_sm);
-    }
-
-    printf("Controls: Space=toggle scene, Left/Right=cycle artboard, Esc=quit\n\n");
+    printf("Controls: 1..5=sample, Space=toggle scene, Left/Right=cycle artboard, Esc=quit\n\n");
 
     // ─── 3. Main loop ──────────────────────────────────────
     auto     t_prev         = std::chrono::high_resolution_clock::now();
@@ -142,7 +224,21 @@ int main(int argc, char** argv) {
         t_prev     = t_now;
         if (dt > 0.1f) dt = 0.1f; // clamp huge hitches
 
-        // Handle input since last frame
+        // Handle sample switch
+        if (g_keys.switch_sample != 0) {
+            int want = g_keys.switch_sample;
+            g_keys.switch_sample = 0;
+            if (want != current_sample_idx) {
+                std::string p = resolve_sample(want, rive_dir);
+                if (p.empty()) {
+                    fprintf(stderr, "[rive-demo] sample%d.riv not found in %s\n",
+                            want, rive_dir.c_str());
+                } else if (load_and_select(rive, p, requested_sm, using_sm)) {
+                    current_sample_idx = want;
+                    artboard_index     = 0;
+                }
+            }
+        }
         if (g_keys.toggle_scene) {
             g_keys.toggle_scene = false;
             using_sm = !using_sm;
@@ -175,10 +271,7 @@ int main(int argc, char** argv) {
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(cmd, &bi);
 
-        VkImage     image = nullptr; // VulkanContext only exposes views; we
-                                     // look up the image via swapchain below.
-        // The current Pictor VulkanContext doesn't expose swapchain_images()
-        // directly — use vkGetSwapchainImagesKHR on the fly.
+        VkImage image = nullptr;
         {
             uint32_t count = 0;
             vkGetSwapchainImagesKHR(vk.device(), vk.swapchain(), &count, nullptr);
@@ -219,11 +312,6 @@ int main(int argc, char** argv) {
 
         vk.present(image_idx);
 
-        // Rive uses currentFrameNumber as a monotonically increasing id and
-        // safeFrameNumber as "last frame whose resources have been retired by
-        // the GPU". With a single-fence-per-frame model we wait on the fence
-        // at the top of the next iteration's acquire; that means by the time
-        // we advance frame_number, (frame_number - 1) is safe.
         if (frame_number > 0) safe_frame = frame_number - 1;
         ++frame_number;
         ++frame_count;
