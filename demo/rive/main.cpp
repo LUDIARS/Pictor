@@ -33,6 +33,13 @@
 #include <string>
 #include <vector>
 
+// Diagnostic logs in Debug builds only. Release = silent.
+#ifdef NDEBUG
+#  define DEMO_DBG(...) ((void)0)
+#else
+#  define DEMO_DBG(...) std::printf(__VA_ARGS__)
+#endif
+
 using namespace pictor;
 
 namespace {
@@ -107,7 +114,7 @@ bool load_and_select(RiveRenderer& rive, const std::string& riv_path,
     if (!using_sm_out) {
         rive.set_animation(0);
     }
-    printf("[rive-demo] loaded: %s (%s)\n", riv_path.c_str(),
+    DEMO_DBG("[rive-demo] loaded: %s (%s)\n", riv_path.c_str(),
            using_sm_out ? "state-machine 0" : "animation 0");
     return true;
 }
@@ -119,8 +126,8 @@ int main(int argc, char** argv) {
     // even when the process is killed with SIGTERM from a test harness.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
-    printf("[rive-demo] ==== boot ====\n");
-    printf("[rive-demo] argv[0]=%s  cwd=%s\n",
+    DEMO_DBG("[rive-demo] ==== boot ====\n");
+    DEMO_DBG("[rive-demo] argv[0]=%s  cwd=%s\n",
            argv[0], std::filesystem::current_path().string().c_str());
 
     std::string rive_dir = resolve_rive_dir();
@@ -132,10 +139,10 @@ int main(int argc, char** argv) {
                 "  to textures/ / fonts/ / shaders/ (copied by CMake target\n"
                 "  `pictor_rive_assets`).\n");
     } else {
-        printf("[rive-demo] sample dir: %s\n", rive_dir.c_str());
+        DEMO_DBG("[rive-demo] sample dir: %s\n", rive_dir.c_str());
         for (int i = 1; i <= 5; ++i) {
             std::string p = resolve_sample(i, rive_dir);
-            printf("[rive-demo]   sample%d -> %s\n", i,
+            DEMO_DBG("[rive-demo]   sample%d -> %s\n", i,
                    p.empty() ? "(not found)" : p.c_str());
         }
     }
@@ -172,7 +179,7 @@ int main(int argc, char** argv) {
     printf("state machine: %d\n\n", requested_sm);
 
     // ─── 1. GLFW + Vulkan ───────────────────────────────────
-    printf("[rive-demo] creating GLFW window...\n");
+    DEMO_DBG("[rive-demo] creating GLFW window...\n");
     GlfwSurfaceProvider surface;
     GlfwWindowConfig win_cfg;
     win_cfg.width  = 1024;
@@ -183,10 +190,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[rive-demo] GLFW window creation failed\n");
         return 1;
     }
-    printf("[rive-demo] GLFW window ok\n");
+    DEMO_DBG("[rive-demo] GLFW window ok\n");
     glfwSetKeyCallback(surface.glfw_window(), key_callback);
 
-    printf("[rive-demo] initializing VulkanContext...\n");
+    DEMO_DBG("[rive-demo] initializing VulkanContext...\n");
     VulkanContext vk;
     VulkanContextConfig vk_cfg;
     vk_cfg.app_name   = "Pictor Rive Demo";
@@ -196,12 +203,12 @@ int main(int argc, char** argv) {
         surface.destroy();
         return 1;
     }
-    printf("[rive-demo] Vulkan ok: extent=%ux%u format=%d\n",
+    DEMO_DBG("[rive-demo] Vulkan ok: extent=%ux%u format=%d\n",
            vk.swapchain_extent().width, vk.swapchain_extent().height,
            (int)vk.swapchain_format());
 
     // ─── 2. Rive renderer ──────────────────────────────────
-    printf("[rive-demo] initializing RiveRenderer...\n");
+    DEMO_DBG("[rive-demo] initializing RiveRenderer...\n");
     RiveRenderer rive;
     RiveRenderer::Options opts;
     // Atomic mode is the portable path. Flip to false once Pictor's device
@@ -220,7 +227,7 @@ int main(int argc, char** argv) {
         surface.destroy();
         return 1;
     }
-    printf("[rive-demo] RiveRenderer initialized\n");
+    DEMO_DBG("[rive-demo] RiveRenderer initialized\n");
 
     bool using_sm = false;
     if (!load_and_select(rive, riv_path, requested_sm, using_sm)) {
@@ -296,10 +303,10 @@ int main(int argc, char** argv) {
         uint32_t image_idx = vk.acquire_next_image();
         if (image_idx == UINT32_MAX) {
             static int miss = 0;
-            if (miss++ < 3) printf("[rive-demo] acquire_next_image returned UINT32_MAX (skip)\n");
+            if (miss++ < 3) DEMO_DBG("[rive-demo] acquire_next_image returned UINT32_MAX (skip)\n");
             continue;
         }
-        if (frame_count < 3) printf("[rive-demo] frame=%llu img_idx=%u\n",
+        if (frame_count < 3) DEMO_DBG("[rive-demo] frame=%llu img_idx=%u\n",
                                      (unsigned long long)frame_count, image_idx);
 
         VkCommandBuffer cmd = vk.command_buffers()[image_idx];
@@ -356,7 +363,7 @@ int main(int argc, char** argv) {
         ++frame_count;
 
         if (frame_count % 120 == 0) {
-            printf("[frame %llu] %.1f fps\n",
+            DEMO_DBG("[frame %llu] %.1f fps\n",
                    static_cast<unsigned long long>(frame_count),
                    1.0f / dt);
         }
