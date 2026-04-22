@@ -9,6 +9,9 @@ option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
+option(PICTOR_ENABLE_RIVE         "Enable Rive Renderer integration (requires prebuilt rive-runtime; see cmake/FindRive.cmake)" OFF)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # --- Vulkan (requires Vulkan SDK to be installed) ---
 find_package(Vulkan QUIET)
@@ -128,6 +131,9 @@ add_library(pictor STATIC
     src/animation/vector_animation.cpp
     src/animation/animation_system.cpp
 
+    # Vector (Rive Renderer integration)
+    src/vector/rive_renderer.cpp
+
     # UI Overlay
     src/ui/screen_overlay_group.cpp
     src/ui/ui_overlay_pipeline.cpp
@@ -159,6 +165,19 @@ endif()
 
 if(PICTOR_USE_LARGE_PAGES)
     target_compile_definitions(pictor PRIVATE PICTOR_LARGE_PAGES=1)
+endif()
+
+# ─── Rive Renderer (optional) ────────────────────────────────
+# Rive's own build is premake5-based; we consume it as a prebuilt static
+# library. User workflow:
+#   git clone https://github.com/rive-app/rive-runtime
+#   cd rive-runtime && ./build.sh release
+#   cmake -DPICTOR_ENABLE_RIVE=ON -DPICTOR_RIVE_DIR=/path/to/rive-runtime ...
+if(PICTOR_ENABLE_RIVE)
+    find_package(Rive REQUIRED)
+    target_link_libraries(pictor PUBLIC Rive::Rive)
+    target_compile_definitions(pictor PUBLIC PICTOR_HAS_RIVE=1)
+    message(STATUS "Pictor: Rive Renderer enabled (dir=${PICTOR_RIVE_DIR}, config=${PICTOR_RIVE_CONFIG})")
 endif()
 
 # Platform-specific flags
@@ -228,6 +247,13 @@ if(PICTOR_BUILD_DEMO)
         # Post-process demo
         add_executable(pictor_postprocess_demo demo/postprocess/main.cpp)
         target_link_libraries(pictor_postprocess_demo PRIVATE pictor)
+
+        # Rive Renderer demo (plays an official .riv file through pictor::RiveRenderer).
+        # Always builds so Pictor's CI catches compile-time regressions in the
+        # demo — when PICTOR_ENABLE_RIVE is OFF, `rive.initialize()` returns
+        # false and the demo exits cleanly at startup.
+        add_executable(pictor_rive_demo demo/rive/main.cpp)
+        target_link_libraries(pictor_rive_demo PRIVATE pictor)
 
         # 2D Texture rendering demo
         add_executable(pictor_texture2d_demo
