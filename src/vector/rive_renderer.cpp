@@ -20,6 +20,9 @@
 // Pictor consumers never include them.
 #include "rive/artboard.hpp"
 #include "rive/file.hpp"
+#include "rive/layout.hpp"
+#include "rive/math/aabb.hpp"
+#include "rive/math/mat2d.hpp"
 #include "rive/renderer.hpp"
 #include "rive/scene.hpp"
 #include "rive/animation/state_machine_instance.hpp"
@@ -165,13 +168,21 @@ bool RiveRenderer::initialize(VulkanContext& vk_ctx, const Options& opts) {
     features.fragmentStoresAndAtomics
                                    = probed.fragmentStoresAndAtomics == VK_TRUE;
     features.shaderClipDistance    = probed.shaderClipDistance     == VK_TRUE;
-    // The two optional extension-backed features stay off unless the host
-    // explicitly enables VK_EXT_rasterization_order_attachment_access or
-    // VK_EXT_fragment_shader_interlock, which Pictor doesn't today.
+    // Propagate the two extension-backed GPU paths that Pictor's
+    // VulkanContext detected. When either is on Rive picks the faster
+    // single-pass coverage mode instead of atomic, which cuts CPU record
+    // work (fewer binds + one less compute pass per frame).
+    features.rasterizationOrderColorAttachmentAccess =
+        vk_ctx.has_rasterization_order_attachment_access();
+    features.fragmentShaderPixelInterlock =
+        vk_ctx.has_fragment_shader_interlock();
 
-    RIVE_DBG("[Rive] features: indepBlend=%d fillNonSolid=%d fragStores=%d shaderClip=%d\n",
+    RIVE_DBG("[Rive] features: indepBlend=%d fillNonSolid=%d fragStores=%d shaderClip=%d "
+             "ROV=%d interlock=%d\n",
            features.independentBlend, features.fillModeNonSolid,
-           features.fragmentStoresAndAtomics, features.shaderClipDistance);
+           features.fragmentStoresAndAtomics, features.shaderClipDistance,
+           features.rasterizationOrderColorAttachmentAccess,
+           features.fragmentShaderPixelInterlock);
     RIVE_DBG("[Rive] calling RenderContextVulkanImpl::MakeContext...\n");
     impl_->render_context = rive::gpu::RenderContextVulkanImpl::MakeContext(
         impl_->vk_instance,
@@ -442,9 +453,36 @@ bool RiveRenderer::render(VkCommandBuffer cmd,
     if (verbose) RIVE_DBG("[Rive] beginFrame\n");
     impl_->render_context->beginFrame(std::move(frame_desc));
 
-    // Draw the artboard.
+    // Draw the artboard. The artboard has a fixed native size (baked into
+    // the .riv) that is almost never equal to the caller's render target.
+    // Apply a fit transform so the content fills the target the way the
+    // caller asked — without this the artboard would land in the top-left
+    // corner at native size.
+    rive::Fit rive_fit = rive::Fit::contain;
+    switch (impl_->options.fit) {
+    case RiveRenderer::Fit::fill:       rive_fit = rive::Fit::fill;       break;
+    case RiveRenderer::Fit::contain:    rive_fit = rive::Fit::contain;    break;
+    case RiveRenderer::Fit::cover:      rive_fit = rive::Fit::cover;      break;
+    case RiveRenderer::Fit::fit_width:  rive_fit = rive::Fit::fitWidth;   break;
+    case RiveRenderer::Fit::fit_height: rive_fit = rive::Fit::fitHeight;  break;
+    case RiveRenderer::Fit::none:       rive_fit = rive::Fit::none;       break;
+    case RiveRenderer::Fit::scale_down: rive_fit = rive::Fit::scaleDown;  break;
+    }
+    rive::AABB frame(0.0f, 0.0f,
+                     static_cast<float>(extent.width),
+                     static_cast<float>(extent.height));
+    rive::AABB content = impl_->artboard->bounds();
+    if (verbose) RIVE_DBG("[Rive] align: frame=%.1fx%.1f content=%.1fx%.1f fit=%d\n",
+                          frame.width(), frame.height(),
+                          content.width(), content.height(),
+                          (int)rive_fit);
+
     if (verbose) RIVE_DBG("[Rive] draw artboard\n");
     impl_->renderer->save();
+    impl_->renderer->align(
+        rive_fit,
+        rive::Alignment(impl_->options.align_x, impl_->options.align_y),
+        frame, content);
     impl_->artboard->draw(impl_->renderer.get());
     impl_->renderer->restore();
 

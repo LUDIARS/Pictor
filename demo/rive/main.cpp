@@ -211,10 +211,10 @@ int main(int argc, char** argv) {
     DEMO_DBG("[rive-demo] initializing RiveRenderer...\n");
     RiveRenderer rive;
     RiveRenderer::Options opts;
-    // Atomic mode is the portable path. Flip to false once Pictor's device
-    // creation is verified to enable Rive's preferred rasterizer-ordering
-    // extensions (VK_EXT_rasterization_order_attachment_access etc.).
-    opts.force_atomic_mode = true;
+    // Leave force_atomic_mode at its default (false) — Rive auto-picks the
+    // fastest coverage path that the driver/GPU exposes. Pictor's
+    // VulkanContext enables VK_EXT_fragment_shader_interlock and
+    // VK_EXT_rasterization_order_attachment_access when available.
     opts.clear_color       = 0xff202020; // dark grey background
 
     if (!rive.initialize(vk, opts)) {
