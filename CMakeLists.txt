@@ -255,6 +255,10 @@ if(PICTOR_BUILD_DEMO)
         add_executable(pictor_rive_demo demo/rive/main.cpp)
         target_link_libraries(pictor_rive_demo PRIVATE pictor)
 
+        # Rive Cube demo: 6 Rive samples rendered onto cube faces.
+        add_executable(pictor_rive_cube_demo demo/rive_cube/main.cpp)
+        target_link_libraries(pictor_rive_cube_demo PRIVATE pictor)
+
         # 2D Texture rendering demo
         add_executable(pictor_texture2d_demo
             demo/texture2d/main.cpp
@@ -355,6 +359,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
+        ${CMAKE_SOURCE_DIR}/demo/rive_cube/shaders/rive_cube.vert
+        ${CMAKE_SOURCE_DIR}/demo/rive_cube/shaders/rive_cube.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -438,6 +444,13 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/rive)
     if(TARGET pictor_rive_demo)
         add_dependencies(pictor_rive_demo pictor_rive_assets)
     endif()
+    if(TARGET pictor_rive_cube_demo)
+        add_dependencies(pictor_rive_cube_demo pictor_rive_assets)
+    endif()
+endif()
+
+if(TARGET pictor_rive_cube_demo AND TARGET pictor_shaders)
+    add_dependencies(pictor_rive_cube_demo pictor_shaders)
 endif()
 
 # Copy fbx_viewer test assets (UnityChan under UCL — see fbx/model1/LICENSE.md).
