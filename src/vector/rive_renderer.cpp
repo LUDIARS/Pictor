@@ -5,24 +5,12 @@
 #include <unordered_map>
 #include <vector>
 
-// Diagnostic logs fire only in Debug builds (when NDEBUG is NOT defined).
-// Release silently skips them. Errors continue to use fprintf(stderr) so
-// they surface in both configs.
-#ifdef NDEBUG
-#  define RIVE_DBG(...) ((void)0)
-#else
-#  define RIVE_DBG(...) std::printf(__VA_ARGS__)
-#endif
-
 #ifdef PICTOR_HAS_RIVE
 
 // Rive public headers. These only need to be visible in this translation unit.
 // Pictor consumers never include them.
 #include "rive/artboard.hpp"
 #include "rive/file.hpp"
-#include "rive/layout.hpp"
-#include "rive/math/aabb.hpp"
-#include "rive/math/mat2d.hpp"
 #include "rive/renderer.hpp"
 #include "rive/scene.hpp"
 #include "rive/animation/state_machine_instance.hpp"
@@ -134,7 +122,7 @@ bool RiveRenderer::initialize(VulkanContext& vk_ctx, const Options& opts) {
     impl_->vk_physical   = vk_ctx.physical_device();
     impl_->vk_device     = vk_ctx.device();
 
-    RIVE_DBG("[Rive] initialize: instance=%p physical=%p device=%p atomic=%d msaa=%u\n",
+    printf("[Rive] initialize: instance=%p physical=%p device=%p atomic=%d msaa=%u\n",
            (void*)impl_->vk_instance, (void*)impl_->vk_physical, (void*)impl_->vk_device,
            opts.force_atomic_mode ? 1 : 0, opts.msaa_sample_count);
 
@@ -152,7 +140,7 @@ bool RiveRenderer::initialize(VulkanContext& vk_ctx, const Options& opts) {
     // The Vulkan SDK's loader exposes this symbol directly.
     PFN_vkGetInstanceProcAddr getInstanceProcAddr =
         reinterpret_cast<PFN_vkGetInstanceProcAddr>(&::vkGetInstanceProcAddr);
-    RIVE_DBG("[Rive] vkGetInstanceProcAddr=%p\n", (void*)getInstanceProcAddr);
+    printf("[Rive] vkGetInstanceProcAddr=%p\n", (void*)getInstanceProcAddr);
 
     // Rive makes decisions based on this struct — the client (us) is
     // expected to have actually enabled these features at VkDevice creation
@@ -168,22 +156,14 @@ bool RiveRenderer::initialize(VulkanContext& vk_ctx, const Options& opts) {
     features.fragmentStoresAndAtomics
                                    = probed.fragmentStoresAndAtomics == VK_TRUE;
     features.shaderClipDistance    = probed.shaderClipDistance     == VK_TRUE;
-    // Propagate the two extension-backed GPU paths that Pictor's
-    // VulkanContext detected. When either is on Rive picks the faster
-    // single-pass coverage mode instead of atomic, which cuts CPU record
-    // work (fewer binds + one less compute pass per frame).
-    features.rasterizationOrderColorAttachmentAccess =
-        vk_ctx.has_rasterization_order_attachment_access();
-    features.fragmentShaderPixelInterlock =
-        vk_ctx.has_fragment_shader_interlock();
+    // The two optional extension-backed features stay off unless the host
+    // explicitly enables VK_EXT_rasterization_order_attachment_access or
+    // VK_EXT_fragment_shader_interlock, which Pictor doesn't today.
 
-    RIVE_DBG("[Rive] features: indepBlend=%d fillNonSolid=%d fragStores=%d shaderClip=%d "
-             "ROV=%d interlock=%d\n",
+    printf("[Rive] features: indepBlend=%d fillNonSolid=%d fragStores=%d shaderClip=%d\n",
            features.independentBlend, features.fillModeNonSolid,
-           features.fragmentStoresAndAtomics, features.shaderClipDistance,
-           features.rasterizationOrderColorAttachmentAccess,
-           features.fragmentShaderPixelInterlock);
-    RIVE_DBG("[Rive] calling RenderContextVulkanImpl::MakeContext...\n");
+           features.fragmentStoresAndAtomics, features.shaderClipDistance);
+    printf("[Rive] calling RenderContextVulkanImpl::MakeContext...\n");
     impl_->render_context = rive::gpu::RenderContextVulkanImpl::MakeContext(
         impl_->vk_instance,
         impl_->vk_physical,
@@ -200,10 +180,10 @@ bool RiveRenderer::initialize(VulkanContext& vk_ctx, const Options& opts) {
                         "support Rive's minimum feature set.\n");
         return false;
     }
-    RIVE_DBG("[Rive] RenderContextVulkanImpl created (%p)\n", (void*)impl_->render_context.get());
+    printf("[Rive] RenderContextVulkanImpl created (%p)\n", (void*)impl_->render_context.get());
 
     impl_->initialized = true;
-    RIVE_DBG("[Rive] Initialized (atomic=%d, msaa=%u)\n",
+    printf("[Rive] Initialized (atomic=%d, msaa=%u)\n",
            opts.force_atomic_mode ? 1 : 0, opts.msaa_sample_count);
     return true;
 #endif
@@ -225,14 +205,14 @@ void RiveRenderer::shutdown() {
 
 bool RiveRenderer::load_riv_file(const std::string& path) {
 #ifdef PICTOR_HAS_RIVE
-    RIVE_DBG("[Rive] load_riv_file: %s\n", path.c_str());
+    printf("[Rive] load_riv_file: %s\n", path.c_str());
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) {
         fprintf(stderr, "[Rive] Cannot open .riv: %s\n", path.c_str());
         return false;
     }
     size_t size = static_cast<size_t>(f.tellg());
-    RIVE_DBG("[Rive] .riv size: %zu bytes\n", size);
+    printf("[Rive] .riv size: %zu bytes\n", size);
     std::vector<uint8_t> bytes(size);
     f.seekg(0);
     f.read(reinterpret_cast<char*>(bytes.data()),
@@ -259,7 +239,7 @@ bool RiveRenderer::load_riv_memory(const uint8_t* data, size_t size) {
     impl_->file_bytes.assign(data, data + size);
 
     // Rive's File::import requires a Factory — the RenderContext provides one.
-    RIVE_DBG("[Rive] File::import: %zu bytes\n", size);
+    printf("[Rive] File::import: %zu bytes\n", size);
     impl_->file = rive::File::import(
         rive::Span<const uint8_t>(impl_->file_bytes.data(),
                                   impl_->file_bytes.size()),
@@ -272,7 +252,7 @@ bool RiveRenderer::load_riv_memory(const uint8_t* data, size_t size) {
         impl_->file_bytes.clear();
         return false;
     }
-    RIVE_DBG("[Rive] File imported: artboardCount=%zu\n", impl_->file->artboardCount());
+    printf("[Rive] File imported: artboardCount=%zu\n", impl_->file->artboardCount());
 
     // Default artboard + first state machine if any.
     set_artboard(-1);
@@ -280,16 +260,16 @@ bool RiveRenderer::load_riv_memory(const uint8_t* data, size_t size) {
         fprintf(stderr, "[Rive] no default artboard found\n");
         return false;
     }
-    RIVE_DBG("[Rive] artboard: name=%s stateMachineCount=%zu animationCount=%zu\n",
+    printf("[Rive] artboard: name=%s stateMachineCount=%zu animationCount=%zu\n",
            impl_->artboard->name().c_str(),
            impl_->artboard->stateMachineCount(),
            impl_->artboard->animationCount());
     if (impl_->artboard->stateMachineCount() > 0) {
         set_state_machine(0);
-        RIVE_DBG("[Rive] state machine 0 selected\n");
+        printf("[Rive] state machine 0 selected\n");
     } else if (impl_->artboard->animationCount() > 0) {
         set_animation(0);
-        RIVE_DBG("[Rive] animation 0 selected\n");
+        printf("[Rive] animation 0 selected\n");
     }
     return true;
 #else
@@ -399,7 +379,7 @@ bool RiveRenderer::render(VkCommandBuffer cmd,
     ++render_call_count;
     bool verbose = (render_call_count <= 3);
     if (verbose) {
-        RIVE_DBG("[Rive] render #%d: %ux%u fmt=%d cmd=%p img=%p view=%p frame=%u safe=%u final=%d\n",
+        printf("[Rive] render #%d: %ux%u fmt=%d cmd=%p img=%p view=%p frame=%u safe=%u final=%d\n",
                render_call_count, extent.width, extent.height, (int)format,
                (void*)cmd, (void*)target_image, (void*)target_view,
                current_frame_number, safe_frame_number, (int)final_layout);
@@ -413,7 +393,7 @@ bool RiveRenderer::render(VkCommandBuffer cmd,
             fprintf(stderr, "[Rive] vulkan_impl() returned null\n");
             return false;
         }
-        if (verbose) RIVE_DBG("[Rive] makeRenderTarget(%u x %u fmt=%d)\n",
+        if (verbose) printf("[Rive] makeRenderTarget(%u x %u fmt=%d)\n",
                             extent.width, extent.height, (int)format);
         impl_->render_target = vkimpl->makeRenderTarget(
             extent.width, extent.height, format,
@@ -450,39 +430,12 @@ bool RiveRenderer::render(VkCommandBuffer cmd,
     frame_desc.clearColor           = impl_->options.clear_color;
     frame_desc.msaaSampleCount      = impl_->options.msaa_sample_count;
     frame_desc.disableRasterOrdering = impl_->options.force_atomic_mode;
-    if (verbose) RIVE_DBG("[Rive] beginFrame\n");
+    if (verbose) printf("[Rive] beginFrame\n");
     impl_->render_context->beginFrame(std::move(frame_desc));
 
-    // Draw the artboard. The artboard has a fixed native size (baked into
-    // the .riv) that is almost never equal to the caller's render target.
-    // Apply a fit transform so the content fills the target the way the
-    // caller asked — without this the artboard would land in the top-left
-    // corner at native size.
-    rive::Fit rive_fit = rive::Fit::contain;
-    switch (impl_->options.fit) {
-    case RiveRenderer::Fit::fill:       rive_fit = rive::Fit::fill;       break;
-    case RiveRenderer::Fit::contain:    rive_fit = rive::Fit::contain;    break;
-    case RiveRenderer::Fit::cover:      rive_fit = rive::Fit::cover;      break;
-    case RiveRenderer::Fit::fit_width:  rive_fit = rive::Fit::fitWidth;   break;
-    case RiveRenderer::Fit::fit_height: rive_fit = rive::Fit::fitHeight;  break;
-    case RiveRenderer::Fit::none:       rive_fit = rive::Fit::none;       break;
-    case RiveRenderer::Fit::scale_down: rive_fit = rive::Fit::scaleDown;  break;
-    }
-    rive::AABB frame(0.0f, 0.0f,
-                     static_cast<float>(extent.width),
-                     static_cast<float>(extent.height));
-    rive::AABB content = impl_->artboard->bounds();
-    if (verbose) RIVE_DBG("[Rive] align: frame=%.1fx%.1f content=%.1fx%.1f fit=%d\n",
-                          frame.width(), frame.height(),
-                          content.width(), content.height(),
-                          (int)rive_fit);
-
-    if (verbose) RIVE_DBG("[Rive] draw artboard\n");
+    // Draw the artboard.
+    if (verbose) printf("[Rive] draw artboard\n");
     impl_->renderer->save();
-    impl_->renderer->align(
-        rive_fit,
-        rive::Alignment(impl_->options.align_x, impl_->options.align_y),
-        frame, content);
     impl_->artboard->draw(impl_->renderer.get());
     impl_->renderer->restore();
 
@@ -492,9 +445,9 @@ bool RiveRenderer::render(VkCommandBuffer cmd,
     flush.externalCommandBuffer = cmd;
     flush.currentFrameNumber    = current_frame_number;
     flush.safeFrameNumber       = safe_frame_number;
-    if (verbose) RIVE_DBG("[Rive] flush\n");
+    if (verbose) printf("[Rive] flush\n");
     impl_->render_context->flush(flush);
-    if (verbose) RIVE_DBG("[Rive] flush done\n");
+    if (verbose) printf("[Rive] flush done\n");
 
     // Rive's flush completes with the target image in some layout that
     // depends on the rendering path taken (atomic vs raster-ordered, MSAA,
