@@ -7,3 +7,7 @@ CMakeCache.txt
 cmake_install.cmake
 CMakeFiles/
 compile_commands.json
+
+# Unity-style asset imports distributed out-of-tree (via Synergos or
+# zip) due to size. Keep them local to the working copy only.
+Art/
