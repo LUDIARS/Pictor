@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
+option(PICTOR_BUILD_TOOLS         "Build developer tool targets (feature selector etc.)" OFF)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
@@ -434,5 +435,51 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/fbx)
     )
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_fbx_assets)
+    endif()
+endif()
+
+# ─── Developer tools (opt-in) ────────────────────────────────────────
+# Exposes custom targets under tools/ — purely developer conveniences,
+# no compilation, no impact on libpictor size. When PICTOR_BUILD_TOOLS=ON
+# the available targets are:
+#
+#   pictor_feature_selector  — open tools/feature-selector/index.html
+#   pictor_measure_sizes     — rebuild libpictor once per toggle and
+#                              write measurements.json for the selector
+#
+# The feature selector is a static HTML tool so it runs anywhere with a
+# browser (including file://). The measure target needs Python 3 on PATH.
+if(PICTOR_BUILD_TOOLS)
+    set(_pictor_tools_selector "${CMAKE_SOURCE_DIR}/tools/feature-selector/index.html")
+    if(EXISTS "${_pictor_tools_selector}")
+        if(WIN32)
+            add_custom_target(pictor_feature_selector
+                COMMAND cmd /c start "" "${_pictor_tools_selector}"
+                COMMENT "Opening feature-selector in the default browser")
+        elseif(APPLE)
+            add_custom_target(pictor_feature_selector
+                COMMAND open "${_pictor_tools_selector}"
+                COMMENT "Opening feature-selector in the default browser")
+        else()
+            add_custom_target(pictor_feature_selector
+                COMMAND xdg-open "${_pictor_tools_selector}"
+                COMMENT "Opening feature-selector in the default browser")
+        endif()
+
+        find_package(Python3 QUIET COMPONENTS Interpreter)
+        if(Python3_Interpreter_FOUND)
+            add_custom_target(pictor_measure_sizes
+                COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_SOURCE_DIR}/tools/feature-selector/scripts/measure_sizes.py"
+                    --src-dir   "${CMAKE_SOURCE_DIR}"
+                    --build-dir "${CMAKE_BINARY_DIR}/_measure"
+                    --config    "$<CONFIG>"
+                    --out       "${CMAKE_SOURCE_DIR}/tools/feature-selector/measurements.json"
+                COMMENT "Measuring per-feature libpictor size — this rebuilds multiple times, be patient")
+        endif()
+
+        message(STATUS "Pictor: developer tools enabled (tools/feature-selector)")
+    else()
+        message(WARNING "Pictor: PICTOR_BUILD_TOOLS=ON but tools/feature-selector not found")
     endif()
 endif()
