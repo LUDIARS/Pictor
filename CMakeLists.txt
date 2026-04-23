@@ -116,6 +116,8 @@ add_library(pictor STATIC
     src/text/text_image_renderer.cpp
     src/text/text_svg_renderer.cpp
     src/text/text_rasterizer.cpp
+    src/text/text_effects.cpp
+    src/text/glyph_path_effects.cpp
 
     # Animation System
     src/animation/animation_clip.cpp
@@ -207,6 +209,12 @@ if(PICTOR_BUILD_DEMO)
     # where a Vulkan SDK isn't available.
     add_executable(pictor_mobile_demo demo/mobile/main.cpp)
     target_link_libraries(pictor_mobile_demo PRIVATE pictor)
+
+    # Text effects smoke test (headless). Exercises every text_effects
+    # and glyph_path_effects entry point on a synthetic alpha/path pair
+    # and reports pass/fail via exit code — handy for CI.
+    add_executable(pictor_text_effects_demo demo/text_effects/main.cpp)
+    target_link_libraries(pictor_text_effects_demo PRIVATE pictor)
 
     # Copy sample kv-config file next to the binary so --config= works out of
     # the box from the build tree.
