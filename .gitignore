@@ -7,3 +7,6 @@ CMakeCache.txt
 cmake_install.cmake
 CMakeFiles/
 compile_commands.json
+
+# Unity-style asset imports — distributed via Synergos / zip
+Art/
