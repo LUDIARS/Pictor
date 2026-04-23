@@ -33,11 +33,25 @@ class VulkanContext;
 ///     Pictor unconditionally.
 class RiveRenderer {
 public:
+    /// How the artboard is mapped into the render target rect. Mirrors
+    /// `rive::Fit` one-to-one so the header does not need to include Rive.
+    enum class Fit {
+        fill,       ///< Stretch to fill, aspect ratio ignored.
+        contain,    ///< Scale to fit inside, preserving aspect (default).
+        cover,      ///< Scale to cover, preserving aspect (may crop).
+        fit_width,  ///< Fit target width, height may overflow/underflow.
+        fit_height, ///< Fit target height, width may overflow/underflow.
+        none,       ///< Draw at native artboard size.
+        scale_down, ///< Like contain, but never up-scales.
+    };
+
     struct Options {
-        /// Force atomic-based fill mode. Required on drivers without rasterizer
-        /// ordering support (`VK_EXT_rasterization_order_attachment_access` or
-        /// the Rive-preferred pixel-local-storage equivalents). Slightly slower
-        /// on compliant drivers but portable.
+        /// Force atomic-based coverage mode. By default (false) Rive auto-
+        /// selects the fastest available path: fragment-shader pixel
+        /// interlock → raster-ordered attachment access → atomic. Setting
+        /// this to true pins the slowest-but-most-portable atomic path,
+        /// which is rarely what you want; leave it off unless you hit a
+        /// driver bug in the faster modes.
         bool     force_atomic_mode = false;
 
         /// MSAA sample count for the Rive output. 0 = no MSAA (default).
@@ -45,6 +59,18 @@ public:
 
         /// Packed 0xAABBGGRR clear color applied each frame.
         uint32_t clear_color = 0x00000000;
+
+        /// How the artboard fills the render target. Rive's artboard has a
+        /// fixed native size (e.g. 200×200) — without a fit, the content
+        /// would render in one corner of a larger target. Default is
+        /// `contain` (preserve aspect, letterbox if needed) which matches
+        /// how the `rive_demo` window is expected to show the sample.
+        Fit      fit = Fit::contain;
+
+        /// Alignment inside the frame for the chosen fit. Range [-1, +1]:
+        /// (0,0) = center, (-1,-1) = top-left, (+1,+1) = bottom-right.
+        float    align_x = 0.0f;
+        float    align_y = 0.0f;
     };
 
     RiveRenderer();
