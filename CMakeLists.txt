@@ -83,6 +83,7 @@ add_library(pictor STATIC
 
     # Material
     src/material/base_material_builder.cpp
+    src/material/material_serializer.cpp
 
     # Pipeline
     src/pipeline/pipeline_profile.cpp
@@ -215,6 +216,12 @@ if(PICTOR_BUILD_DEMO)
     # and reports pass/fail via exit code — handy for CI.
     add_executable(pictor_text_effects_demo demo/text_effects/main.cpp)
     target_link_libraries(pictor_text_effects_demo PRIVATE pictor)
+
+    # Material JSON serializer round-trip smoke test (headless).
+    # Constructs a non-default MaterialDesc, emits canonical JSON, parses
+    # back, asserts field-for-field equality. Non-zero exit on divergence.
+    add_executable(pictor_material_serializer_demo demo/material_serializer/main.cpp)
+    target_link_libraries(pictor_material_serializer_demo PRIVATE pictor)
 
     # Copy sample kv-config file next to the binary so --config= works out of
     # the box from the build tree.
