@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "pictor/core/types.h"
+#include "pictor/core/mobile_lifecycle.h"
 #include "pictor/memory/memory_subsystem.h"
 #include "pictor/scene/scene_registry.h"
 #include "pictor/update/update_scheduler.h"
@@ -34,6 +35,12 @@ struct RendererConfig {
     uint32_t          screen_height = 1080;
     bool              profiler_enabled = true;
     OverlayMode       overlay_mode = OverlayMode::STANDARD;
+
+    /// Mobile auto-downgrade policy. Off by default — desktop
+    /// hosts leave `enabled = false`. Android / iOS hosts that
+    /// want Pictor to swap to `low_profile_name` on thermal
+    /// throttling flip `enabled = true`.
+    MobileAutoDowngradePolicy mobile_downgrade;
 };
 
 /// Camera for rendering
@@ -95,6 +102,31 @@ public:
     bool set_profile(const std::string& name);
     void register_custom_profile(const PipelineProfileDef& def);
     const std::string& current_profile_name() const;
+
+    // ---- Mobile Lifecycle ----
+    //
+    // Platform hosts (Android JNI / iOS) forward OS-level
+    // lifecycle events here. `begin_frame` / `render` / `end_frame`
+    // become no-ops while `lifecycle()` is not `ACTIVE`; the
+    // scene graph, handles, and GPU resources are otherwise
+    // preserved so resume is cheap.
+
+    void on_pause();             // → LifecycleState::PAUSED
+    void on_resume();            // → LifecycleState::ACTIVE
+    void on_suspend();           // → LifecycleState::SUSPENDED (stricter than pause)
+    void on_surface_lost();      // swap-chain invalid; host will recreate
+    void on_surface_regained();  // clears SURFACE_LOST; state restored
+    void on_low_memory(MemoryPressure level);
+    void on_thermal_state(ThermalState state);
+
+    MobileLifecycleSnapshot lifecycle_snapshot() const;
+
+    /// Install an observer that receives lifecycle transitions.
+    /// Ownership stays with the caller; pass nullptr to detach.
+    void set_lifecycle_observer(IMobileLifecycleObserver* observer);
+
+    /// Configure / mutate the auto-downgrade policy at runtime.
+    void set_mobile_downgrade_policy(const MobileAutoDowngradePolicy& policy);
 
     // ---- Profiler (§12) ----
 
@@ -241,6 +273,17 @@ private:
     RendererConfig config_;
     float          delta_time_     = 0.0f;
     uint64_t       frame_number_   = 0;
+
+    // Mobile lifecycle state
+    MobileLifecycleSnapshot   lifecycle_{};
+    IMobileLifecycleObserver* lifecycle_observer_ = nullptr;
+    /// Profile that was active when we auto-downgraded. Empty
+    /// when no auto-downgrade is in effect.
+    std::string               pre_downgrade_profile_;
+
+    void transition_lifecycle_(LifecycleState next);
+    void transition_thermal_(ThermalState next);
+    bool is_frame_work_suppressed_() const;
 };
 
 } // namespace pictor

@@ -145,8 +145,16 @@ void PictorRenderer::shutdown() {
     initialized_ = false;
 }
 
+bool PictorRenderer::is_frame_work_suppressed_() const {
+    // Any non-ACTIVE lifecycle state suppresses GPU submission.
+    // The scene graph and handles are preserved — only per-frame
+    // work is skipped so resume is cheap.
+    return lifecycle_.lifecycle != LifecycleState::ACTIVE;
+}
+
 void PictorRenderer::begin_frame(float delta_time) {
     if (!initialized_) return;
+    if (is_frame_work_suppressed_()) return;
 
     delta_time_ = delta_time;
     ++frame_number_;
@@ -161,6 +169,7 @@ void PictorRenderer::begin_frame(float delta_time) {
 
 void PictorRenderer::render(const Camera& camera) {
     if (!initialized_) return;
+    if (is_frame_work_suppressed_()) return;
 
     auto& frame_alloc = memory_->frame_allocator();
 
@@ -259,6 +268,7 @@ void PictorRenderer::render(const Camera& camera) {
 
 void PictorRenderer::end_frame() {
     if (!initialized_) return;
+    if (is_frame_work_suppressed_()) return;
 
     // §12, §11.3: Present
     profiler_->end_frame();
@@ -312,6 +322,108 @@ void PictorRenderer::register_custom_profile(const PipelineProfileDef& def) {
 
 const std::string& PictorRenderer::current_profile_name() const {
     return profile_manager_->current_profile_name();
+}
+
+// ---- Mobile Lifecycle ----
+
+void PictorRenderer::transition_lifecycle_(LifecycleState next) {
+    if (lifecycle_.lifecycle == next) return;
+    LifecycleState prev = lifecycle_.lifecycle;
+    lifecycle_.lifecycle = next;
+    lifecycle_.last_change_frame = frame_number_;
+    if (lifecycle_observer_) {
+        lifecycle_observer_->on_lifecycle_change(prev, next);
+    }
+    // When resuming, flush the frame allocator so stale pointers
+    // from the last pre-pause frame can't leak into the first
+    // active frame. end_frame() was skipped while suppressed.
+    if (prev != LifecycleState::ACTIVE && next == LifecycleState::ACTIVE && memory_) {
+        memory_->begin_frame();  // resets the frame allocator head
+        memory_->end_frame();
+    }
+}
+
+void PictorRenderer::transition_thermal_(ThermalState next) {
+    if (lifecycle_.thermal == next) return;
+    ThermalState prev = lifecycle_.thermal;
+    lifecycle_.thermal = next;
+    lifecycle_.last_change_frame = frame_number_;
+    if (lifecycle_observer_) {
+        lifecycle_observer_->on_thermal_change(prev, next);
+    }
+    // Auto-downgrade: if opt-in, swap profile on crossing thresholds.
+    const auto& pol = config_.mobile_downgrade;
+    if (!pol.enabled) return;
+
+    const bool hot_enough   = static_cast<uint8_t>(next) >= static_cast<uint8_t>(pol.downgrade_at);
+    const bool cool_enough  = static_cast<uint8_t>(next) <= static_cast<uint8_t>(pol.restore_below);
+    if (hot_enough && pre_downgrade_profile_.empty()) {
+        pre_downgrade_profile_ = current_profile_name();
+        if (!pol.low_profile_name.empty()) {
+            set_profile(pol.low_profile_name);
+        }
+    } else if (cool_enough && !pre_downgrade_profile_.empty()) {
+        const std::string restore = pol.high_profile_name.empty()
+            ? pre_downgrade_profile_
+            : pol.high_profile_name;
+        set_profile(restore);
+        pre_downgrade_profile_.clear();
+    }
+}
+
+void PictorRenderer::on_pause() {
+    if (!initialized_) return;
+    if (lifecycle_.lifecycle == LifecycleState::SURFACE_LOST) return; // stricter wins
+    transition_lifecycle_(LifecycleState::PAUSED);
+}
+
+void PictorRenderer::on_resume() {
+    if (!initialized_) return;
+    if (lifecycle_.lifecycle == LifecycleState::SURFACE_LOST) return; // wait for regain
+    transition_lifecycle_(LifecycleState::ACTIVE);
+}
+
+void PictorRenderer::on_suspend() {
+    if (!initialized_) return;
+    transition_lifecycle_(LifecycleState::SUSPENDED);
+}
+
+void PictorRenderer::on_surface_lost() {
+    if (!initialized_) return;
+    transition_lifecycle_(LifecycleState::SURFACE_LOST);
+}
+
+void PictorRenderer::on_surface_regained() {
+    if (!initialized_) return;
+    if (lifecycle_.lifecycle != LifecycleState::SURFACE_LOST) return;
+    transition_lifecycle_(LifecycleState::ACTIVE);
+}
+
+void PictorRenderer::on_low_memory(MemoryPressure level) {
+    if (!initialized_) return;
+    if (lifecycle_.memory == level) return;
+    lifecycle_.memory = level;
+    lifecycle_.last_change_frame = frame_number_;
+    if (lifecycle_observer_) {
+        lifecycle_observer_->on_memory_pressure(level);
+    }
+}
+
+void PictorRenderer::on_thermal_state(ThermalState state) {
+    if (!initialized_) return;
+    transition_thermal_(state);
+}
+
+MobileLifecycleSnapshot PictorRenderer::lifecycle_snapshot() const {
+    return lifecycle_;
+}
+
+void PictorRenderer::set_lifecycle_observer(IMobileLifecycleObserver* observer) {
+    lifecycle_observer_ = observer;
+}
+
+void PictorRenderer::set_mobile_downgrade_policy(const MobileAutoDowngradePolicy& policy) {
+    config_.mobile_downgrade = policy;
 }
 
 void PictorRenderer::apply_profile(const PipelineProfileDef& profile) {
