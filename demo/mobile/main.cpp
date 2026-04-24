@@ -310,6 +310,93 @@ int main(int argc, char* argv[]) {
         printf("\n");
     }
 
+    // ---- Mobile lifecycle demonstration -------------------------------------
+    //
+    // Exercises pause → resume, thermal throttling (with auto-downgrade),
+    // surface loss / regain and low-memory notifications. Nothing here
+    // requires a GPU — the renderer's internal state machine drives the
+    // observer and profile switch.
+
+    class LifecycleLog : public pictor::IMobileLifecycleObserver {
+    public:
+        void on_lifecycle_change(pictor::LifecycleState prev,
+                                 pictor::LifecycleState next) override {
+            printf("    [lifecycle] %s → %s\n", label(prev), label(next));
+        }
+        void on_thermal_change(pictor::ThermalState prev,
+                               pictor::ThermalState next) override {
+            printf("    [thermal]   %s → %s\n", t_label(prev), t_label(next));
+        }
+        void on_memory_pressure(pictor::MemoryPressure level) override {
+            const char* l = "normal";
+            if (level == pictor::MemoryPressure::MODERATE) l = "moderate";
+            if (level == pictor::MemoryPressure::CRITICAL) l = "critical";
+            printf("    [memory]    pressure=%s\n", l);
+        }
+    private:
+        static const char* label(pictor::LifecycleState s) {
+            switch (s) {
+                case pictor::LifecycleState::ACTIVE:       return "ACTIVE";
+                case pictor::LifecycleState::PAUSED:       return "PAUSED";
+                case pictor::LifecycleState::SUSPENDED:    return "SUSPENDED";
+                case pictor::LifecycleState::SURFACE_LOST: return "SURFACE_LOST";
+            }
+            return "?";
+        }
+        static const char* t_label(pictor::ThermalState t) {
+            switch (t) {
+                case pictor::ThermalState::NOMINAL:   return "NOMINAL";
+                case pictor::ThermalState::FAIR:      return "FAIR";
+                case pictor::ThermalState::SERIOUS:   return "SERIOUS";
+                case pictor::ThermalState::CRITICAL:  return "CRITICAL";
+                case pictor::ThermalState::EMERGENCY: return "EMERGENCY";
+            }
+            return "?";
+        }
+    };
+
+    printf("-- Mobile lifecycle simulation ----------------------------------\n");
+
+    LifecycleLog log;
+    renderer.set_lifecycle_observer(&log);
+
+    // Enable auto-downgrade: thermal SERIOUS swaps to MobileLow.
+    pictor::MobileAutoDowngradePolicy policy;
+    policy.enabled           = true;
+    policy.low_profile_name  = "MobileLow";
+    policy.high_profile_name = "MobileHigh";
+    policy.downgrade_at      = pictor::ThermalState::SERIOUS;
+    policy.restore_below     = pictor::ThermalState::FAIR;
+    renderer.set_mobile_downgrade_policy(policy);
+
+    renderer.set_profile("MobileHigh");
+    printf("    active profile before events: %s\n", renderer.current_profile_name().c_str());
+
+    // App goes into the switcher: 10 frames of attempted work are no-ops.
+    renderer.on_pause();
+    run_frames(renderer, 10);
+    renderer.on_resume();
+
+    // Thermal warning: auto-downgrade fires.
+    renderer.on_thermal_state(pictor::ThermalState::SERIOUS);
+    printf("    after SERIOUS:  active profile = %s\n", renderer.current_profile_name().c_str());
+
+    // Cooled down: restore.
+    renderer.on_thermal_state(pictor::ThermalState::NOMINAL);
+    printf("    after NOMINAL:  active profile = %s\n", renderer.current_profile_name().c_str());
+
+    // Android onSurfaceDestroyed / iOS backgrounded.
+    renderer.on_surface_lost();
+    run_frames(renderer, 5);  // suppressed
+    renderer.on_surface_regained();
+
+    // Memory warning.
+    renderer.on_low_memory(pictor::MemoryPressure::MODERATE);
+    renderer.on_low_memory(pictor::MemoryPressure::CRITICAL);
+
+    renderer.set_lifecycle_observer(nullptr);
+    printf("\n");
+
     renderer.shutdown();
     printf("Mobile demo complete.\n");
     return 0;
