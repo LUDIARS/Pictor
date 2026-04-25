@@ -18,6 +18,7 @@ struct WebGLFrameStats {
     uint32_t draw_calls       = 0;
     uint32_t triangles        = 0;
     uint32_t visible_objects  = 0;
+    uint32_t culled_objects   = 0;
     uint32_t total_objects    = 0;
 };
 

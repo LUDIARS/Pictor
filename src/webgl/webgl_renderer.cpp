@@ -331,15 +331,73 @@ bool WebGLRenderer::create_instance_buffers() {
     return instance_vbo_ != INVALID_BUFFER;
 }
 
-void WebGLRenderer::upload_instances(const float* /*view_projection*/) {
+void WebGLRenderer::upload_instances(const float* view_projection) {
+    // ── Frustum extraction (Gribb/Hartmann) ──
+    // For column-major M (entries laid out as m[col*4+row]):
+    //   row_i = (m[0+i], m[4+i], m[8+i], m[12+i])
+    // The 6 planes (in form ax+by+cz+d >= 0 for inside) come from
+    //   left    =  row3 + row0
+    //   right   =  row3 - row0
+    //   bottom  =  row3 + row1
+    //   top     =  row3 - row1
+    //   near    =  row3 + row2
+    //   far     =  row3 - row2
+    struct Plane { float a, b, c, d; };
+    Plane planes[6];
+    bool have_planes = (view_projection != nullptr);
+    if (have_planes) {
+        const float* M = view_projection;
+        auto row = [&](int i) {
+            return Plane{ M[0 + i], M[4 + i], M[8 + i], M[12 + i] };
+        };
+        Plane r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+        auto add = [](const Plane& p, const Plane& q) {
+            return Plane{p.a + q.a, p.b + q.b, p.c + q.c, p.d + q.d};
+        };
+        auto sub = [](const Plane& p, const Plane& q) {
+            return Plane{p.a - q.a, p.b - q.b, p.c - q.c, p.d - q.d};
+        };
+        planes[0] = add(r3, r0);  // left
+        planes[1] = sub(r3, r0);  // right
+        planes[2] = add(r3, r1);  // bottom
+        planes[3] = sub(r3, r1);  // top
+        planes[4] = add(r3, r2);  // near
+        planes[5] = sub(r3, r2);  // far
+        // Normalize so the d term has unit-length normal — keeps the
+        // outside test numerically stable for very large AABBs.
+        for (auto& p : planes) {
+            float len = std::sqrt(p.a*p.a + p.b*p.b + p.c*p.c);
+            if (len > 1e-6f) {
+                p.a /= len; p.b /= len; p.c /= len; p.d /= len;
+            }
+        }
+    }
+
+    auto aabb_inside_frustum = [&](const AABB& b) -> bool {
+        if (!have_planes) return true;
+        for (int i = 0; i < 6; ++i) {
+            const Plane& p = planes[i];
+            // p-vertex: AABB corner maximising a*x + b*y + c*z + d.
+            float x = (p.a >= 0.0f) ? b.max.x : b.min.x;
+            float y = (p.b >= 0.0f) ? b.max.y : b.min.y;
+            float z = (p.c >= 0.0f) ? b.max.z : b.min.z;
+            if (p.a*x + p.b*y + p.c*z + p.d < 0.0f) return false;
+        }
+        return true;
+    };
+
     // Build instance data array
     std::vector<WebGLInstanceData> instances;
     instances.reserve(active_count_);
 
+    uint32_t culled = 0;
     for (const auto& obj : objects_) {
         if (!obj.active) continue;
 
-        // TODO: frustum culling using view_projection
+        if (!aabb_inside_frustum(obj.bounds)) {
+            ++culled;
+            continue;
+        }
 
         WebGLInstanceData inst;
         // Column-major: copy transform rows → columns
@@ -355,6 +413,7 @@ void WebGLRenderer::upload_instances(const float* /*view_projection*/) {
     }
 
     stats_.visible_objects = static_cast<uint32_t>(instances.size());
+    stats_.culled_objects  = culled;
     if (instances.empty()) return;
 
     // Upload instance data

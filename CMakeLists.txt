@@ -7,6 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
 option(PICTOR_BUILD_TOOLS         "Build developer tool targets (feature selector etc.)" OFF)
+option(PICTOR_BUILD_TESTS         "Build the headless test suite (CTest)"   ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
@@ -342,6 +343,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.frag
         ${CMAKE_SOURCE_DIR}/shaders/lit.vert
         ${CMAKE_SOURCE_DIR}/shaders/lit.frag
+        ${CMAKE_SOURCE_DIR}/shaders/hologram.vert
+        ${CMAKE_SOURCE_DIR}/shaders/hologram.frag
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.vert
@@ -451,6 +454,12 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/fbx)
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_fbx_assets)
     endif()
+endif()
+
+# ─── Tests (opt-in via CTest) ────────────────────────────────────────
+if(PICTOR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 # ─── Developer tools (opt-in) ────────────────────────────────────────
