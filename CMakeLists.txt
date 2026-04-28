@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
+option(PICTOR_BUILD_TOOLS         "Build developer tool targets (feature selector etc.)" OFF)
+option(PICTOR_BUILD_TESTS         "Build the headless test suite (CTest)"   ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
@@ -82,6 +84,7 @@ add_library(pictor STATIC
 
     # Material
     src/material/base_material_builder.cpp
+    src/material/material_serializer.cpp
 
     # Pipeline
     src/pipeline/pipeline_profile.cpp
@@ -115,6 +118,8 @@ add_library(pictor STATIC
     src/text/text_image_renderer.cpp
     src/text/text_svg_renderer.cpp
     src/text/text_rasterizer.cpp
+    src/text/text_effects.cpp
+    src/text/glyph_path_effects.cpp
 
     # Animation System
     src/animation/animation_clip.cpp
@@ -206,6 +211,18 @@ if(PICTOR_BUILD_DEMO)
     # where a Vulkan SDK isn't available.
     add_executable(pictor_mobile_demo demo/mobile/main.cpp)
     target_link_libraries(pictor_mobile_demo PRIVATE pictor)
+
+    # Text effects smoke test (headless). Exercises every text_effects
+    # and glyph_path_effects entry point on a synthetic alpha/path pair
+    # and reports pass/fail via exit code — handy for CI.
+    add_executable(pictor_text_effects_demo demo/text_effects/main.cpp)
+    target_link_libraries(pictor_text_effects_demo PRIVATE pictor)
+
+    # Material JSON serializer round-trip smoke test (headless).
+    # Constructs a non-default MaterialDesc, emits canonical JSON, parses
+    # back, asserts field-for-field equality. Non-zero exit on divergence.
+    add_executable(pictor_material_serializer_demo demo/material_serializer/main.cpp)
+    target_link_libraries(pictor_material_serializer_demo PRIVATE pictor)
 
     # Copy sample kv-config file next to the binary so --config= works out of
     # the box from the build tree.
@@ -330,6 +347,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.frag
         ${CMAKE_SOURCE_DIR}/shaders/lit.vert
         ${CMAKE_SOURCE_DIR}/shaders/lit.frag
+        ${CMAKE_SOURCE_DIR}/shaders/hologram.vert
+        ${CMAKE_SOURCE_DIR}/shaders/hologram.frag
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.vert
@@ -463,5 +482,57 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/fbx)
     )
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_fbx_assets)
+    endif()
+endif()
+
+# ─── Tests (opt-in via CTest) ────────────────────────────────────────
+if(PICTOR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+# ─── Developer tools (opt-in) ────────────────────────────────────────
+# Exposes custom targets under tools/ — purely developer conveniences,
+# no compilation, no impact on libpictor size. When PICTOR_BUILD_TOOLS=ON
+# the available targets are:
+#
+#   pictor_feature_selector  — open tools/feature-selector/index.html
+#   pictor_measure_sizes     — rebuild libpictor once per toggle and
+#                              write measurements.json for the selector
+#
+# The feature selector is a static HTML tool so it runs anywhere with a
+# browser (including file://). The measure target needs Python 3 on PATH.
+if(PICTOR_BUILD_TOOLS)
+    set(_pictor_tools_selector "${CMAKE_SOURCE_DIR}/tools/feature-selector/index.html")
+    if(EXISTS "${_pictor_tools_selector}")
+        if(WIN32)
+            add_custom_target(pictor_feature_selector
+                COMMAND cmd /c start "" "${_pictor_tools_selector}"
+                COMMENT "Opening feature-selector in the default browser")
+        elseif(APPLE)
+            add_custom_target(pictor_feature_selector
+                COMMAND open "${_pictor_tools_selector}"
+                COMMENT "Opening feature-selector in the default browser")
+        else()
+            add_custom_target(pictor_feature_selector
+                COMMAND xdg-open "${_pictor_tools_selector}"
+                COMMENT "Opening feature-selector in the default browser")
+        endif()
+
+        find_package(Python3 QUIET COMPONENTS Interpreter)
+        if(Python3_Interpreter_FOUND)
+            add_custom_target(pictor_measure_sizes
+                COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_SOURCE_DIR}/tools/feature-selector/scripts/measure_sizes.py"
+                    --src-dir   "${CMAKE_SOURCE_DIR}"
+                    --build-dir "${CMAKE_BINARY_DIR}/_measure"
+                    --config    "$<CONFIG>"
+                    --out       "${CMAKE_SOURCE_DIR}/tools/feature-selector/measurements.json"
+                COMMENT "Measuring per-feature libpictor size — this rebuilds multiple times, be patient")
+        endif()
+
+        message(STATUS "Pictor: developer tools enabled (tools/feature-selector)")
+    else()
+        message(WARNING "Pictor: PICTOR_BUILD_TOOLS=ON but tools/feature-selector not found")
     endif()
 endif()

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pictor Material Editor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="title">Pictor Material Editor</div>
+    <div class="toolbar">
+      <button id="btn-new">New</button>
+      <label class="btn">
+        Import JSON
+        <input id="input-import" type="file" accept="application/json,.json" hidden>
+      </label>
+      <button id="btn-export">Export JSON</button>
+      <button id="btn-copy">Copy JSON</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ── Identity ─────────────────────────────── -->
+    <section class="card">
+      <h2>Identity</h2>
+      <div class="row">
+        <label>name</label>
+        <input id="f-name" type="text" placeholder="(optional) matte_red_plastic">
+      </div>
+    </section>
+
+    <!-- ── Textures ─────────────────────────────── -->
+    <section class="card">
+      <h2>Textures <span class="hint">handle:&lt;N&gt; or "none"</span></h2>
+      <div id="tex-grid" class="grid-2"></div>
+    </section>
+
+    <!-- ── Base / Params ────────────────────────── -->
+    <section class="card">
+      <h2>Base</h2>
+      <div class="row">
+        <label>base_color (RGBA)</label>
+        <div class="rgba">
+          <input id="bc-picker" type="color" value="#ffffff">
+          <input id="bc-r" type="number" step="0.01" min="0" max="1" class="num">
+          <input id="bc-g" type="number" step="0.01" min="0" max="1" class="num">
+          <input id="bc-b" type="number" step="0.01" min="0" max="1" class="num">
+          <input id="bc-a" type="number" step="0.01" min="0" max="1" class="num">
+        </div>
+      </div>
+      <div class="row">
+        <label>emissive (RGB)</label>
+        <div class="rgba">
+          <input id="em-picker" type="color" value="#000000">
+          <input id="em-r" type="number" step="0.01" min="0" max="10" class="num">
+          <input id="em-g" type="number" step="0.01" min="0" max="10" class="num">
+          <input id="em-b" type="number" step="0.01" min="0" max="10" class="num">
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Scalars</h2>
+      <div id="scalar-grid"></div>
+    </section>
+
+    <!-- ── Flags ────────────────────────────────── -->
+    <section class="card">
+      <h2>Flags</h2>
+      <div class="row checkbox-row">
+        <label><input id="f-cast-shadow" type="checkbox"> cast_shadow</label>
+        <label><input id="f-receive-shadow" type="checkbox"> receive_shadow</label>
+      </div>
+      <div class="row">
+        <label>features (auto-computed)</label>
+        <div id="features-chips" class="chips"></div>
+      </div>
+    </section>
+
+    <!-- ── JSON Preview ─────────────────────────── -->
+    <section class="card json-card">
+      <h2>JSON</h2>
+      <pre id="json-out"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <span id="status" class="status">ready</span>
+    <span class="hint">Pictor material JSON is the source of truth; this page is a view over it.</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
