@@ -76,6 +76,22 @@ public:
     VkSemaphore image_available_semaphore() const { return image_available_sem_; }
     VkSemaphore render_finished_semaphore() const { return render_finished_sem_; }
     VkFence     in_flight_fence()           const { return in_flight_fence_; }
+
+    // Optional extension features that the device was created with. Pictor
+    // probes these during device creation and enables whichever are
+    // supported. Consumers (e.g. the Rive renderer wrapper) query these to
+    // pick the most efficient GPU path.
+    //
+    // fragment_shader_interlock (VK_EXT_fragment_shader_interlock):
+    //   Lets Rive use pixel-interlock mode — single-pass coverage without
+    //   atomic compute. Supported on NVIDIA Turing+, Intel Gen9+, AMD RDNA+.
+    //
+    // rasterization_order_attachment_access
+    //   (VK_EXT_rasterization_order_attachment_access):
+    //   Lets Rive use raster-ordered ROV — also single-pass, slightly
+    //   cheaper than interlock on some drivers.
+    bool has_fragment_shader_interlock()               const { return has_fragment_shader_interlock_; }
+    bool has_rasterization_order_attachment_access()   const { return has_rasterization_order_attachment_access_; }
 #endif
 
 private:
@@ -118,6 +134,9 @@ private:
     VkSemaphore              image_available_sem_ = VK_NULL_HANDLE;
     VkSemaphore              render_finished_sem_ = VK_NULL_HANDLE;
     VkFence                  in_flight_fence_     = VK_NULL_HANDLE;
+
+    bool has_fragment_shader_interlock_             = false;
+    bool has_rasterization_order_attachment_access_ = false;
 #endif
 
     bool initialized_ = false;
