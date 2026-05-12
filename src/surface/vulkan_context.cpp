@@ -330,21 +330,117 @@ bool VulkanContext::create_logical_device() {
     queue_info.pQueuePriorities = &priority;
 
     VkPhysicalDeviceFeatures features{};
-    // Query supported features and enable tessellation + fillModeNonSolid
     VkPhysicalDeviceFeatures supported;
     vkGetPhysicalDeviceFeatures(physical_device_, &supported);
-    if (supported.tessellationShader) features.tessellationShader = VK_TRUE;
-    if (supported.fillModeNonSolid)  features.fillModeNonSolid  = VK_TRUE;
+    if (supported.tessellationShader)       features.tessellationShader       = VK_TRUE;
+    if (supported.fillModeNonSolid)         features.fillModeNonSolid         = VK_TRUE;
+    // Rive's Vulkan backend (atomic mode) writes to storage buffers from
+    // fragment shaders; enable the feature if the GPU supports it. Without
+    // it, RenderContextVulkanImpl::MakeContext refuses to initialise.
+    if (supported.fragmentStoresAndAtomics) features.fragmentStoresAndAtomics = VK_TRUE;
+    if (supported.vertexPipelineStoresAndAtomics)
+        features.vertexPipelineStoresAndAtomics = VK_TRUE;
+    // Rive also uses these broadly for path clipping / blending variants.
+    if (supported.independentBlend)         features.independentBlend         = VK_TRUE;
+    if (supported.shaderClipDistance)       features.shaderClipDistance       = VK_TRUE;
+    if (supported.dualSrcBlend)             features.dualSrcBlend             = VK_TRUE;
+    // Enables VkSampler anisotropicEnable — used by demos that sample
+    // offscreen textures at oblique angles (e.g. the Rive-cube demo).
+    if (supported.samplerAnisotropy)        features.samplerAnisotropy        = VK_TRUE;
 
-    const char* dev_extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    // ── Probe optional extensions Rive can use as faster-than-atomic paths.
+    // Rive's Vulkan backend has three coverage modes ordered by speed:
+    //   1. fragment shader pixel-interlock  (VK_EXT_fragment_shader_interlock)
+    //   2. raster-ordered attachment access (VK_EXT_rasterization_order_attachment_access)
+    //   3. atomic (fallback — no extension needed)
+    // Each higher mode avoids an extra compute pass and multiple storage
+    // buffer binds on the CPU record side, which matters especially in
+    // Debug builds where Rive's record work is not optimized.
+    bool ext_interlock_avail = false;
+    bool ext_rov_avail       = false;
+    {
+        uint32_t ecount = 0;
+        vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &ecount, nullptr);
+        std::vector<VkExtensionProperties> eprops(ecount);
+        vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &ecount, eprops.data());
+        for (const auto& e : eprops) {
+            if (std::strcmp(e.extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME) == 0)
+                ext_interlock_avail = true;
+            else if (std::strcmp(e.extensionName,
+                                 VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME) == 0)
+                ext_rov_avail = true;
+        }
+    }
+
+    // Query the per-extension feature bits via pNext chain. These can be
+    // advertised by the extension yet disabled on the physical device.
+    VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock_feat_probe{};
+    interlock_feat_probe.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
+    VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT rov_feat_probe{};
+    rov_feat_probe.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
+    // Chain probes only for extensions the device actually exposes — passing
+    // an unknown struct type to vkGetPhysicalDeviceFeatures2 is a VUID fail.
+    VkPhysicalDeviceFeatures2 probe2{};
+    probe2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    void** ptail = &probe2.pNext;
+    if (ext_interlock_avail) { *ptail = &interlock_feat_probe; ptail = &interlock_feat_probe.pNext; }
+    if (ext_rov_avail)       { *ptail = &rov_feat_probe;       ptail = &rov_feat_probe.pNext; }
+    vkGetPhysicalDeviceFeatures2(physical_device_, &probe2);
+
+    has_fragment_shader_interlock_ =
+        ext_interlock_avail && interlock_feat_probe.fragmentShaderPixelInterlock == VK_TRUE;
+    has_rasterization_order_attachment_access_ =
+        ext_rov_avail && rov_feat_probe.rasterizationOrderColorAttachmentAccess == VK_TRUE;
+
+    if (has_fragment_shader_interlock_)
+        printf("[Pictor] VK_EXT_fragment_shader_interlock enabled "
+               "(Rive will use pixel-interlock coverage)\n");
+    else if (has_rasterization_order_attachment_access_)
+        printf("[Pictor] VK_EXT_rasterization_order_attachment_access enabled "
+               "(Rive will use raster-ordered coverage)\n");
+    else
+        printf("[Pictor] Neither interlock nor ROV extensions available — "
+               "Rive falls back to atomic coverage\n");
+
+    std::vector<const char*> dev_extensions;
+    dev_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    if (has_fragment_shader_interlock_)
+        dev_extensions.push_back(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME);
+    if (has_rasterization_order_attachment_access_)
+        dev_extensions.push_back(VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
+
+    // Build the enable-side pNext chain with VkPhysicalDeviceFeatures2.
+    // Using features2 means pEnabledFeatures MUST be nullptr.
+    VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock_feat_en{};
+    interlock_feat_en.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
+    interlock_feat_en.fragmentShaderPixelInterlock = VK_TRUE;
+    VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT rov_feat_en{};
+    rov_feat_en.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
+    rov_feat_en.rasterizationOrderColorAttachmentAccess = VK_TRUE;
+
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.features = features;
+    void** etail = &features2.pNext;
+    if (has_fragment_shader_interlock_) {
+        *etail = &interlock_feat_en; etail = &interlock_feat_en.pNext;
+    }
+    if (has_rasterization_order_attachment_access_) {
+        *etail = &rov_feat_en; etail = &rov_feat_en.pNext;
+    }
 
     VkDeviceCreateInfo create_info{};
     create_info.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    create_info.pNext                   = &features2;
     create_info.queueCreateInfoCount    = 1;
     create_info.pQueueCreateInfos       = &queue_info;
-    create_info.pEnabledFeatures        = &features;
-    create_info.enabledExtensionCount   = 1;
-    create_info.ppEnabledExtensionNames = dev_extensions;
+    create_info.pEnabledFeatures        = nullptr; // superseded by features2 in pNext
+    create_info.enabledExtensionCount   = static_cast<uint32_t>(dev_extensions.size());
+    create_info.ppEnabledExtensionNames = dev_extensions.data();
 
     if (vkCreateDevice(physical_device_, &create_info, nullptr, &device_) != VK_SUCCESS) {
         fprintf(stderr, "[Pictor] Failed to create Vulkan logical device\n");
@@ -384,12 +480,24 @@ bool VulkanContext::create_swapchain() {
         }
     }
 
-    // Choose present mode
+    // Choose present mode. FIFO = vsync-locked, always present.
+    // With vsync off we prefer IMMEDIATE (raw perf, possible tearing,
+    // no hidden cap at refresh_rate × swapchain_images); fall back to
+    // MAILBOX (triple-buffered, no-tear, implicit cap ≈ 3× refresh) if
+    // IMMEDIATE is unsupported.
     auto sc_config = provider_->get_swapchain_config();
-    VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR; // guaranteed
+    VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     if (!sc_config.vsync) {
+        bool immediate_ok = false;
         for (auto m : present_modes) {
-            if (m == VK_PRESENT_MODE_MAILBOX_KHR) { present_mode = m; break; }
+            if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) { immediate_ok = true; break; }
+        }
+        if (immediate_ok) {
+            present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+        } else {
+            for (auto m : present_modes) {
+                if (m == VK_PRESENT_MODE_MAILBOX_KHR) { present_mode = m; break; }
+            }
         }
     }
 
