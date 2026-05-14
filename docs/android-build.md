@@ -2,10 +2,14 @@
 
 Pictor を **Android NDK でネイティブライブラリとしてビルドする** ために
 必要なツールチェーン、コード改修、段階的マイルストーンを整理する。
-iOS / Metal / MoltenVK は本書の対象外。
+iOS / Metal / MoltenVK は Issue #47 本体の対象外だが、 同じサーフェス抽象で
+受けられるよう **足場 (CMake 分岐 + `IOSSurfaceProvider` + Metal サーフェス
+作成パス) は本作業で同時に入れた** — §11 参照。
 
-現時点では **何もビルドは成功していない**。本書は作業対象のリストアップと
-実装方針の事前合意を目的とする。
+**進捗 (2026-05-15)**: Phase 1 のうち CMake 分岐・`AndroidSurfaceProvider` /
+`IOSSurfaceProvider` 実装・AVX2 ガード・GLFW/Vulkan の条件分岐は実装済み。
+ただし当環境に Android NDK / macOS がないため **クロスビルド自体の検証は
+未実施** — デスクトップ (Windows) のリグレッションビルドが通ることのみ確認済み。
 
 ---
 
@@ -13,16 +17,17 @@ iOS / Metal / MoltenVK は本書の対象外。
 
 | 項目 | 要否 | 状態 |
 |------|------|------|
-| Android NDK + Vulkan ヘッダ | 必須 | 未導入 |
+| Android NDK + Vulkan ヘッダ | 必須 | 未導入 (当環境になし) |
 | Android SDK + build-tools | 実機 APK で必須、lib 単体なら不要 | 未導入 |
-| CMake Android toolchain 経由のクロスビルド | 必須 | ハンドリング未実装 |
-| `VK_USE_PLATFORM_ANDROID_KHR` 分岐 (CMake) | 必須 | **欠落** — コード側の `#ifdef` はあるが CMake から渡していない |
-| GLFW の Android 時の無効化 | 必須 | 未対応 (無条件 FetchContent) |
-| `-mavx2 / /arch:AVX2` の ARM64 回避 | 必須 | 未対応 (ARM で死ぬ) |
-| `AndroidSurfaceProvider` 実装 | 必須 | 未実装 |
+| CMake Android toolchain 経由のクロスビルド | 必須 | **分岐は実装済み、実ビルド検証は未実施** |
+| `VK_USE_PLATFORM_ANDROID_KHR` 分岐 (CMake) | 必須 | **実装済み** — `if(ANDROID)` で define |
+| GLFW の Android 時の無効化 | 必須 | **実装済み** — `PICTOR_MOBILE` で FetchContent/provider をスキップ |
+| `-mavx2 / /arch:AVX2` の ARM64 回避 | 必須 | **実装済み** — `PICTOR_IS_X86` ガード |
+| `AndroidSurfaceProvider` 実装 | 必須 | **実装済み** — `android_surface_provider.h/.cpp` |
 | glslc (コンピュートシェーダ焼き込み) | 必須 | NDK 同梱で OK |
-| JNI ブリッジ / Gradle プロジェクト | 実機で必須、静的 lib 単体なら後回し可 | 未実装 |
+| JNI ブリッジ / Gradle プロジェクト | 実機で必須、静的 lib 単体なら後回し可 | 未実装 (Phase 3) |
 | Rive Renderer の ARM64 ビルド | `PICTOR_ENABLE_RIVE=OFF` なら不要 | 未対応 |
+| (iOS) MoltenVK / `IOSSurfaceProvider` | #47 対象外、足場のみ | **足場実装済み** — §11 |
 
 着手順推奨: **Phase 1 (CMake で arm64-v8a の `libpictor.a` が通る) → Phase 2
 (headless demo が emulator で動く) → Phase 3 (Gradle + JNI で APK に載る)**。
@@ -288,13 +293,16 @@ cmake --build build-android-x86_64 -- -j
 
 ### Phase 1 — `libpictor.a` が arm64-v8a でリンク成功 (最優先)
 
-- [ ] CMake の `if(ANDROID)` ブロック追加
-- [ ] GLFW / AVX2 / Vulkan find_package の条件分岐
-- [ ] `AndroidSurfaceProvider` 実装
-- [ ] `memory_subsystem` 等の AVX2 intrinsic を ARM64 向けに fallback
-- [ ] `arm64-v8a` + `x86_64` 2 ABI で `cmake --build` 成功
+- [x] CMake の `if(ANDROID)` / `if(IOS)` ブロック追加 (`PICTOR_MOBILE` フラグ)
+- [x] GLFW / AVX2 / Vulkan find_package の条件分岐
+- [x] `AndroidSurfaceProvider` 実装 (`IOSSurfaceProvider` も同時に)
+- [x] AVX2 intrinsic — `update_scheduler.cpp` は既に `#ifdef __AVX2__` ガード済み。
+      CMake フラグ側を `PICTOR_IS_X86` でガード。 他に intrinsic 直書き箇所なし
+- [ ] `arm64-v8a` + `x86_64` 2 ABI で `cmake --build` 成功 — **NDK 未導入のため未検証**
 
 完了条件: 両 ABI で `libpictor.a` が生成される。実機実行は不要。
+現状: コード/CMake 改修は完了。 NDK のある環境でクロスビルドを通すのが残作業。
+当環境ではデスクトップ (Windows / MSVC) のリグレッションビルドが通ることを確認済み。
 
 ### Phase 2 — Android Emulator で `pictor_mobile_demo_native` 実行
 
@@ -353,3 +361,29 @@ cmake --build build-android-x86_64 -- -j
 - 各 Phase の完了チェックを入れ、ブロッカーが解消されたら該当セクションを更新
 - 「未決事項」の項目は判断が入ったら削除、もしくは「決定」欄を追加
 - 実装コミット後、実際のコマンドラインや必要な patch を「参照」に差し替える
+
+---
+
+## 11. iOS / MoltenVK (Issue #47 対象外 — 足場のみ)
+
+Issue #47 は Android が対象だが、 サーフェス抽象を一度だけ触るついでに
+iOS の足場も同時に入れた。 Android と同じ `PICTOR_MOBILE` 系の分岐に乗る。
+
+### 11.1 実装済みの足場
+
+| 箇所 | 内容 |
+|------|------|
+| `CMakeLists.txt` | `elseif(IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")` で `PICTOR_MOBILE` / `PICTOR_PLATFORM_IOS` を立て、 `find_package(Vulkan)` と GLFW FetchContent をスキップ。 `VK_USE_PLATFORM_METAL_EXT=1` を定義 |
+| `surface_provider.h` | `NativeWindowHandle::Type::iOS` + `struct IOS { void* metal_layer; }` (CAMetalLayer*) |
+| `vulkan_context.cpp` | `#ifdef VK_USE_PLATFORM_METAL_EXT` で `vkCreateMetalSurfaceEXT` を使う surface 作成パス |
+| `ios_surface_provider.h/.cpp` | `IOSSurfaceProvider` — CAMetalLayer* を `void*` で受け、 `VK_KHR_surface` + `VK_EXT_metal_surface` を要求 |
+
+`.cpp` は Objective-C を含まない (CAMetalLayer は `void*` で受け渡し)。
+ホストの ViewController 側で `__bridge void*` してプロバイダに渡す想定。
+
+### 11.2 残作業 (別 Issue 化推奨)
+
+- MoltenVK の取得とリンク (`Vulkan_LIBRARIES` を MoltenVK.framework に向ける)
+- Xcode プロジェクト / `ios/` ディレクトリ + UIView(layerClass=CAMetalLayer)
+- 実機 / Simulator での検証 (当環境は macOS でないため未着手)
+- AVX2 と同様、 ARM64 (Apple Silicon / A シリーズ) で SIMD パスの確認

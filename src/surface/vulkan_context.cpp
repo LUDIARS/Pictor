@@ -272,6 +272,20 @@ bool VulkanContext::create_surface() {
     }
 #endif
 
+#ifdef VK_USE_PLATFORM_METAL_EXT
+    case NativeWindowHandle::Type::iOS: {
+        // MoltenVK 経由。 CAMetalLayer* から VkSurfaceKHR を作る。
+        VkMetalSurfaceCreateInfoEXT info{};
+        info.sType  = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+        info.pLayer = static_cast<const CAMetalLayer*>(handle.ios.metal_layer);
+        if (vkCreateMetalSurfaceEXT(instance_, &info, nullptr, &surface_) != VK_SUCCESS) {
+            fprintf(stderr, "[Pictor] Failed to create iOS (Metal) surface\n");
+            return false;
+        }
+        return true;
+    }
+#endif
+
     default:
         fprintf(stderr, "[Pictor] Unsupported or unavailable platform surface type %d\n",
                 static_cast<int>(handle.type));

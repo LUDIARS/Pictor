@@ -15,26 +15,60 @@ option(PICTOR_ENABLE_RIVE         "Enable Rive Renderer integration (requires pr
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# --- Vulkan (requires Vulkan SDK to be installed) ---
-find_package(Vulkan QUIET)
+# ---------------------------------------------------------------------------
+# モバイル (Android NDK / iOS) クロスビルドの早期分岐 — Issue #47
+#
+#   Android: NDK 同梱 Vulkan を直接指す。 GLFW は Android ターゲットを持たない
+#            ので FetchContent を止める。
+#   iOS    : MoltenVK 経由で Vulkan。 同じく GLFW は使わない。
+# どちらも `find_package(Vulkan)` / GLFW FetchContent をスキップし、
+# PICTOR_HAS_VULKAN を明示的に立てる。 デスクトップ (WIN32/UNIX/APPLE-macOS)
+# は従来パスのまま影響を受けない。
+# ---------------------------------------------------------------------------
+set(PICTOR_MOBILE OFF)
+if(ANDROID)
+    set(PICTOR_MOBILE ON)
+    set(PICTOR_PLATFORM_ANDROID ON)
+    # NDK 同梱 Vulkan (libvulkan.so + ヘッダ)。 find_package では拾えない。
+    set(Vulkan_FOUND TRUE)
+    set(Vulkan_LIBRARIES vulkan)
+    message(STATUS "Pictor: Android NDK build (ABI=${ANDROID_ABI}, API=${ANDROID_PLATFORM})")
+elseif(IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PICTOR_MOBILE ON)
+    set(PICTOR_PLATFORM_IOS ON)
+    # iOS は MoltenVK (Vulkan→Metal)。 ホストが MoltenVK.xcframework をリンクし、
+    # -DVulkan_LIBRARIES / -DVulkan_INCLUDE_DIRS で指す想定。 ここでは
+    # PICTOR_HAS_VULKAN を立てるだけ (実リンクはホスト xcodeproj 側)。
+    set(Vulkan_FOUND TRUE)
+    message(STATUS "Pictor: iOS build (MoltenVK 経由)")
+endif()
 
-# --- GLFW (auto-download via FetchContent if not found) ---
+# --- Vulkan (requires Vulkan SDK to be installed) — デスクトップのみ ---
+if(NOT PICTOR_MOBILE)
+    find_package(Vulkan QUIET)
+endif()
+
+# --- GLFW (auto-download via FetchContent if not found) — デスクトップのみ ---
 include(FetchContent)
-find_package(glfw3 QUIET)
-if(NOT glfw3_FOUND)
-    message(STATUS "Pictor: glfw3 not found on system — fetching via FetchContent")
-    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        glfw
-        GIT_REPOSITORY https://github.com/glfw/glfw.git
-        GIT_TAG        3.4
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(glfw)
-    set(glfw3_FOUND TRUE)
+if(NOT PICTOR_MOBILE)
+    find_package(glfw3 QUIET)
+    if(NOT glfw3_FOUND)
+        message(STATUS "Pictor: glfw3 not found on system — fetching via FetchContent")
+        set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            glfw
+            GIT_REPOSITORY https://github.com/glfw/glfw.git
+            GIT_TAG        3.4
+            GIT_SHALLOW    TRUE
+        )
+        FetchContent_MakeAvailable(glfw)
+        set(glfw3_FOUND TRUE)
+    endif()
+else()
+    set(glfw3_FOUND FALSE)
 endif()
 
 add_library(pictor STATIC
@@ -101,8 +135,9 @@ add_library(pictor STATIC
     src/profiler/bitmap_text_renderer.cpp
 
     # Surface Abstraction
+    # (glfw / android / ios の各プロバイダはプラットフォーム別に
+    #  add_library 直後の target_sources で条件付き追加する)
     src/surface/vulkan_context.cpp
-    src/surface/glfw_surface_provider.cpp
     src/surface/simple_renderer.cpp
 
     # Data Handler
@@ -148,20 +183,45 @@ add_library(pictor STATIC
     src/core/pictor_renderer.cpp
 )
 
+# サーフェスプロバイダ — プラットフォーム別に条件付きで追加。
+# デスクトップ: GLFW プロバイダ。 Android/iOS: 各ネイティブプロバイダ。
+if(PICTOR_PLATFORM_ANDROID)
+    target_sources(pictor PRIVATE src/surface/android_surface_provider.cpp)
+elseif(PICTOR_PLATFORM_IOS)
+    target_sources(pictor PRIVATE src/surface/ios_surface_provider.cpp)
+else()
+    target_sources(pictor PRIVATE src/surface/glfw_surface_provider.cpp)
+endif()
+
 target_include_directories(pictor PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 
 if(Vulkan_FOUND)
-    target_link_libraries(pictor PUBLIC Vulkan::Vulkan)
     target_compile_definitions(pictor PUBLIC PICTOR_HAS_VULKAN=1)
-    if(WIN32)
-        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_WIN32_KHR=1 NOMINMAX)
-    elseif(UNIX AND NOT APPLE)
-        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_XLIB_KHR=1)
-    elseif(APPLE)
-        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_MACOS_MVK=1)
+    if(PICTOR_PLATFORM_ANDROID)
+        # NDK 同梱の libvulkan / android / log を直接リンク。
+        target_link_libraries(pictor PUBLIC vulkan android log)
+        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_ANDROID_KHR=1)
+    elseif(PICTOR_PLATFORM_IOS)
+        # iOS は MoltenVK。 リンクはホスト xcodeproj 側 (MoltenVK.xcframework)。
+        if(Vulkan_LIBRARIES)
+            target_link_libraries(pictor PUBLIC ${Vulkan_LIBRARIES})
+        endif()
+        if(Vulkan_INCLUDE_DIRS)
+            target_include_directories(pictor PUBLIC ${Vulkan_INCLUDE_DIRS})
+        endif()
+        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_METAL_EXT=1)
+    else()
+        target_link_libraries(pictor PUBLIC Vulkan::Vulkan)
+        if(WIN32)
+            target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_WIN32_KHR=1 NOMINMAX)
+        elseif(UNIX AND NOT APPLE)
+            target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_XLIB_KHR=1)
+        elseif(APPLE)
+            target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_MACOS_MVK=1)
+        endif()
     endif()
 endif()
 
@@ -187,17 +247,35 @@ if(PICTOR_ENABLE_RIVE)
 endif()
 
 # Platform-specific flags
+# AVX2 は x86/x64 専用命令。 ARM64 (Android arm64-v8a / iOS) では clang が
+# `-mavx2` でエラーになるため、 x86 系のみに限定する。 AVX2 を使うコード
+# (update_scheduler.cpp) は `#ifdef __AVX2__` でスカラ fallback 済み。
+set(PICTOR_IS_X86 FALSE)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|x64|X86|X64|AMD64|amd64|i[3-6]86")
+    set(PICTOR_IS_X86 TRUE)
+endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(pictor PRIVATE -Wall -Wextra -mavx2)
+    target_compile_options(pictor PRIVATE -Wall -Wextra)
+    if(PICTOR_IS_X86 AND NOT PICTOR_MOBILE)
+        target_compile_options(pictor PRIVATE -mavx2)
+    endif()
 elseif(MSVC)
-    target_compile_options(pictor PRIVATE /W4 /arch:AVX2 /utf-8)
+    target_compile_options(pictor PRIVATE /W4 /utf-8)
+    if(PICTOR_IS_X86)
+        target_compile_options(pictor PRIVATE /arch:AVX2)
+    endif()
 endif()
 
 if(glfw3_FOUND)
     target_link_libraries(pictor PUBLIC glfw)
 endif()
 
-if(PICTOR_BUILD_DEMO)
+# デモ群は GLFW / Vulkan SDK 前提。 モバイル (Android/iOS) ではビルドしない
+# (Phase 2 以降で headless demo を .so 化する場合は別途ゲートする)。
+if(PICTOR_BUILD_DEMO AND PICTOR_MOBILE)
+    message(STATUS "Pictor: モバイルビルドのためデモ群をスキップ (PICTOR_BUILD_DEMO=OFF 相当)")
+endif()
+if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
     # Benchmark (headless capable, no Vulkan/GLFW required)
     add_executable(pictor_benchmark demo/benchmark/main.cpp)
     target_link_libraries(pictor_benchmark PRIVATE pictor)
@@ -458,7 +536,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/fbx)
 endif()
 
 # ─── Tests (opt-in via CTest) ────────────────────────────────────────
-if(PICTOR_BUILD_TESTS)
+if(PICTOR_BUILD_TESTS AND NOT PICTOR_MOBILE)
     enable_testing()
     add_subdirectory(tests)
 endif()
@@ -474,7 +552,7 @@ endif()
 #
 # The feature selector is a static HTML tool so it runs anywhere with a
 # browser (including file://). The measure target needs Python 3 on PATH.
-if(PICTOR_BUILD_TOOLS)
+if(PICTOR_BUILD_TOOLS AND NOT PICTOR_MOBILE)
     set(_pictor_tools_selector "${CMAKE_SOURCE_DIR}/tools/feature-selector/index.html")
     if(EXISTS "${_pictor_tools_selector}")
         if(WIN32)
