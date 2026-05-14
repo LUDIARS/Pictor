@@ -1,6 +1,9 @@
 ﻿#pragma once
 
-#include "pictor/core/types.h"
+/// ポストプロセスの設定構造体。 実 Vulkan の実行は `PostProcessPipeline`
+/// (host-driven) が担う。 旧 `PostProcessEffect` 抽象クラスと per-effect
+/// クラス群 (BloomEffect 等) は実装パイプラインへ統合され撤去済み。
+
 #include <string>
 #include <cstdint>
 
@@ -100,43 +103,6 @@ struct PostProcessConfig {
     ToneMappingConfig    tone_mapping;
     VignetteConfig       vignette;
     ColorGradingConfig   color_grading;
-};
-
-/// Abstract base class for a single post-process effect.
-///
-/// Each effect reads from an input framebuffer (HDR color + depth)
-/// and writes to an output framebuffer. Effects are chained by the
-/// PostProcessPipeline in stack order.
-class PostProcessEffect {
-public:
-    virtual ~PostProcessEffect() = default;
-
-    /// Human-readable name (e.g. "Bloom", "DoF")
-    virtual const char* name() const = 0;
-
-    /// Whether this effect is currently active
-    virtual bool is_enabled() const = 0;
-    virtual void set_enabled(bool enabled) = 0;
-
-    /// Initialize GPU resources (called once at pipeline setup)
-    virtual void initialize(uint32_t width, uint32_t height) = 0;
-
-    /// Resize internal resources on viewport change
-    virtual void resize(uint32_t width, uint32_t height) = 0;
-
-    /// Release GPU resources
-    virtual void shutdown() = 0;
-
-    /// Execute the effect.
-    ///
-    /// @param input_color   Handle to the HDR color texture from the previous stage
-    /// @param input_depth   Handle to the depth buffer (linear depth)
-    /// @param output_color  Handle to the output render target
-    /// @param delta_time    Frame delta time (for temporal effects)
-    virtual void execute(TextureHandle input_color,
-                         TextureHandle input_depth,
-                         TextureHandle output_color,
-                         float delta_time) = 0;
 };
 
 } // namespace pictor

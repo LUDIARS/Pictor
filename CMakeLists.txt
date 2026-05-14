@@ -75,11 +75,7 @@ add_library(pictor STATIC
     src/gi/gi_lighting_system.cpp
     src/gi/gi_bake.cpp
 
-    # Post-Process
-    src/postprocess/bloom_effect.cpp
-    src/postprocess/depth_of_field_effect.cpp
-    src/postprocess/tone_mapping_effect.cpp
-    src/postprocess/gaussian_blur_effect.cpp
+    # Post-Process (host-driven, real Vulkan)
     src/postprocess/postprocess_pipeline.cpp
 
     # Material

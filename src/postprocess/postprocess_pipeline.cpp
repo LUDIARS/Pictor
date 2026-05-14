@@ -14,25 +14,8 @@ namespace pictor {
 PostProcessPipeline::PostProcessPipeline()  = default;
 PostProcessPipeline::~PostProcessPipeline() { shutdown(); }
 
-void PostProcessPipeline::initialize(uint32_t width, uint32_t height,
-                                     const PostProcessConfig& config) {
-    // Managed-renderer compat: store config / dims, no GPU resources.
-    width_  = width;
-    height_ = height;
-    config_ = config;
-}
-
 void PostProcessPipeline::set_config(const PostProcessConfig& config) {
     config_ = config;
-}
-
-uint32_t PostProcessPipeline::enabled_effect_count() const {
-    uint32_t n = 0;
-    if (config_.bloom.enabled)         ++n;
-    if (config_.tone_mapping.enabled)  ++n;
-    if (config_.vignette.enabled)      ++n;
-    if (config_.color_grading.enabled) ++n;
-    return n;
 }
 
 #ifdef PICTOR_HAS_VULKAN

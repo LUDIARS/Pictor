@@ -33,11 +33,6 @@ public:
     PostProcessPipeline(const PostProcessPipeline&) = delete;
     PostProcessPipeline& operator=(const PostProcessPipeline&) = delete;
 
-    // ---- Managed-renderer compat (no Vulkan; stores config only) ----
-    void initialize(uint32_t width, uint32_t height, const PostProcessConfig& config);
-    void execute(TextureHandle, TextureHandle, TextureHandle, float) {}
-    uint32_t enabled_effect_count() const;
-
     // ---- Config ----
     void set_config(const PostProcessConfig& config);
     const PostProcessConfig& config() const { return config_; }
