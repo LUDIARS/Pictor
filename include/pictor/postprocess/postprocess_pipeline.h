@@ -1,25 +1,30 @@
-﻿#pragma once
+#pragma once
 
 #include "pictor/postprocess/postprocess_effect.h"
-#include "pictor/postprocess/bloom_effect.h"
-#include "pictor/postprocess/depth_of_field_effect.h"
-#include "pictor/postprocess/tone_mapping_effect.h"
-#include "pictor/postprocess/gaussian_blur_effect.h"
-#include <memory>
+#include <cstdint>
+#include <string>
 #include <vector>
+
+#ifdef PICTOR_HAS_VULKAN
+#include <vulkan/vulkan.h>
+#endif
 
 namespace pictor {
 
-/// Post-process pipeline: manages and executes a stack of effects.
+class VulkanContext;
+
+/// Real, host-driven post-process pipeline.
 ///
-/// Default effect execution order (matching typical HDR pipeline):
-///   1. Bloom          — extract & scatter bright areas
-///   2. Depth of Field — camera bokeh simulation
-///   3. Gaussian Blur  — general-purpose full-screen blur
-///   4. Tone Mapping   — HDR → LDR conversion + gamma (always last)
+/// The host renders its 3D scene into the pipeline-owned HDR target
+/// (`scene_render_pass()` / `scene_framebuffer()`), then calls `record()`
+/// to run the effect chain straight onto a swapchain image:
 ///
-/// The pipeline manages ping-pong render targets internally so
-/// consecutive effects chain without explicit user wiring.
+///   scene(HDR) → bloom extract → blur H → blur V
+///              → final composite (bloom + tonemap + LUT + vignette) → output
+///
+/// All four effects always execute; a disabled effect collapses to an
+/// identity via its push-constant parameters, so intermediate image
+/// layouts stay valid every frame.
 class PostProcessPipeline {
 public:
     PostProcessPipeline();
@@ -28,74 +33,113 @@ public:
     PostProcessPipeline(const PostProcessPipeline&) = delete;
     PostProcessPipeline& operator=(const PostProcessPipeline&) = delete;
 
-    /// Initialize pipeline with screen dimensions and full config
+    // ---- Managed-renderer compat (no Vulkan; stores config only) ----
     void initialize(uint32_t width, uint32_t height, const PostProcessConfig& config);
+    void execute(TextureHandle, TextureHandle, TextureHandle, float) {}
+    uint32_t enabled_effect_count() const;
 
-    /// Resize all internal resources on viewport change
-    void resize(uint32_t width, uint32_t height);
-
-    /// Release all resources
-    void shutdown();
-
-    bool is_initialized() const { return initialized_; }
-
-    /// Execute the full post-process stack.
-    ///
-    /// @param scene_color  HDR color output from the scene render pass
-    /// @param scene_depth  Scene depth buffer (linear depth)
-    /// @param final_output Destination render target (swapchain or LDR buffer)
-    /// @param delta_time   Frame delta time
-    void execute(TextureHandle scene_color,
-                 TextureHandle scene_depth,
-                 TextureHandle final_output,
-                 float delta_time);
-
-    /// Apply a full configuration update
+    // ---- Config ----
     void set_config(const PostProcessConfig& config);
     const PostProcessConfig& config() const { return config_; }
+    PostProcessConfig&       config_mut()    { return config_; }   ///< live tweaking
 
-    // --- Per-effect access ---
+    bool is_initialized() const { return vulkan_ready_; }
 
-    BloomEffect&          bloom()          { return *bloom_; }
-    DepthOfFieldEffect&   depth_of_field() { return *dof_; }
-    GaussianBlurEffect&   gaussian_blur()  { return *blur_; }
-    ToneMappingEffect&    tone_mapping()   { return *tonemap_; }
+#ifdef PICTOR_HAS_VULKAN
+    /// Real Vulkan init. `output_views` are the swapchain image views the
+    /// final pass renders into. `shader_dir` holds the compiled `.spv` files.
+    /// `output_format` is the swapchain format.
+    ///
+    /// The LUT is supplied as host-decoded RGBA8 pixels (`lut_rgba`,
+    /// `lut_w` x `lut_h`); pass nullptr for no LUT. Pictor stays free of any
+    /// image-decoding dependency — the host loads `config.color_grading.lut_path`.
+    /// Returns false on failure.
+    bool initialize_vulkan(VulkanContext& vk,
+                           const std::string& shader_dir,
+                           uint32_t width, uint32_t height,
+                           VkFormat output_format,
+                           const std::vector<VkImageView>& output_views,
+                           const PostProcessConfig& config,
+                           const unsigned char* lut_rgba = nullptr,
+                           int lut_w = 0, int lut_h = 0);
 
-    const BloomEffect&        bloom()          const { return *bloom_; }
-    const DepthOfFieldEffect& depth_of_field() const { return *dof_; }
-    const GaussianBlurEffect& gaussian_blur()  const { return *blur_; }
-    const ToneMappingEffect&  tone_mapping()   const { return *tonemap_; }
+    /// Render pass / framebuffer the host renders its 3D scene into.
+    VkRenderPass  scene_render_pass() const { return rp_scene_; }
+    VkFramebuffer scene_framebuffer() const { return fb_scene_; }
+    VkExtent2D    extent() const { return extent_; }
 
-    /// Get the ordered list of all effects (for iteration / UI)
-    const std::vector<PostProcessEffect*>& effect_stack() const { return effect_stack_; }
+    /// Record the post-process chain into `output_views[output_index]`.
+    /// The output image is left in COLOR_ATTACHMENT_OPTIMAL so the host can
+    /// draw a HUD on top with a LOAD render pass before presenting.
+    void record(VkCommandBuffer cmd, uint32_t output_index, float delta_time);
+#endif
 
-    // --- HDR Config ---
-
-    void set_hdr_config(const HDRConfig& hdr) { config_.hdr = hdr; }
-    const HDRConfig& hdr_config() const { return config_.hdr; }
-
-    /// Get count of currently enabled effects
-    uint32_t enabled_effect_count() const;
+    void shutdown();
 
 private:
     PostProcessConfig config_;
+    uint32_t          width_  = 0;
+    uint32_t          height_ = 0;
+    bool              vulkan_ready_ = false;
 
-    std::unique_ptr<BloomEffect>        bloom_;
-    std::unique_ptr<DepthOfFieldEffect> dof_;
-    std::unique_ptr<GaussianBlurEffect> blur_;
-    std::unique_ptr<ToneMappingEffect>  tonemap_;
+#ifdef PICTOR_HAS_VULKAN
+    struct RenderTarget {
+        VkImage        image  = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView    view   = VK_NULL_HANDLE;
+        VkFramebuffer  fb     = VK_NULL_HANDLE;
+    };
+    struct Texture {
+        VkImage        image  = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView    view   = VK_NULL_HANDLE;
+    };
 
-    std::vector<PostProcessEffect*> effect_stack_;
+    bool create_render_passes_(VkFormat output_format);
+    bool create_targets_();
+    bool create_samplers_();
+    bool create_descriptors_();
+    bool create_pipelines_(const std::string& shader_dir);
+    bool create_output_framebuffers_(const std::vector<VkImageView>& views);
+    bool upload_lut_(const unsigned char* rgba, int w, int h);
+    VkShaderModule load_shader_(const std::string& path) const;
+    bool create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPass rp);
+    uint32_t find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
 
-    // Ping-pong render targets for chaining effects
-    TextureHandle ping_target_ = INVALID_TEXTURE;
-    TextureHandle pong_target_ = INVALID_TEXTURE;
+    VulkanContext* vk_     = nullptr;
+    VkDevice       device_ = VK_NULL_HANDLE;
+    VkExtent2D     extent_ = {0, 0};
+    bool           output_is_srgb_ = false;
 
-    uint32_t width_  = 0;
-    uint32_t height_ = 0;
-    bool     initialized_ = false;
+    VkRenderPass rp_scene_  = VK_NULL_HANDLE;  // RGBA16F, CLEAR
+    VkRenderPass rp_inter_  = VK_NULL_HANDLE;  // RGBA16F, DONT_CARE
+    VkRenderPass rp_output_ = VK_NULL_HANDLE;  // swapchain format, DONT_CARE
 
-    void build_effect_stack();
+    RenderTarget scene_;   // host renders the 3D scene here (HDR)
+    RenderTarget ping_;    // bloom intermediate
+    RenderTarget pong_;    // bloom intermediate
+    VkFramebuffer fb_scene_ = VK_NULL_HANDLE;  // alias of scene_.fb
+
+    std::vector<VkFramebuffer> output_fbs_;    // one per swapchain image
+
+    Texture   lut_{};
+    bool      lut_loaded_ = false;
+    VkSampler sampler_ = VK_NULL_HANDLE;
+
+    VkDescriptorPool      desc_pool_   = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dsl_single_  = VK_NULL_HANDLE;  // 1 sampler
+    VkDescriptorSetLayout dsl_grade_   = VK_NULL_HANDLE;  // 3 samplers
+    VkDescriptorSet       ds_extract_  = VK_NULL_HANDLE;  // samples scene_
+    VkDescriptorSet       ds_blur_h_   = VK_NULL_HANDLE;  // samples ping_
+    VkDescriptorSet       ds_blur_v_   = VK_NULL_HANDLE;  // samples pong_
+    VkDescriptorSet       ds_grade_    = VK_NULL_HANDLE;  // scene_ + ping_ + lut_
+
+    VkPipelineLayout pl_single_ = VK_NULL_HANDLE;
+    VkPipelineLayout pl_grade_  = VK_NULL_HANDLE;
+    VkPipeline       pipe_extract_ = VK_NULL_HANDLE;
+    VkPipeline       pipe_blur_    = VK_NULL_HANDLE;
+    VkPipeline       pipe_grade_   = VK_NULL_HANDLE;
+#endif
 };
 
 } // namespace pictor

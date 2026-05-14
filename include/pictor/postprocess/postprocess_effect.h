@@ -71,6 +71,25 @@ struct ToneMappingConfig {
     float             saturation  = 1.0f; ///< Post-tonemap saturation (1.0 = unchanged)
 };
 
+/// Vignette configuration — darkens (or tints) screen edges.
+struct VignetteConfig {
+    bool   enabled   = true;
+    float  intensity = 0.35f;          ///< 0 = none, 1 = strong edge darkening
+    float  radius    = 0.75f;          ///< Normalized distance where falloff starts
+    float  softness  = 0.45f;          ///< Falloff width (larger = smoother)
+    float  color[3]  = {0.0f, 0.0f, 0.0f}; ///< Edge tint (usually black)
+};
+
+/// Color-grading configuration — applies a neutral LUT strip (PNG).
+/// The strip is a `lut_size` tall by `lut_size*lut_size` wide RGBA8 image
+/// (e.g. 16x256), the standard Unity / industry "neutral LUT" layout.
+struct ColorGradingConfig {
+    bool        enabled       = false;
+    std::string lut_path;              ///< PNG LUT strip; empty disables the LUT
+    float       lut_intensity = 1.0f;  ///< Blend 0..1 between original and graded
+    uint32_t    lut_size      = 16;    ///< LUT cube edge (strip = size x size*size)
+};
+
 /// Aggregated post-process stack configuration.
 /// Determines which effects are active and their parameters.
 struct PostProcessConfig {
@@ -79,6 +98,8 @@ struct PostProcessConfig {
     DepthOfFieldConfig   depth_of_field;
     GaussianBlurConfig   gaussian_blur;
     ToneMappingConfig    tone_mapping;
+    VignetteConfig       vignette;
+    ColorGradingConfig   color_grading;
 };
 
 /// Abstract base class for a single post-process effect.
