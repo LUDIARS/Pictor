@@ -78,6 +78,9 @@ add_library(pictor STATIC
     # Post-Process (host-driven, real Vulkan)
     src/postprocess/postprocess_pipeline.cpp
 
+    # Decals (projected, host-driven)
+    src/decal/decal_system.cpp
+
     # Material
     src/material/base_material_builder.cpp
     src/material/material_serializer.cpp

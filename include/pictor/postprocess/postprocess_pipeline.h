@@ -66,6 +66,8 @@ public:
     VkFramebuffer scene_framebuffer() const { return fb_scene_; }
     VkExtent2D    extent() const { return extent_; }
 
+    /// シーンカラー HDR ビュー (RGBA16F)。 DecalSystem 等がこれへ合成する。
+    VkImageView   scene_color_view() const { return scene_.view; }
     /// シーンの深度ビュー (D32_SFLOAT)。 DecalSystem 等が read する。
     VkImageView   scene_depth_view() const { return scene_.depth_view; }
 
