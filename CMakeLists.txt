@@ -135,6 +135,7 @@ add_library(pictor STATIC
     src/animation/lottie_animation.cpp
     src/animation/vector_animation.cpp
     src/animation/animation_system.cpp
+    src/animation/montage.cpp
 
     # Vector (Rive Renderer integration)
     src/vector/rive_renderer.cpp

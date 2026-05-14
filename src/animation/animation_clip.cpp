@@ -10,6 +10,7 @@ AnimationClip::AnimationClip(const AnimationClipDescriptor& desc)
     , sample_rate_(desc.sample_rate)
     , wrap_mode_(desc.wrap_mode)
     , channels_(desc.channels)
+    , bone_names_(desc.bone_names)
 {}
 
 float AnimationClip::wrap_time(float time, WrapMode mode) const {

@@ -31,6 +31,10 @@ public:
     WrapMode wrap_mode() const { return wrap_mode_; }
     const std::vector<AnimationChannel>& channels() const { return channels_; }
 
+    /// Montage extension: source-skeleton bone names per channel. Empty for
+    /// legacy clips. See `animation_types.h` `AnimationClipDescriptor::bone_names`.
+    const std::vector<std::string>& bone_names() const { return bone_names_; }
+
     void set_wrap_mode(WrapMode mode) { wrap_mode_ = mode; }
 
 private:
@@ -49,6 +53,7 @@ private:
     float       sample_rate_ = 30.0f;
     WrapMode    wrap_mode_   = WrapMode::LOOP;
     std::vector<AnimationChannel> channels_;
+    std::vector<std::string>      bone_names_;   // Montage extension (may be empty)
 };
 
 } // namespace pictor
