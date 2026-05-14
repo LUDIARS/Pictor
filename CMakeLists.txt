@@ -142,6 +142,7 @@ add_library(pictor STATIC
     # UI Overlay
     src/ui/screen_overlay_group.cpp
     src/ui/ui_overlay_pipeline.cpp
+    src/ui/ui_renderer.cpp
 
     # Public API
     src/core/pictor_renderer.cpp
