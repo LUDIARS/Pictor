@@ -1,6 +1,7 @@
 #include "pictor/decal/decal_system.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -24,7 +25,8 @@ struct DecalPC {
     float opacity;
     float angle_fade;
     float depth_fade;
-    float _pad;
+    float _pad0;
+    float decal_axis[4];   // xyz = 投影軸 (ワールド空間, 正規化), w 未使用
 };
 
 /// 一般 4x4 逆行列 (余因子法)。 行優先配列 in/out。
@@ -258,7 +260,7 @@ bool DecalSystem::create_descriptors_() {
     return true;
 }
 
-bool DecalSystem::create_pipeline_(const std::string& shader_dir) {
+bool DecalSystem::create_pipelines_(const std::string& shader_dir) {
     VkShaderModule vs = load_shader_(shader_dir + "/fullscreen_quad.vert.spv");
     VkShaderModule fs = load_shader_(shader_dir + "/decal.frag.spv");
     if (!vs || !fs) {
@@ -297,23 +299,6 @@ bool DecalSystem::create_pipeline_(const std::string& shader_dir) {
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     VkPipelineDepthStencilStateCreateInfo dss{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-
-    // ALPHA ブレンド: out = src.a * src + (1 - src.a) * dst
-    VkPipelineColorBlendAttachmentState ba{};
-    ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    ba.blendEnable         = VK_TRUE;
-    ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    ba.colorBlendOp        = VK_BLEND_OP_ADD;
-    ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    ba.alphaBlendOp        = VK_BLEND_OP_ADD;
-    VkPipelineColorBlendStateCreateInfo cb{
-        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1;
-    cb.pAttachments    = &ba;
-
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dy{
         VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
@@ -334,25 +319,65 @@ bool DecalSystem::create_pipeline_(const std::string& shader_dir) {
         return false;
     }
 
-    VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gp.stageCount          = 2;
-    gp.pStages             = stages;
-    gp.pVertexInputState   = &vi;
-    gp.pInputAssemblyState = &ia;
-    gp.pViewportState      = &vp;
-    gp.pRasterizationState = &rs;
-    gp.pMultisampleState   = &ms;
-    gp.pDepthStencilState  = &dss;
-    gp.pColorBlendState    = &cb;
-    gp.pDynamicState       = &dy;
-    gp.layout              = pipeline_layout_;
-    gp.renderPass          = render_pass_;
-    gp.subpass             = 0;
-    VkResult r = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp,
-                                           nullptr, &pipeline_alpha_);
+    // ブレンドモードごとに 1 パイプライン (シェーダは共通、 fixed-function の
+    // ブレンド状態だけ差し替える)。
+    auto make_pipe = [&](const VkPipelineColorBlendAttachmentState& ba,
+                         VkPipeline& out) -> bool {
+        VkPipelineColorBlendStateCreateInfo cb{
+            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        cb.attachmentCount = 1;
+        cb.pAttachments    = &ba;
+        VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        gp.stageCount          = 2;
+        gp.pStages             = stages;
+        gp.pVertexInputState   = &vi;
+        gp.pInputAssemblyState = &ia;
+        gp.pViewportState      = &vp;
+        gp.pRasterizationState = &rs;
+        gp.pMultisampleState   = &ms;
+        gp.pDepthStencilState  = &dss;
+        gp.pColorBlendState    = &cb;
+        gp.pDynamicState       = &dy;
+        gp.layout              = pipeline_layout_;
+        gp.renderPass          = render_pass_;
+        gp.subpass             = 0;
+        return vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp,
+                                         nullptr, &out) == VK_SUCCESS;
+    };
+    const VkColorComponentFlags wmask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendAttachmentState alpha{};
+    alpha.colorWriteMask      = wmask;
+    alpha.blendEnable         = VK_TRUE;
+    alpha.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    alpha.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    alpha.colorBlendOp        = VK_BLEND_OP_ADD;
+    alpha.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    alpha.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    alpha.alphaBlendOp        = VK_BLEND_OP_ADD;
+
+    // ADDITIVE: out = src.a * src + dst
+    VkPipelineColorBlendAttachmentState additive = alpha;
+    additive.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    additive.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    additive.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+
+    // MULTIPLY: out = src.rgb * dst + (1 - src.a) * dst
+    //   src.a=1 → dst*src.rgb (純乗算)、 src.a=0 → dst (無変化)
+    VkPipelineColorBlendAttachmentState multiply = alpha;
+    multiply.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+    multiply.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    multiply.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    multiply.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+
+    bool ok = make_pipe(alpha,    pipeline_alpha_)
+           && make_pipe(additive, pipeline_additive_)
+           && make_pipe(multiply, pipeline_multiply_);
     vkDestroyShaderModule(device_, vs, nullptr);
     vkDestroyShaderModule(device_, fs, nullptr);
-    return r == VK_SUCCESS;
+    return ok;
 }
 
 VkDescriptorSet DecalSystem::alloc_texture_set_(VkImageView texture) {
@@ -413,7 +438,7 @@ bool DecalSystem::initialize(VulkanContext& vk, const std::string& shader_dir,
         std::fprintf(stderr, "[decal] descriptor setup failed\n");
         return false;
     }
-    if (!create_pipeline_(shader_dir)) {
+    if (!create_pipelines_(shader_dir)) {
         std::fprintf(stderr, "[decal] pipeline creation failed\n");
         return false;
     }
@@ -482,17 +507,32 @@ void DecalSystem::record(VkCommandBuffer cmd, const float view[16],
     VkRect2D sc{{0, 0}, extent_};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_alpha_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_,
                             0, 1, &ds_scene_, 0, nullptr);
 
+    VkPipeline bound = VK_NULL_HANDLE;
     for (uint32_t idx : order) {
         const DecalEntry& e = decals_[idx];
+        VkPipeline want = pipeline_alpha_;
+        if (e.desc.blend == DecalBlend::Additive)      want = pipeline_additive_;
+        else if (e.desc.blend == DecalBlend::Multiply) want = pipeline_multiply_;
+        if (want != bound) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+            bound = want;
+        }
+
         DecalPC pc{};
         mat4_inverse(e.desc.world_transform, pc.inv_decal);
         pc.opacity    = e.desc.opacity;
         pc.angle_fade = e.desc.angle_fade;
         pc.depth_fade = e.desc.depth_fade;
+        // 投影軸 = OBB のローカル Y 軸 (world_transform 列 1) を正規化。
+        const float* m = e.desc.world_transform;
+        float ax = m[4], ay = m[5], az = m[6];
+        float al = std::sqrt(ax * ax + ay * ay + az * az);
+        if (al > 1e-6f) { ax /= al; ay /= al; az /= al; }
+        pc.decal_axis[0] = ax; pc.decal_axis[1] = ay; pc.decal_axis[2] = az;
+
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipeline_layout_, 1, 1, &e.tex_set, 0, nullptr);
         vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -581,7 +621,9 @@ void DecalSystem::shutdown() {
 #ifdef PICTOR_HAS_VULKAN
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
-        if (pipeline_alpha_)  vkDestroyPipeline(device_, pipeline_alpha_, nullptr);
+        if (pipeline_alpha_)    vkDestroyPipeline(device_, pipeline_alpha_, nullptr);
+        if (pipeline_additive_) vkDestroyPipeline(device_, pipeline_additive_, nullptr);
+        if (pipeline_multiply_) vkDestroyPipeline(device_, pipeline_multiply_, nullptr);
         if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
         if (desc_pool_)       vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
         if (dsl_scene_)       vkDestroyDescriptorSetLayout(device_, dsl_scene_, nullptr);
@@ -594,7 +636,7 @@ void DecalSystem::shutdown() {
         if (framebuffer_) vkDestroyFramebuffer(device_, framebuffer_, nullptr);
         if (render_pass_) vkDestroyRenderPass(device_, render_pass_, nullptr);
         if (sampler_)     vkDestroySampler(device_, sampler_, nullptr);
-        pipeline_alpha_ = VK_NULL_HANDLE;
+        pipeline_alpha_ = pipeline_additive_ = pipeline_multiply_ = VK_NULL_HANDLE;
         pipeline_layout_ = VK_NULL_HANDLE;
         desc_pool_ = VK_NULL_HANDLE;
         dsl_scene_ = dsl_decal_ = VK_NULL_HANDLE;

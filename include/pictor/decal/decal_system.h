@@ -102,7 +102,7 @@ private:
     bool create_render_pass_(VkFormat color_format);
     bool create_framebuffer_();
     bool create_descriptors_();
-    bool create_pipeline_(const std::string& shader_dir);
+    bool create_pipelines_(const std::string& shader_dir);
     VkShaderModule load_shader_(const std::string& path) const;
     uint32_t find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
     VkDescriptorSet alloc_texture_set_(VkImageView texture);
@@ -126,8 +126,10 @@ private:
     VkDescriptorSetLayout dsl_decal_  = VK_NULL_HANDLE;  // set 1: decal texture
     VkDescriptorSet       ds_scene_   = VK_NULL_HANDLE;
 
-    VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline       pipeline_alpha_  = VK_NULL_HANDLE;
+    VkPipelineLayout pipeline_layout_   = VK_NULL_HANDLE;
+    VkPipeline       pipeline_alpha_    = VK_NULL_HANDLE;
+    VkPipeline       pipeline_additive_ = VK_NULL_HANDLE;
+    VkPipeline       pipeline_multiply_ = VK_NULL_HANDLE;
 
     std::vector<DecalEntry> decals_;
     std::vector<uint32_t>   free_slots_;

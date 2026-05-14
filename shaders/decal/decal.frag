@@ -1,7 +1,8 @@
 // Pictor — Projected Decal
 // シーン深度からワールド座標を復元し、 デカールの OBB 内かどうかを判定して
-// ボックスのローカル UV でテクスチャをサンプルし、 シーンカラーへ ALPHA
-// ブレンドする。 fullscreen_quad.vert と組で使う。
+// ボックスのローカル UV でテクスチャをサンプルし、 シーンカラーへブレンド
+// する。 fullscreen_quad.vert と組で使う。 ブレンドモード (Alpha/Additive/
+// Multiply) は呼び出し側のパイプラインで切り替える。
 
 #version 450
 
@@ -17,9 +18,10 @@ layout(set = 1, binding = 0) uniform sampler2D decalTex;   // デカール画像
 layout(push_constant) uniform PC {
     mat4  inv_decal;      // inverse(decal world transform)
     float opacity;
-    float angle_fade;     // P3 で使用 (現状は未使用)
+    float angle_fade;     // 投影面の角度フェード閾値 (0 で無効)
     float depth_fade;     // OBB Y 端のフェード幅
-    float _pad;
+    float _pad0;
+    vec4  decal_axis;     // xyz = デカールの投影軸 (ワールド空間, 正規化済み)
 };
 
 void main() {
@@ -44,7 +46,18 @@ void main() {
     // OBB の Y 端でフェード (depth_fade 幅)。
     float dfade = 1.0 - smoothstep(0.5 - max(depth_fade, 1e-4), 0.5, a.y);
 
-    float alpha = d.a * opacity * dfade;
+    // 投影面の角度フェード: サーフェス法線を深度の微分から再構成し、
+    // デカール投影軸との一致度が低い (= 横向きの面) ほどフェードする。
+    float afade = 1.0;
+    if (angle_fade > 0.0) {
+        vec3 dWx = dFdx(world);
+        vec3 dWy = dFdy(world);
+        vec3 surf_n = normalize(cross(dWx, dWy));
+        float facing = abs(dot(surf_n, normalize(decal_axis.xyz)));
+        afade = smoothstep(0.0, angle_fade, facing);
+    }
+
+    float alpha = d.a * opacity * dfade * afade;
     if (alpha <= 0.0) discard;
-    outColor = vec4(d.rgb, alpha);   // パイプライン側で ALPHA ブレンド
+    outColor = vec4(d.rgb, alpha);   // ブレンドはパイプライン側
 }
