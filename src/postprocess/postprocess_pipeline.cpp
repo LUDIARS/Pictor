@@ -1,5 +1,6 @@
 #include "pictor/postprocess/postprocess_pipeline.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -56,7 +57,9 @@ uint32_t PostProcessPipeline::find_memory_type_(uint32_t filter,
             (mp.memoryTypes[i].propertyFlags & props) == props)
             return i;
     }
-    return 0;
+    // 失敗時は UINT32_MAX を返す。 create_rt_ 等は直後の vkAllocateMemory 失敗で
+    // 検知できる (0 を返すと誤ったメモリタイプに静かにバインドしてしまう)。
+    return UINT32_MAX;
 }
 
 VkShaderModule PostProcessPipeline::load_shader_(const std::string& path) const {
@@ -342,6 +345,13 @@ bool PostProcessPipeline::create_descriptors_() {
     if (!alloc(dsl_single_, ds_blur_v_))  return false;
     if (!alloc(dsl_grade_,  ds_grade_))   return false;
 
+    write_descriptor_sets_();
+    return true;
+}
+
+void PostProcessPipeline::write_descriptor_sets_() {
+    // ターゲットの image view を descriptor set に書く。 resize 時にも
+    // (view が作り直されるので) 再度呼ぶ。 set 自体は再 alloc 不要。
     auto write1 = [&](VkDescriptorSet set, uint32_t binding, VkImageView view) {
         VkDescriptorImageInfo ii{};
         ii.sampler     = sampler_;
@@ -361,7 +371,6 @@ bool PostProcessPipeline::create_descriptors_() {
     write1(ds_grade_,   0, scene_.view);  // scene HDR
     write1(ds_grade_,   1, ping_.view);   // bloom result (after blur V)
     write1(ds_grade_,   2, lut_.view);    // LUT strip
-    return true;
 }
 
 bool PostProcessPipeline::create_pipelines_(const std::string& shader_dir) {
@@ -507,6 +516,21 @@ bool PostProcessPipeline::initialize_vulkan(VulkanContext& vk,
     config_  = config;
     output_is_srgb_ = is_srgb_format(output_format);
 
+    // HDR 中間ターゲットのフォーマットが color attachment + sampled に
+    // 対応しているか確認する。
+    {
+        VkFormatProperties fp{};
+        vkGetPhysicalDeviceFormatProperties(vk.physical_device(), kHdrFormat, &fp);
+        const VkFormatFeatureFlags need =
+            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        if ((fp.optimalTilingFeatures & need) != need) {
+            std::fprintf(stderr, "[postprocess] R16G16B16A16_SFLOAT が "
+                         "color attachment + sampled に未対応\n");
+            return false;
+        }
+    }
+
     if (!create_render_passes_(output_format)) {
         std::fprintf(stderr, "[postprocess] render pass creation failed\n");
         return false;
@@ -627,6 +651,50 @@ void PostProcessPipeline::record(VkCommandBuffer cmd, uint32_t output_index,
     }
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
+}
+
+bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
+                                 const std::vector<VkImageView>& output_views) {
+    if (!vulkan_ready_) return false;
+    if (width == extent_.width && height == extent_.height &&
+        output_views.size() == output_fbs_.size())
+        return true;  // 変化なし
+
+    vkDeviceWaitIdle(device_);
+
+    // サイズ依存リソースのみ破棄 (render pass / pipeline / pool / sampler / LUT は維持)。
+    auto destroy_rt = [&](RenderTarget& rt) {
+        if (rt.fb)     vkDestroyFramebuffer(device_, rt.fb, nullptr);
+        if (rt.view)   vkDestroyImageView(device_, rt.view, nullptr);
+        if (rt.image)  vkDestroyImage(device_, rt.image, nullptr);
+        if (rt.memory) vkFreeMemory(device_, rt.memory, nullptr);
+        rt = RenderTarget{};
+    };
+    for (VkFramebuffer fb : output_fbs_)
+        if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
+    output_fbs_.clear();
+    destroy_rt(scene_);
+    destroy_rt(ping_);
+    destroy_rt(pong_);
+    fb_scene_ = VK_NULL_HANDLE;
+
+    width_  = width;
+    height_ = height;
+    extent_ = {width, height};
+
+    if (!create_targets_()) {
+        std::fprintf(stderr, "[postprocess] resize: target creation failed\n");
+        vulkan_ready_ = false;
+        return false;
+    }
+    if (!create_output_framebuffers_(output_views)) {
+        std::fprintf(stderr, "[postprocess] resize: output framebuffer creation failed\n");
+        vulkan_ready_ = false;
+        return false;
+    }
+    // image view が作り直されたので descriptor set を書き直す。
+    write_descriptor_sets_();
+    return true;
 }
 
 #endif // PICTOR_HAS_VULKAN

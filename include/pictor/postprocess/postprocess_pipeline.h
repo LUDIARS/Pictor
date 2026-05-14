@@ -67,6 +67,13 @@ public:
     /// The output image is left in COLOR_ATTACHMENT_OPTIMAL so the host can
     /// draw a HUD on top with a LOAD render pass before presenting.
     void record(VkCommandBuffer cmd, uint32_t output_index, float delta_time);
+
+    /// Recreate size-dependent resources after a swapchain resize.
+    /// Render passes / pipelines / descriptor pool / sampler / LUT are kept;
+    /// HDR targets, framebuffers and descriptor writes are rebuilt.
+    /// `output_views` are the new swapchain image views.
+    bool resize(uint32_t width, uint32_t height,
+                const std::vector<VkImageView>& output_views);
 #endif
 
     void shutdown();
@@ -94,6 +101,7 @@ private:
     bool create_targets_();
     bool create_samplers_();
     bool create_descriptors_();
+    void write_descriptor_sets_();
     bool create_pipelines_(const std::string& shader_dir);
     bool create_output_framebuffers_(const std::vector<VkImageView>& views);
     bool upload_lut_(const unsigned char* rgba, int w, int h);
