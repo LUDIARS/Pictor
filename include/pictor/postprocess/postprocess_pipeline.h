@@ -59,9 +59,15 @@ public:
                            int lut_w = 0, int lut_h = 0);
 
     /// Render pass / framebuffer the host renders its 3D scene into.
+    /// rp_scene_ は color (RGBA16F) + depth (D32_SFLOAT) の 2 アタッチメント。
+    /// ホストの vkCmdBeginRenderPass は clearValueCount=2 を渡すこと
+    /// (clearValues[0]=color, clearValues[1]=depthStencil)。
     VkRenderPass  scene_render_pass() const { return rp_scene_; }
     VkFramebuffer scene_framebuffer() const { return fb_scene_; }
     VkExtent2D    extent() const { return extent_; }
+
+    /// シーンの深度ビュー (D32_SFLOAT)。 DecalSystem 等が read する。
+    VkImageView   scene_depth_view() const { return scene_.depth_view; }
 
     /// Record the post-process chain into `output_views[output_index]`.
     /// The output image is left in COLOR_ATTACHMENT_OPTIMAL so the host can
@@ -90,6 +96,10 @@ private:
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView    view   = VK_NULL_HANDLE;
         VkFramebuffer  fb     = VK_NULL_HANDLE;
+        // 深度アタッチメント (scene_ のみ使用。 ping/pong は VK_NULL_HANDLE)。
+        VkImage        depth_image  = VK_NULL_HANDLE;
+        VkDeviceMemory depth_memory = VK_NULL_HANDLE;
+        VkImageView    depth_view   = VK_NULL_HANDLE;
     };
     struct Texture {
         VkImage        image  = VK_NULL_HANDLE;
@@ -106,7 +116,8 @@ private:
     bool create_output_framebuffers_(const std::vector<VkImageView>& views);
     bool upload_lut_(const unsigned char* rgba, int w, int h);
     VkShaderModule load_shader_(const std::string& path) const;
-    bool create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPass rp);
+    /// `with_depth` が true なら深度アタッチメント (D32_SFLOAT) も作る (scene_ 用)。
+    bool create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPass rp, bool with_depth);
     uint32_t find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
 
     VulkanContext* vk_     = nullptr;
@@ -114,7 +125,7 @@ private:
     VkExtent2D     extent_ = {0, 0};
     bool           output_is_srgb_ = false;
 
-    VkRenderPass rp_scene_  = VK_NULL_HANDLE;  // RGBA16F, CLEAR
+    VkRenderPass rp_scene_  = VK_NULL_HANDLE;  // RGBA16F + D32_SFLOAT, CLEAR
     VkRenderPass rp_inter_  = VK_NULL_HANDLE;  // RGBA16F, DONT_CARE
     VkRenderPass rp_output_ = VK_NULL_HANDLE;  // swapchain format, DONT_CARE
 

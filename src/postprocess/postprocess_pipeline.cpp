@@ -22,7 +22,8 @@ void PostProcessPipeline::set_config(const PostProcessConfig& config) {
 #ifdef PICTOR_HAS_VULKAN
 
 namespace {
-constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kHdrFormat   = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
 bool is_srgb_format(VkFormat f) {
     switch (f) {
@@ -129,9 +130,66 @@ bool PostProcessPipeline::create_render_passes_(VkFormat output_format) {
         return vkCreateRenderPass(device_, &rp, nullptr, &out) == VK_SUCCESS;
     };
 
-    if (!make_pass(kHdrFormat, VK_ATTACHMENT_LOAD_OP_CLEAR,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, rp_scene_))
-        return false;
+    // rp_scene_ は color (RGBA16F) + depth (D32_SFLOAT) の 2 アタッチメント。
+    // depth は CLEAR/STORE し、 finalLayout を READ_ONLY にして DecalSystem 等が
+    // テクスチャとしてサンプルできるようにする。
+    {
+        VkAttachmentDescription atts[2]{};
+        atts[0].format         = kHdrFormat;
+        atts[0].samples        = VK_SAMPLE_COUNT_1_BIT;
+        atts[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        atts[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+        atts[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        atts[1].format         = kDepthFormat;
+        atts[1].samples        = VK_SAMPLE_COUNT_1_BIT;
+        atts[1].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        atts[1].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+        atts[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sub{};
+        sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sub.colorAttachmentCount    = 1;
+        sub.pColorAttachments       = &colorRef;
+        sub.pDepthStencilAttachment = &depthRef;
+
+        VkSubpassDependency deps[2]{};
+        deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass    = 0;
+        deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass    = 0;
+        deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        rp.attachmentCount = 2;
+        rp.pAttachments    = atts;
+        rp.subpassCount    = 1;
+        rp.pSubpasses      = &sub;
+        rp.dependencyCount = 2;
+        rp.pDependencies   = deps;
+        if (vkCreateRenderPass(device_, &rp, nullptr, &rp_scene_) != VK_SUCCESS)
+            return false;
+    }
     if (!make_pass(kHdrFormat, VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, rp_inter_))
         return false;
@@ -143,7 +201,9 @@ bool PostProcessPipeline::create_render_passes_(VkFormat output_format) {
     return true;
 }
 
-bool PostProcessPipeline::create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPass rp) {
+bool PostProcessPipeline::create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPass rp,
+                                     bool with_depth) {
+    // ── color image ──
     VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ic.imageType   = VK_IMAGE_TYPE_2D;
     ic.format      = fmt;
@@ -173,10 +233,46 @@ bool PostProcessPipeline::create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPas
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     if (vkCreateImageView(device_, &vi, nullptr, &rt.view) != VK_SUCCESS) return false;
 
+    // ── depth image (scene_ のみ) ──
+    if (with_depth) {
+        VkImageCreateInfo dic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        dic.imageType   = VK_IMAGE_TYPE_2D;
+        dic.format      = kDepthFormat;
+        dic.extent      = {extent_.width, extent_.height, 1};
+        dic.mipLevels   = 1;
+        dic.arrayLayers = 1;
+        dic.samples     = VK_SAMPLE_COUNT_1_BIT;
+        dic.tiling      = VK_IMAGE_TILING_OPTIMAL;
+        // SAMPLED も付けて DecalSystem 等が深度をサンプルできるようにする。
+        dic.usage       = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                          VK_IMAGE_USAGE_SAMPLED_BIT;
+        dic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        dic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device_, &dic, nullptr, &rt.depth_image) != VK_SUCCESS)
+            return false;
+        vkGetImageMemoryRequirements(device_, rt.depth_image, &mr);
+        ai.allocationSize  = mr.size;
+        ai.memoryTypeIndex = find_memory_type_(mr.memoryTypeBits,
+                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device_, &ai, nullptr, &rt.depth_memory) != VK_SUCCESS)
+            return false;
+        vkBindImageMemory(device_, rt.depth_image, rt.depth_memory, 0);
+
+        VkImageViewCreateInfo dvi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        dvi.image    = rt.depth_image;
+        dvi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        dvi.format   = kDepthFormat;
+        dvi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &dvi, nullptr, &rt.depth_view) != VK_SUCCESS)
+            return false;
+    }
+
+    // ── framebuffer ──
+    VkImageView fb_atts[2] = {rt.view, rt.depth_view};
     VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     fi.renderPass      = rp;
-    fi.attachmentCount = 1;
-    fi.pAttachments    = &rt.view;
+    fi.attachmentCount = with_depth ? 2u : 1u;
+    fi.pAttachments    = fb_atts;
     fi.width           = extent_.width;
     fi.height          = extent_.height;
     fi.layers          = 1;
@@ -184,9 +280,9 @@ bool PostProcessPipeline::create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPas
 }
 
 bool PostProcessPipeline::create_targets_() {
-    if (!create_rt_(scene_, kHdrFormat, rp_scene_)) return false;
-    if (!create_rt_(ping_,  kHdrFormat, rp_inter_)) return false;
-    if (!create_rt_(pong_,  kHdrFormat, rp_inter_)) return false;
+    if (!create_rt_(scene_, kHdrFormat, rp_scene_, /*with_depth=*/true))  return false;
+    if (!create_rt_(ping_,  kHdrFormat, rp_inter_, /*with_depth=*/false)) return false;
+    if (!create_rt_(pong_,  kHdrFormat, rp_inter_, /*with_depth=*/false)) return false;
     fb_scene_ = scene_.fb;
     return true;
 }
@@ -664,10 +760,13 @@ bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
 
     // サイズ依存リソースのみ破棄 (render pass / pipeline / pool / sampler / LUT は維持)。
     auto destroy_rt = [&](RenderTarget& rt) {
-        if (rt.fb)     vkDestroyFramebuffer(device_, rt.fb, nullptr);
-        if (rt.view)   vkDestroyImageView(device_, rt.view, nullptr);
-        if (rt.image)  vkDestroyImage(device_, rt.image, nullptr);
-        if (rt.memory) vkFreeMemory(device_, rt.memory, nullptr);
+        if (rt.fb)           vkDestroyFramebuffer(device_, rt.fb, nullptr);
+        if (rt.view)         vkDestroyImageView(device_, rt.view, nullptr);
+        if (rt.image)        vkDestroyImage(device_, rt.image, nullptr);
+        if (rt.memory)       vkFreeMemory(device_, rt.memory, nullptr);
+        if (rt.depth_view)   vkDestroyImageView(device_, rt.depth_view, nullptr);
+        if (rt.depth_image)  vkDestroyImage(device_, rt.depth_image, nullptr);
+        if (rt.depth_memory) vkFreeMemory(device_, rt.depth_memory, nullptr);
         rt = RenderTarget{};
     };
     for (VkFramebuffer fb : output_fbs_)
@@ -704,10 +803,13 @@ void PostProcessPipeline::shutdown() {
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
         auto destroy_rt = [&](RenderTarget& rt) {
-            if (rt.fb)     vkDestroyFramebuffer(device_, rt.fb, nullptr);
-            if (rt.view)   vkDestroyImageView(device_, rt.view, nullptr);
-            if (rt.image)  vkDestroyImage(device_, rt.image, nullptr);
-            if (rt.memory) vkFreeMemory(device_, rt.memory, nullptr);
+            if (rt.fb)           vkDestroyFramebuffer(device_, rt.fb, nullptr);
+            if (rt.view)         vkDestroyImageView(device_, rt.view, nullptr);
+            if (rt.image)        vkDestroyImage(device_, rt.image, nullptr);
+            if (rt.memory)       vkFreeMemory(device_, rt.memory, nullptr);
+            if (rt.depth_view)   vkDestroyImageView(device_, rt.depth_view, nullptr);
+            if (rt.depth_image)  vkDestroyImage(device_, rt.depth_image, nullptr);
+            if (rt.depth_memory) vkFreeMemory(device_, rt.depth_memory, nullptr);
             rt = RenderTarget{};
         };
         for (VkFramebuffer fb : output_fbs_)
