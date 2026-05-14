@@ -57,6 +57,18 @@ void MontagePlayer::play(AnimationStateHandle inst, MontageHandle m,
     const float init_weight = params.blend_in_time > 0.0f ? 0.0f : params.weight;
     sys_.play(inst, d.clip, init_weight, params.speed, params.blend);
 
+    // remap テーブルが構築済みなら、 直前に push された AnimationPlayback layer に
+    // channel_remap ポインタを差し込む。 AnimationSystem 内部で push_back された
+    // 最後尾 layer を再取得して書き換える。 失敗しても legacy 経路で動く。
+    if (auto* inst_data = const_cast<AnimationInstance*>(sys_.get_instance(inst))) {
+        if (!inst_data->layers.empty()) {
+            const auto* remap = get_bone_remap(d.clip, skel);
+            if (remap && !remap->empty()) {
+                inst_data->layers.back().channel_remap = remap;
+            }
+        }
+    }
+
     Active a;
     a.m = m;
     a.skel = skel;

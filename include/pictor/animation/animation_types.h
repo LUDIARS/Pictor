@@ -432,6 +432,12 @@ struct AnimationPlayback {
     WrapMode            wrap   = WrapMode::LOOP;
     AnimBlendMode       blend  = AnimBlendMode::OVERRIDE;
     bool                playing = true;
+
+    /// Montage extension: clip の channel index → 再生先 skeleton の bone index に
+    /// マップする optional テーブル。 nullptr / 空ベクトル時は target_index 直叩き
+    /// (legacy behavior)。 MontagePlayer が `(clip, skel)` 単位でキャッシュした
+    /// remap を渡す。
+    const std::vector<int>* channel_remap = nullptr;
 };
 
 // ============================================================

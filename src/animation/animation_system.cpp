@@ -279,8 +279,14 @@ void AnimationSystem::blend_layers(AnimationInstance& instance) {
         // Initialize temp pose with bind pose
         skel_it->second->get_bind_pose(temp_pose.data());
 
-        // Evaluate the clip at current time
-        clip.evaluate(layer.time, temp_pose.data(), bone_count);
+        // Evaluate the clip at current time。 Montage 経由で channel_remap が
+        // 与えられていれば target_index 差し替えで適用する。
+        if (layer.channel_remap && !layer.channel_remap->empty()) {
+            clip.evaluate_remapped(layer.time, temp_pose.data(), bone_count,
+                                   layer.channel_remap->data(), layer.channel_remap->size());
+        } else {
+            clip.evaluate(layer.time, temp_pose.data(), bone_count);
+        }
 
         // Blend into local pose based on blend mode and weight
         float w = layer.weight;
