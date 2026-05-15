@@ -36,33 +36,30 @@ cmake --build build
 
 #### デモ付きビルド（Vulkan + GLFW）
 
-Vulkan SDK がインストール済みであれば、デモとベンチマークが自動的にビルドされます。
-GLFW はシステムになくても FetchContent で自動取得されます。
+`PICTOR_BUILD_DEMO`（デフォルト `ON`）が有効なら、デモとベンチマークがビルドされます。
+ベンチマークや一部の headless デモは Vulkan/GLFW 無しでもビルド・実行できますが、
+ウィンドウを開くデモは Vulkan SDK + GLFW が必要です。GLFW はシステムになくても
+FetchContent で自動取得されます。
 
 ```bash
-# デモ + ベンチマーク付きフルビルド
-cmake -B build \
-  -DPICTOR_BUILD_DEMO=ON \
-  -DPICTOR_BUILD_BENCHMARK=ON \
-  -DPICTOR_ENABLE_PROFILER=ON
+# デモ + ベンチマーク付きフルビルド（PICTOR_BUILD_DEMO はデフォルト ON）
+cmake -B build -DPICTOR_ENABLE_PROFILER=ON
 cmake --build build
-
-# デモ実行
-./build/pictor_demo
 
 # ベンチマーク実行（GPU Compute モード）
 ./build/pictor_benchmark
 
 # ベンチマーク実行（CPU モード）
 ./build/pictor_benchmark --cpu
+
+# Vulkan ウィンドウデモ実行（Vulkan + GLFW が揃っている場合のみビルドされる）
+./build/pictor_demo
 ```
 
 #### ライブラリのみビルド（デモなし）
 
 ```bash
-cmake -B build \
-  -DPICTOR_BUILD_DEMO=OFF \
-  -DPICTOR_BUILD_BENCHMARK=OFF
+cmake -B build -DPICTOR_BUILD_DEMO=OFF
 cmake --build build
 ```
 
@@ -70,16 +67,20 @@ cmake --build build
 
 | オプション | デフォルト | 説明 |
 |-----------|-----------|------|
-| `PICTOR_BUILD_DEMO` | `ON` | Vulkan ウィンドウデモをビルド（Vulkan + GLFW が必要） |
-| `PICTOR_BUILD_BENCHMARK` | `ON` | 1M Spheres ベンチマーク実行ファイルをビルド |
+| `PICTOR_BUILD_DEMO` | `ON` | デモアプリ群（ベンチマーク含む）をビルド。ウィンドウデモは Vulkan + GLFW が必要 |
+| `PICTOR_BUILD_TOOLS` | `OFF` | 開発者ツール target（feature-selector 等）を有効化 |
+| `PICTOR_BUILD_TESTS` | `ON` | headless テストスイート（CTest）をビルド |
 | `PICTOR_ENABLE_PROFILER` | `ON` | 組込みプロファイラを有効化 |
 | `PICTOR_USE_LARGE_PAGES` | `OFF` | 2MB ラージページによるメモリ確保を有効化 |
+| `PICTOR_BUILD_WEBGL` | `OFF` | WebGL2 バックエンド（Emscripten、別ライブラリ `pictor_webgl`）をビルド |
+| `PICTOR_ENABLE_RIVE` | `OFF` | Rive Renderer 統合を有効化（prebuilt rive-runtime が必要、`cmake/FindRive.cmake` 参照） |
 
 **出力:**
 
 - `libpictor.a` — 静的ライブラリ
-- `pictor_demo` — Vulkan ウィンドウデモ（オプション、Vulkan + GLFW 必要）
-- `pictor_benchmark` — ベンチマーク実行ファイル（オプション）
+- `pictor_demo` — Vulkan ウィンドウデモ（`PICTOR_BUILD_DEMO=ON` かつ Vulkan + GLFW 必要）
+- `pictor_benchmark` — 1M Spheres ベンチマーク実行ファイル（`PICTOR_BUILD_DEMO=ON`、headless 可）
+- その他 `pictor_fbx_demo` / `pictor_mobile_demo` / `pictor_graphics_demo` / `pictor_text_demo` / `pictor_postprocess_demo` / `pictor_rive_demo` 等のデモ実行ファイル
 
 ### プロジェクトへの組み込み
 
@@ -451,28 +452,40 @@ surface.create({.width = 1280, .height = 720, .title = "Pictor Demo"});
 Pictor/
 ├── include/pictor/
 │   ├── pictor.h                  # パブリックAPI (全ヘッダ集約)
-│   ├── core/                     # PictorRenderer, 型定義
+│   ├── core/                     # PictorRenderer, 型定義, mobile_lifecycle
 │   ├── scene/                    # SceneRegistry, ObjectPool, SoAStream
 │   ├── memory/                   # アロケータ群
 │   ├── update/                   # UpdateScheduler, JobDispatcher
 │   ├── batch/                    # BatchBuilder, RadixSort
 │   ├── culling/                  # CullingSystem, FlatBVH
 │   ├── gpu/                      # GPUDrivenPipeline, GPUBufferManager
-│   ├── pipeline/                 # PipelineProfile, RenderPassScheduler, CommandEncoder
+│   ├── pipeline/                 # PipelineProfile, PipelineBuilder, RenderPassScheduler, CommandEncoder
 │   ├── profiler/                 # Profiler, Overlay, DataExporter
-│   ├── data/                     # DataHandler, TextureRegistry, VertexDataUploader, DataQueryAPI
-│   ├── material/                 # BaseMaterialBuilder, MaterialProperty, MaterialRegistry
+│   ├── data/                     # DataHandler, TextureRegistry, VertexDataUploader, ModelDataHandler, DataQueryAPI
+│   ├── material/                 # BaseMaterialBuilder, MaterialProperty
 │   ├── gi/                       # GILightingSystem, GIBakeSystem
-│   └── surface/                  # ISurfaceProvider, VulkanContext, GlfwSurfaceProvider
-├── src/                          # 実装
-├── shaders/                      # Compute Shader (.comp), サンプルシェーダ
+│   ├── postprocess/              # PostProcessPipeline, Bloom/DoF/ToneMapping/GaussianBlur
+│   ├── text/                     # FontLoader, TextRasterizer, TextImageRenderer, TextSvgRenderer
+│   ├── animation/                # AnimationSystem, Skeleton, IKSolver, FBX/BVH importer, 2D/Rive/Lottie/Vector
+│   ├── vector/                   # RiveRenderer (Rive Renderer 統合ラッパー)
+│   ├── surface/                  # ISurfaceProvider, VulkanContext, GlfwSurfaceProvider
+│   └── webgl/                    # WebGL2 バックエンドヘッダ (PICTOR_BUILD_WEBGL 時)
+├── src/                          # 実装 (include に対応, ui/ を含む)
+├── shaders/                      # Compute Shader (.comp), サンプルシェーダ, postprocess/ui/webgl
 ├── fonts/                        # デフォルトフォント (default.ttf)
-├── demo/                         # Vulkan ウィンドウデモ
-├── benchmark/                    # 1M Spheres ベンチマーク
+├── demo/                         # デモ群 (benchmark, fbx, fbx_viewer, graphics, mobile, ocean,
+│                                 #          postprocess, rive, rive_cube, text, texture2d, webgl 等)
+├── tests/                        # headless ユニットテスト (CTest)
+├── tools/                        # 開発者向けツール (feature-selector, material-editor)
+├── cmake/                        # FindRive.cmake
+├── fbx/                          # fbx_viewer デモ用テストアセット (UnityChan, UCL)
+├── rive/                         # rive デモ用サンプル .riv アセット
+├── third_party/stb/              # stb_image
 ├── docs/
-│   ├── api/                      # 外部インタフェース・クラス定義ドキュメント
-│   └── design/                   # 設計ドキュメント (WebGL バックエンド等)
-└── plan.md                       # 技術設計書
+│   ├── api/                      # クラス定義・インタフェースドキュメント
+│   ├── design/                   # 設計ドキュメント (WebGL バックエンド等)
+│   └── android-build.md          # Android NDK ビルドセットアップ計画
+└── plan.md                       # 技術設計書 (設計の正本)
 ```
 
 ## フォント
