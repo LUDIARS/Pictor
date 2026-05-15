@@ -52,16 +52,24 @@ void MontagePlayer::play(AnimationStateHandle inst, MontageHandle m,
     rebuild_remap_(d.clip, skel);
 
     auto exit = actives_.find(inst);
-    if (exit != actives_.end()) actives_.erase(exit);
+    if (exit != actives_.end()) {
+        // 旧 montage の blend layer を確実に外してから差し替える。 これをしないと
+        // 連続 play で AnimationInstance.layers に dead layer が溜まり、 後段の
+        // layer index がずれていく。
+        sys_.stop(inst, montages_[exit->second.m.id - 1].clip);
+        actives_.erase(exit);
+    }
 
     const float init_weight = params.blend_in_time > 0.0f ? 0.0f : params.weight;
     sys_.play(inst, d.clip, init_weight, params.speed, params.blend);
 
-    // remap テーブルが構築済みなら、 直前に push された AnimationPlayback layer に
-    // channel_remap ポインタを差し込む。 AnimationSystem 内部で push_back された
-    // 最後尾 layer を再取得して書き換える。 失敗しても legacy 経路で動く。
+    // sys_.play が push した layer の index を控える。 montage は他のレイヤ
+    // (locomotion ブレンド等) と同一 instance で共存しうるので、 layer 0 を
+    // 決め打ちせず実 index を使う。 同時に remap テーブルを最後尾 layer へ差し込む。
+    uint32_t layer_index = 0;
     if (auto* inst_data = const_cast<AnimationInstance*>(sys_.get_instance(inst))) {
         if (!inst_data->layers.empty()) {
+            layer_index = static_cast<uint32_t>(inst_data->layers.size() - 1);
             const auto* remap = get_bone_remap(d.clip, skel);
             if (remap && !remap->empty()) {
                 inst_data->layers.back().channel_remap = remap;
@@ -72,7 +80,7 @@ void MontagePlayer::play(AnimationStateHandle inst, MontageHandle m,
     Active a;
     a.m = m;
     a.skel = skel;
-    a.layer = 0;
+    a.layer = layer_index;
     a.local_time = 0.0f;
     a.prev_local_time = 0.0f;
     a.section_idx = -1;
@@ -169,7 +177,7 @@ void MontagePlayer::update(float dt) {
                               : 0.0f;
             weight = a.params.weight * std::max(0.0f, u);
         }
-        sys_.set_layer_weight(inst_id, 0, weight);
+        sys_.set_layer_weight(inst_id, a.layer, weight);
 
         const float lo = std::min(a.prev_local_time, a.local_time);
         const float hi = std::max(a.prev_local_time, a.local_time);
