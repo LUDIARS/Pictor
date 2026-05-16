@@ -11,6 +11,7 @@ option(PICTOR_BUILD_TESTS         "Build the headless test suite (CTest)"   ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
+option(PICTOR_BUILD_C_API         "Build C ABI export library (for WASM / Capacitor / N-API consumers)" OFF)
 option(PICTOR_ENABLE_RIVE         "Enable Rive Renderer integration (requires prebuilt rive-runtime; see cmake/FindRive.cmake)" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -338,6 +339,31 @@ if(PICTOR_BUILD_WEBGL OR EMSCRIPTEN)
         )
         message(STATUS "Pictor: WebGL2 demo enabled (Emscripten)")
     endif()
+endif()
+
+# ============================================================
+# C ABI export (for WASM / Capacitor / N-API consumers)
+# ============================================================
+if(PICTOR_BUILD_C_API)
+    add_library(pictor_c_api STATIC
+        src/c_api/c_api.cpp
+    )
+    target_include_directories(pictor_c_api PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_compile_features(pictor_c_api PUBLIC cxx_std_20)
+    target_compile_definitions(pictor_c_api PUBLIC PICTOR_HAS_C_API=1)
+
+    # Emscripten 環境では cwrap で叩く想定なので関数を export させる
+    if(EMSCRIPTEN)
+        target_link_options(pictor_c_api PUBLIC
+            -sEXPORTED_FUNCTIONS=['_pictor_create_renderer_webgl','_pictor_destroy_renderer','_pictor_set_size','_pictor_begin_scene','_pictor_end_scene','_pictor_submit_object','_pictor_update_object','_pictor_remove_object','_pictor_render_frame','_pictor_create_texture_rgba8','_pictor_release_texture','_pictor_last_error','_pictor_c_api_version']
+            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']
+        )
+    endif()
+
+    message(STATUS "Pictor: C ABI export enabled (target pictor_c_api)")
 endif()
 
 # Shader compilation (demo shaders only)

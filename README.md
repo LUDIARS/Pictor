@@ -73,6 +73,7 @@ cmake --build build
 | `PICTOR_ENABLE_PROFILER` | `ON` | 組込みプロファイラを有効化 |
 | `PICTOR_USE_LARGE_PAGES` | `OFF` | 2MB ラージページによるメモリ確保を有効化 |
 | `PICTOR_BUILD_WEBGL` | `OFF` | WebGL2 バックエンド（Emscripten、別ライブラリ `pictor_webgl`）をビルド |
+| `PICTOR_BUILD_C_API` | `OFF` | C ABI エクスポート（WASM / Capacitor / N-API 等の上位向け、 `pictor_c_api` 静的ライブラリ + `include/pictor/c_api.h`） |
 | `PICTOR_ENABLE_RIVE` | `OFF` | Rive Renderer 統合を有効化（prebuilt rive-runtime が必要、`cmake/FindRive.cmake` 参照） |
 
 **出力:**
