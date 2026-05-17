@@ -119,6 +119,12 @@ add_library(pictor STATIC
     src/material/base_material_builder.cpp
     src/material/material_serializer.cpp
 
+    # Visus (render-object definition layer)
+    src/visus/visus_registry.cpp
+    src/visus/visus_serializer.cpp
+    src/visus/visus_instantiator.cpp
+    src/visus/resource_loader.cpp
+
     # Pipeline
     src/pipeline/pipeline_profile.cpp
     src/pipeline/pipeline_builder.cpp
