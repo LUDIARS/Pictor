@@ -102,6 +102,20 @@ public:
     void register_custom_profile(const PipelineProfileDef& def);
     const std::string& current_profile_name() const;
 
+    /// Load a pipeline profile from an external JSON file (系統A external
+    /// config, see pipeline_profile_serializer.h), register it, and make it
+    /// the active profile — re-running apply_profile() so the RenderPassScheduler,
+    /// GI system, GPU-driven pipeline and update scheduler all reconfigure.
+    /// This is the runtime-reload seam for tooling (e.g. the Ergo-web editor).
+    /// Returns false on I/O or parse error; `error` (optional) carries why.
+    bool load_profile_from_file(const std::string& path,
+                                std::string*       error = nullptr);
+
+    /// Re-apply the currently active profile after it has been mutated in
+    /// place (e.g. re-registered via register_custom_profile with the same
+    /// name). Reconfigures all downstream subsystems. No-op if uninitialized.
+    void reload_active_profile();
+
     // ---- Mobile Lifecycle ----
     //
     // Platform hosts (Android JNI / iOS) forward OS-level

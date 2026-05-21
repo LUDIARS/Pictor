@@ -128,6 +128,8 @@ add_library(pictor STATIC
     # Pipeline
     src/pipeline/pipeline_profile.cpp
     src/pipeline/pipeline_builder.cpp
+    src/pipeline/pipeline_profile_serializer.cpp
+    src/pipeline/pipeline_profile_loader.cpp
     src/pipeline/render_pass_scheduler.cpp
     src/pipeline/command_encoder.cpp
 

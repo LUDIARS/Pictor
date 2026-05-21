@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "profile_name": "Ultra",
+  "rendering_path": "HYBRID",
+  "max_lights": 1024,
+  "msaa_samples": 0,
+  "gpu_driven_enabled": true,
+  "compute_update_enabled": true,
+  "render_passes": [
+    { "pass_name": "ComputeUpdate",   "pass_type": "COMPUTE",      "sort_mode": "NONE", "gpu_driven_pass": true, "required_streams": ["gpu_velocities", "gpu_transforms", "gpu_bounds"] },
+    { "pass_name": "ShadowPass",      "pass_type": "SHADOW",       "sort_mode": "NONE", "required_streams": ["gpu_transforms"] },
+    { "pass_name": "DepthPrePass",    "pass_type": "DEPTH_ONLY",   "sort_mode": "FRONT_TO_BACK", "required_streams": ["gpu_transforms"] },
+    { "pass_name": "HiZBuild",        "pass_type": "COMPUTE",      "sort_mode": "NONE" },
+    { "pass_name": "GPUCullPass",     "pass_type": "COMPUTE",      "sort_mode": "NONE", "gpu_driven_pass": true, "required_streams": ["gpu_bounds"] },
+    { "pass_name": "GPULODCompact",   "pass_type": "COMPUTE",      "sort_mode": "NONE", "gpu_driven_pass": true, "required_streams": ["gpu_transforms", "gpu_mesh_info"] },
+    { "pass_name": "ShadowMapGen",    "pass_type": "COMPUTE",      "sort_mode": "NONE", "required_streams": ["gpu_bounds", "gpu_transforms"] },
+    { "pass_name": "SSAOGen",         "pass_type": "COMPUTE",      "sort_mode": "NONE" },
+    { "pass_name": "GIProbePass",     "pass_type": "COMPUTE",      "sort_mode": "NONE", "required_streams": ["gpu_transforms"] },
+    { "pass_name": "GBufferPass",     "pass_type": "OPAQUE",       "sort_mode": "FRONT_TO_BACK", "gpu_driven_pass": true, "required_streams": ["gpu_transforms", "gpu_material_ids"] },
+    { "pass_name": "LightingPass",    "pass_type": "COMPUTE",      "sort_mode": "NONE" },
+    { "pass_name": "TransparentPass", "pass_type": "TRANSPARENT",  "sort_mode": "BACK_TO_FRONT", "required_streams": ["gpu_transforms", "sortKeys"] },
+    { "pass_name": "PostProcess",     "pass_type": "POST_PROCESS", "sort_mode": "NONE" }
+  ],
+  "post_process": [
+    { "name": "SSAO",          "enabled": true },
+    { "name": "Bloom",         "enabled": true },
+    { "name": "Tonemapping",   "enabled": true },
+    { "name": "TAA",           "enabled": true },
+    { "name": "VolumetricFog", "enabled": true }
+  ],
+  "shadow": {
+    "cascade_count": 4,
+    "resolution": 4096,
+    "filter_mode": "PCSS"
+  },
+  "gi": {
+    "shadow_enabled": true,
+    "ssao_enabled": true,
+    "gi_probes_enabled": true,
+    "shadow": {
+      "cascade_count": 4,
+      "resolution": 4096,
+      "cascade_lambda": 0.8,
+      "max_shadow_dist": 300.0,
+      "filter_mode": "PCSS",
+      "pcss_light_size": 0.06,
+      "pcss_max_penumbra": 24.0
+    },
+    "ssao": {
+      "sample_count": 64,
+      "radius": 0.5,
+      "intensity": 1.2
+    },
+    "probes": {
+      "grid_x": 32,
+      "grid_y": 16,
+      "grid_z": 32,
+      "gi_intensity": 1.0
+    }
+  },
+  "memory": {
+    "frame_allocator_size": 67108864,
+    "flight_count": 3,
+    "gpu": {
+      "mesh_pool_size": 1073741824,
+      "ssbo_pool_size": 536870912,
+      "instance_buffer_size": 268435456,
+      "staging_buffer_size": 201326592
+    }
+  },
+  "gpu_driven": {
+    "max_triangle_count": 50000,
+    "min_instance_count": 32,
+    "workgroup_size": 256,
+    "two_phase_culling": true,
+    "compute_update": true
+  },
+  "update": {
+    "chunk_size": 16384,
+    "nt_store_enabled": true,
+    "nt_store_threshold": 10000
+  },
+  "profiler": {
+    "enabled": true,
+    "overlay_mode": "DETAILED",
+    "max_queries": 64
+  }
+}

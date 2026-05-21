@@ -14,6 +14,7 @@ set(PICTOR_TESTS
     unit_culling_test
     unit_visus_serializer_test
     unit_visus_instantiator_test
+    unit_pipeline_profile_serializer_test
     pixel_text_test
     fps_baseline_test
 )

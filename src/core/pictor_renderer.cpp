@@ -1,4 +1,5 @@
 ﻿#include "pictor/core/pictor_renderer.h"
+#include "pictor/pipeline/pipeline_profile_serializer.h"
 
 namespace pictor {
 
@@ -290,6 +291,42 @@ bool PictorRenderer::set_profile(const std::string& name) {
 void PictorRenderer::register_custom_profile(const PipelineProfileDef& def) {
     if (!initialized_) return;
     profile_manager_->register_profile(def);
+}
+
+bool PictorRenderer::load_profile_from_file(const std::string& path,
+                                            std::string*       error) {
+    if (!initialized_) {
+        if (error) *error = "renderer not initialized";
+        return false;
+    }
+
+    // Seed from the currently active profile so a partial config file only
+    // needs to express overrides.
+    PipelineProfileDef def;
+    if (!load_pipeline_profile_file(path, profile_manager_->current_profile(),
+                                    def, error)) {
+        return false;
+    }
+    if (def.profile_name.empty()) {
+        if (error) *error = "profile JSON has empty profile_name";
+        return false;
+    }
+
+    // Register (replaces same-named profile) then activate + reconfigure.
+    profile_manager_->register_profile(def);
+    if (!profile_manager_->set_profile(def.profile_name)) {
+        if (error) *error = "failed to activate loaded profile";
+        return false;
+    }
+    apply_profile(profile_manager_->current_profile());
+    return true;
+}
+
+void PictorRenderer::reload_active_profile() {
+    if (!initialized_) return;
+    // §8.4 step 5: re-run the profile switch procedure (scheduler reconfigure,
+    // batch invalidation, GI/GPU-driven reconfigure) for the current profile.
+    apply_profile(profile_manager_->current_profile());
 }
 
 const std::string& PictorRenderer::current_profile_name() const {

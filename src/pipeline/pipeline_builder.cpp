@@ -48,6 +48,41 @@ ShadowFilterMode parse_shadow_filter(const std::string& v, ShadowFilterMode fall
     return fallback;
 }
 
+PassType parse_pass_type(const std::string& v, PassType fallback) {
+    std::string u = to_upper(v);
+    if (u == "DEPTH_ONLY")   return PassType::DEPTH_ONLY;
+    if (u == "OPAQUE")       return PassType::OPAQUE;
+    if (u == "TRANSPARENT")  return PassType::TRANSPARENT;
+    if (u == "SHADOW")       return PassType::SHADOW;
+    if (u == "POST_PROCESS") return PassType::POST_PROCESS;
+    if (u == "COMPUTE")      return PassType::COMPUTE;
+    if (u == "CUSTOM")       return PassType::CUSTOM;
+    return fallback;
+}
+
+SortMode parse_sort_mode(const std::string& v, SortMode fallback) {
+    std::string u = to_upper(v);
+    if (u == "FRONT_TO_BACK") return SortMode::FRONT_TO_BACK;
+    if (u == "BACK_TO_FRONT") return SortMode::BACK_TO_FRONT;
+    if (u == "NONE")          return SortMode::NONE;
+    return fallback;
+}
+
+// Accepts "none" / "" -> INVALID_MESH, or "handle:<u32>" / bare "<u32>".
+ShaderHandle parse_shader_handle(const std::string& v) {
+    if (v.empty()) return INVALID_MESH;
+    std::string u = to_upper(v);
+    if (u == "NONE") return INVALID_MESH;
+    std::string digits = v;
+    constexpr const char* prefix = "handle:";
+    if (digits.rfind(prefix, 0) == 0) digits = digits.substr(7);
+    if (digits.empty()) return INVALID_MESH;
+    for (char c : digits) {
+        if (c < '0' || c > '9') return INVALID_MESH;
+    }
+    return static_cast<ShaderHandle>(std::strtoul(digits.c_str(), nullptr, 10));
+}
+
 OverlayMode parse_overlay(const std::string& v, OverlayMode fallback) {
     std::string u = to_upper(v);
     if (u == "OFF")      return OverlayMode::OFF;
@@ -296,6 +331,50 @@ PipelineProfileDef PipelineProfileBuilder::from_key_value(
     }
 
     return b.take();
+}
+
+// ---- structured render-pass construction ----------------------------------
+
+RenderPassDef PipelineProfileBuilder::make_pass(
+    const std::string&              pass_name,
+    const std::string&              pass_type_str,
+    const std::string&              sort_mode_str,
+    const std::vector<std::string>& render_targets,
+    const std::vector<std::string>& input_textures,
+    const std::vector<std::string>& required_streams,
+    uint16_t                        filter_mask,
+    bool                            gpu_driven_pass,
+    const std::string&              shader_override) {
+
+    RenderPassDef p;
+    p.pass_name        = pass_name;
+    p.pass_type        = parse_pass_type(pass_type_str, PassType::OPAQUE);
+    p.shader_override  = parse_shader_handle(shader_override);
+    p.render_targets   = render_targets;
+    p.input_textures   = input_textures;
+    p.sort_mode        = parse_sort_mode(sort_mode_str, SortMode::FRONT_TO_BACK);
+    p.filter_mask      = filter_mask;
+    p.gpu_driven_pass  = gpu_driven_pass;
+    p.required_streams = required_streams;
+    return p;
+}
+
+PipelineProfileBuilder& PipelineProfileBuilder::add_pass_tokens(
+    const std::string&              pass_name,
+    const std::string&              pass_type_str,
+    const std::string&              sort_mode_str,
+    const std::vector<std::string>& render_targets,
+    const std::vector<std::string>& input_textures,
+    const std::vector<std::string>& required_streams,
+    uint16_t                        filter_mask,
+    bool                            gpu_driven_pass,
+    const std::string&              shader_override) {
+
+    def_.render_passes.push_back(make_pass(
+        pass_name, pass_type_str, sort_mode_str, render_targets,
+        input_textures, required_streams, filter_mask, gpu_driven_pass,
+        shader_override));
+    return *this;
 }
 
 } // namespace pictor
