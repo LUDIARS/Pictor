@@ -106,6 +106,34 @@ struct VisusTextureSlot {
 };
 
 // ============================================================
+// VisusShaderStages — CUSTOM kind 用のシェーダステージ集合
+// ============================================================
+// `VisusDesc::asset` はシェーダ「ファイル」を 1 つしか指せず、 pipeline は
+// 最低 vert+frag を要するため CUSTOM kind では不足する。 本構造体は
+// stage ごとに ResourceRef を分けて持つ
+// (`spec/rendering-extensibility-design.md` §2 phase 1)。
+//
+//   vert / frag : graphics pipeline 用 (両方必須)
+//   comp        : compute pipeline 用 (vert/frag と排他、 空でよい)
+//
+// phase 1 は固定 vert+frag のみを描画に配線する。 comp は将来用に
+// シリアライズだけ通す (phase 2)。
+//
+// パスは compiled SPIR-V (`.spv`) を指す。 GLSL ソースのコンパイルは
+// Pictor の責務ではない (ホスト / ビルドステップが行う)。
+
+struct VisusShaderStages {
+    ResourceRef vert;   // vertex stage SPIR-V
+    ResourceRef frag;   // fragment stage SPIR-V
+    ResourceRef comp;   // compute stage SPIR-V (phase 2、 vert/frag と排他)
+
+    bool empty() const { return vert.empty() && frag.empty() && comp.empty(); }
+
+    /// 固定 vert+frag の graphics pipeline として使えるか (phase 1 の判定)。
+    bool has_graphics_stages() const { return !vert.empty() && !frag.empty(); }
+};
+
+// ============================================================
 // VisusAnimationDefault — 起動直後に走らせる default アニメ
 // ============================================================
 
@@ -141,6 +169,12 @@ struct VisusDesc {
     // ---- Kind-specific extras ----
     std::string rive_artboard;          // RIVE only (空 = default)
     std::string text_default;           // TEXT only (default 表示文字列)
+
+    // ---- CUSTOM kind: shader stages (vert/frag/comp) ----
+    // CUSTOM kind では `asset` (単一ファイル) ではなくこちらを使う。
+    // `shader_stages.has_graphics_stages()` が真なら固定 vert+frag の
+    // カスタムシェーダ pipeline で描画される (PBR 経路をバイパス)。
+    VisusShaderStages shader_stages;
 
     // ---- Resolved handles (loader が埋める / 直アサインも可) ----
     MeshHandle    mesh           = INVALID_MESH;     // PRIMITIVE

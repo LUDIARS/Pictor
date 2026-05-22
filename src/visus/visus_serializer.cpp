@@ -374,6 +374,31 @@ bool parse_resource_ref(Parser& pr, ResourceRef& out) {
     }
 }
 
+bool parse_shader_stages(Parser& pr, VisusShaderStages& out) {
+    if (!pr.expect('{')) return false;
+    pr.skip_ws();
+    if (pr.consume('}')) return true;
+    while (true) {
+        std::string key;
+        if (!pr.parse_string(key)) return false;
+        if (!pr.expect(':')) return false;
+
+        if (key == "vert") {
+            if (!parse_resource_ref(pr, out.vert)) return false;
+        } else if (key == "frag") {
+            if (!parse_resource_ref(pr, out.frag)) return false;
+        } else if (key == "comp") {
+            if (!parse_resource_ref(pr, out.comp)) return false;
+        } else {
+            pr.skip_value();
+        }
+
+        if (pr.consume(',')) continue;
+        if (pr.consume('}')) return true;
+        return pr.fail("expected , or }");
+    }
+}
+
 bool parse_geometry(Parser& pr, VisusDesc& out) {
     if (!pr.expect('{')) return false;
     pr.skip_ws();
@@ -387,6 +412,8 @@ bool parse_geometry(Parser& pr, VisusDesc& out) {
             std::string s; if (pr.parse_string(s)) out.geometry_kind = geometry_kind_from_str(s);
         } else if (key == "asset") {
             if (!parse_resource_ref(pr, out.asset)) return false;
+        } else if (key == "shader_stages") {
+            if (!parse_shader_stages(pr, out.shader_stages)) return false;
         } else if (key == "rive_artboard") {
             std::string s; if (pr.parse_string(s)) out.rive_artboard = s;
         } else if (key == "text_default") {
@@ -528,6 +555,11 @@ std::string to_visus_json(const VisusDesc& desc) {
     out += "  \"geometry\": {\n";
     out += "    \"kind\":           "; quote(out, geometry_kind_to_str(desc.geometry_kind)); out += ",\n";
     out += "    \"asset\":          "; emit_resource_ref(out, desc.asset, 2); out += ",\n";
+    out += "    \"shader_stages\": {\n";
+    out += "      \"vert\": "; emit_resource_ref(out, desc.shader_stages.vert, 3); out += ",\n";
+    out += "      \"frag\": "; emit_resource_ref(out, desc.shader_stages.frag, 3); out += ",\n";
+    out += "      \"comp\": "; emit_resource_ref(out, desc.shader_stages.comp, 3); out += "\n";
+    out += "    },\n";
     out += "    \"rive_artboard\":  "; quote(out, desc.rive_artboard); out += ",\n";
     out += "    \"text_default\":   "; quote(out, desc.text_default);  out += ",\n";
     out += "    \"mesh\":           "; quote(out, handle_to_string(desc.mesh));   out += ",\n";
