@@ -133,6 +133,7 @@ constexpr ObjectId INVALID_OBJECT_ID = std::numeric_limits<uint32_t>::max();
 constexpr MeshHandle INVALID_MESH    = std::numeric_limits<uint32_t>::max();
 constexpr MaterialHandle INVALID_MATERIAL = std::numeric_limits<uint32_t>::max();
 constexpr TextureHandle INVALID_TEXTURE   = std::numeric_limits<uint32_t>::max();
+constexpr ShaderHandle INVALID_SHADER     = std::numeric_limits<uint32_t>::max();
 
 // ============================================================
 // Texture Format
@@ -248,7 +249,44 @@ struct ObjectDescriptor {
     uint64_t       shaderKey  = 0;
     uint32_t       materialKey = 0;
     uint8_t        lodLevel   = 0;
+    /// Visus CUSTOM kind 用のシェーダ override
+    /// (`spec/rendering-extensibility-design.md` §2 phase 1)。
+    /// INVALID_SHADER 以外なら、 そのオブジェクトは固定 PBR 経路ではなく
+    /// `ShaderRegistry` の登録済みカスタムシェーダ pipeline で描画される。
+    ShaderHandle   customShader = INVALID_SHADER;
 };
+
+// ============================================================
+// Shader Key — custom-shader identification
+// ============================================================
+// `ObjectDescriptor::shaderKey` (uint64) はバッチ整列キーの一部であり、
+// SoA stream を増やさずに「カスタムシェーダ識別」を運ぶ受け皿になる。
+// Visus CUSTOM kind の object は上位 32bit に CUSTOM フラグ + ShaderHandle
+// を埋め、 バッチビルダ / レンダラはそれを見て PBR 経路をバイパスする。
+//
+//   bit 63       : CUSTOM_SHADER フラグ
+//   bit 32..62   : ShaderHandle (31bit、 INVALID_SHADER は格納しない)
+//   bit 0..31    : 既存の用途 (material/pass バリアント等) のため温存
+//
+// (`spec/rendering-extensibility-design.md` §2 phase 1)。
+
+namespace ShaderKey {
+    constexpr uint64_t CUSTOM_FLAG  = 1ULL << 63;
+    constexpr uint64_t HANDLE_SHIFT = 32;
+    constexpr uint64_t HANDLE_MASK  = 0x7FFFFFFFULL << HANDLE_SHIFT;
+
+    /// 既存 shaderKey にカスタムシェーダ識別ビットを重ねる (下位 32bit は保持)。
+    inline uint64_t with_custom_shader(uint64_t base, ShaderHandle shader) {
+        if (shader == INVALID_SHADER) return base;
+        return (base & 0xFFFFFFFFULL) | CUSTOM_FLAG |
+               ((static_cast<uint64_t>(shader) & 0x7FFFFFFFULL) << HANDLE_SHIFT);
+    }
+    inline bool is_custom(uint64_t key) { return (key & CUSTOM_FLAG) != 0; }
+    inline ShaderHandle custom_shader(uint64_t key) {
+        if (!is_custom(key)) return INVALID_SHADER;
+        return static_cast<ShaderHandle>((key & HANDLE_MASK) >> HANDLE_SHIFT);
+    }
+}
 
 // ============================================================
 // Render Batch

@@ -26,6 +26,12 @@ VisusDesc make_sample() {
     d.shader         = INVALID_MESH;
     d.generic_handle = 0;
 
+    // CUSTOM kind 用シェーダステージ (vert/frag/comp) も round-trip 対象。
+    d.shader_stages.vert.local_path   = "shaders/custom_kuzu.vert.spv";
+    d.shader_stages.frag.local_path   = "shaders/custom_kuzu.frag.spv";
+    d.shader_stages.frag.remote_url   = "https://cdn.example/custom_kuzu.frag.spv";
+    d.shader_stages.frag.fetch_policy = ResourceRef::FetchPolicy::CACHE_FIRST;
+
     VisusMaterialSlot body;
     body.slot_name = "body";
     body.material  = 12;
@@ -80,6 +86,10 @@ bool same_desc(const VisusDesc& a, const VisusDesc& b) {
     if (a.model != b.model) return false;
     if (a.shader != b.shader) return false;
     if (a.generic_handle != b.generic_handle) return false;
+
+    if (!same_rr(a.shader_stages.vert, b.shader_stages.vert)) return false;
+    if (!same_rr(a.shader_stages.frag, b.shader_stages.frag)) return false;
+    if (!same_rr(a.shader_stages.comp, b.shader_stages.comp)) return false;
 
     if (a.materials.size() != b.materials.size()) return false;
     for (size_t i = 0; i < a.materials.size(); ++i) {
@@ -184,6 +194,42 @@ int main() {
             from_visus_json(j, round, nullptr);
             PT_ASSERT(round.geometry_kind == k, "geometry_kind round-trips");
         }
+    }
+
+    // 7. CUSTOM kind の shader_stages が round-trip し、 has_graphics_stages
+    //    が正しく判定される。
+    {
+        VisusDesc src;
+        src.name          = "custom_fx";
+        src.geometry_kind = VisusGeometryKind::CUSTOM;
+        src.shader        = 9;
+        src.shader_stages.vert.local_path = "fx.vert.spv";
+        src.shader_stages.frag.local_path = "fx.frag.spv";
+
+        PT_ASSERT(src.shader_stages.has_graphics_stages(),
+                  "vert+frag set -> has_graphics_stages true");
+        PT_ASSERT(!src.shader_stages.empty(), "shader_stages not empty");
+
+        std::string j = to_visus_json(src);
+        VisusDesc round;
+        std::string err;
+        bool ok = from_visus_json(j, round, &err);
+        PT_ASSERT(ok, "CUSTOM shader_stages round-trip parses");
+        PT_ASSERT(round.shader_stages.vert.local_path == "fx.vert.spv",
+                  "vert stage path preserved");
+        PT_ASSERT(round.shader_stages.frag.local_path == "fx.frag.spv",
+                  "frag stage path preserved");
+        PT_ASSERT(round.shader == 9u, "CUSTOM shader handle preserved");
+        PT_ASSERT(round.shader_stages.has_graphics_stages(),
+                  "round-tripped shader_stages still graphics-capable");
+    }
+
+    // 8. 空の shader_stages は has_graphics_stages=false / empty=true。
+    {
+        VisusShaderStages s;
+        PT_ASSERT(s.empty(), "default shader_stages empty");
+        PT_ASSERT(!s.has_graphics_stages(),
+                  "default shader_stages not graphics-capable");
     }
 
     return report("unit_visus_serializer_test");
