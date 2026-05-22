@@ -95,6 +95,54 @@ ShadowFilterMode shadow_filter_from_str(std::string_view s, ShadowFilterMode fal
     return fallback;
 }
 
+const char* post_process_kind_to_str(PostProcessKind k) {
+    switch (k) {
+        case PostProcessKind::UNKNOWN:        return "Unknown";
+        case PostProcessKind::BLOOM:          return "Bloom";
+        case PostProcessKind::TONE_MAPPING:   return "ToneMapping";
+        case PostProcessKind::VIGNETTE:       return "Vignette";
+        case PostProcessKind::COLOR_GRADING:  return "ColorGrading";
+        case PostProcessKind::DEPTH_OF_FIELD: return "DepthOfField";
+    }
+    return "Unknown";
+}
+
+// Accepts the canonical token plus the same aliases as
+// post_process_kind_from_name() so an explicit `kind` and a bare `name`
+// resolve identically.
+PostProcessKind post_process_kind_from_str(std::string_view s, PostProcessKind fallback) {
+    if (s == "Bloom")          return PostProcessKind::BLOOM;
+    if (s == "ToneMapping" || s == "Tonemapping" || s == "Tonemap" ||
+        s == "tone_mapping")   return PostProcessKind::TONE_MAPPING;
+    if (s == "Vignette")       return PostProcessKind::VIGNETTE;
+    if (s == "ColorGrading" || s == "color_grading" || s == "LUT" ||
+        s == "Grade")          return PostProcessKind::COLOR_GRADING;
+    if (s == "DepthOfField" || s == "depth_of_field" || s == "DoF")
+                               return PostProcessKind::DEPTH_OF_FIELD;
+    if (s == "Unknown")        return PostProcessKind::UNKNOWN;
+    return fallback;
+}
+
+const char* tone_map_operator_to_str(ToneMapOperator op) {
+    switch (op) {
+        case ToneMapOperator::ACES_FILMIC:  return "ACES_FILMIC";
+        case ToneMapOperator::REINHARD:     return "REINHARD";
+        case ToneMapOperator::REINHARD_EXT: return "REINHARD_EXT";
+        case ToneMapOperator::UNCHARTED2:   return "UNCHARTED2";
+        case ToneMapOperator::LINEAR_CLAMP: return "LINEAR_CLAMP";
+    }
+    return "ACES_FILMIC";
+}
+
+ToneMapOperator tone_map_operator_from_str(std::string_view s, ToneMapOperator fallback) {
+    if (s == "ACES_FILMIC")  return ToneMapOperator::ACES_FILMIC;
+    if (s == "REINHARD")     return ToneMapOperator::REINHARD;
+    if (s == "REINHARD_EXT") return ToneMapOperator::REINHARD_EXT;
+    if (s == "UNCHARTED2")   return ToneMapOperator::UNCHARTED2;
+    if (s == "LINEAR_CLAMP") return ToneMapOperator::LINEAR_CLAMP;
+    return fallback;
+}
+
 const char* overlay_mode_to_str(OverlayMode m) {
     switch (m) {
         case OverlayMode::OFF:      return "OFF";
@@ -432,18 +480,113 @@ bool parse_render_pass(Parser& pr, RenderPassDef& out) {
     });
 }
 
-bool parse_post_process(Parser& pr, PostProcessDef& out) {
+// ---- post-process effect parameter parsers --------------------------------
+
+bool parse_bloom_config(Parser& pr, BloomConfig& out) {
     return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")             return p.parse_bool(out.enabled);
+        else if (key == "threshold")      return p.parse_float_field(out.threshold);
+        else if (key == "soft_threshold") return p.parse_float_field(out.soft_threshold);
+        else if (key == "intensity")      return p.parse_float_field(out.intensity);
+        else if (key == "radius")         return p.parse_float_field(out.radius);
+        else if (key == "mip_levels") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.mip_levels = static_cast<uint32_t>(v); return true;
+        } else if (key == "scatter")      return p.parse_float_field(out.scatter);
+        return p.skip_value();
+    });
+}
+
+bool parse_tone_mapping_config(Parser& pr, ToneMappingConfig& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")          return p.parse_bool(out.enabled);
+        else if (key == "op") {
+            std::string s; if (!p.parse_string(s)) return false;
+            out.op = tone_map_operator_from_str(s, out.op); return true;
+        } else if (key == "exposure")    return p.parse_float_field(out.exposure);
+        else if (key == "gamma")         return p.parse_float_field(out.gamma);
+        else if (key == "white_point")   return p.parse_float_field(out.white_point);
+        else if (key == "saturation")    return p.parse_float_field(out.saturation);
+        return p.skip_value();
+    });
+}
+
+bool parse_vignette_config(Parser& pr, VignetteConfig& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")        return p.parse_bool(out.enabled);
+        else if (key == "intensity") return p.parse_float_field(out.intensity);
+        else if (key == "radius")    return p.parse_float_field(out.radius);
+        else if (key == "softness")  return p.parse_float_field(out.softness);
+        else if (key == "color")
+            return p.parse_float3(out.color[0], out.color[1], out.color[2]);
+        return p.skip_value();
+    });
+}
+
+bool parse_color_grading_config(Parser& pr, ColorGradingConfig& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")            return p.parse_bool(out.enabled);
+        else if (key == "lut_path")      return p.parse_string(out.lut_path);
+        else if (key == "lut_intensity") return p.parse_float_field(out.lut_intensity);
+        else if (key == "lut_size") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.lut_size = static_cast<uint32_t>(v); return true;
+        }
+        return p.skip_value();
+    });
+}
+
+bool parse_depth_of_field_config(Parser& pr, DepthOfFieldConfig& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")             return p.parse_bool(out.enabled);
+        else if (key == "focus_distance") return p.parse_float_field(out.focus_distance);
+        else if (key == "focus_range")    return p.parse_float_field(out.focus_range);
+        else if (key == "bokeh_radius")   return p.parse_float_field(out.bokeh_radius);
+        else if (key == "near_start")     return p.parse_float_field(out.near_start);
+        else if (key == "near_end")       return p.parse_float_field(out.near_end);
+        else if (key == "far_start")      return p.parse_float_field(out.far_start);
+        else if (key == "far_end")        return p.parse_float_field(out.far_end);
+        else if (key == "sample_count") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.sample_count = static_cast<uint32_t>(v); return true;
+        }
+        return p.skip_value();
+    });
+}
+
+bool parse_post_process(Parser& pr, PostProcessDef& out) {
+    bool kind_explicit = false;
+    bool ok = parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
         if (key == "name") {
             return p.parse_string(out.name);
         } else if (key == "enabled") {
             return p.parse_bool(out.enabled);
+        } else if (key == "kind") {
+            std::string s;
+            if (!p.parse_string(s)) return false;
+            out.kind = post_process_kind_from_str(s, out.kind);
+            kind_explicit = true;
+            return true;
+        } else if (key == "bloom") {
+            return parse_bloom_config(p, out.bloom);
+        } else if (key == "tone_mapping") {
+            return parse_tone_mapping_config(p, out.tone_mapping);
+        } else if (key == "vignette") {
+            return parse_vignette_config(p, out.vignette);
+        } else if (key == "color_grading") {
+            return parse_color_grading_config(p, out.color_grading);
+        } else if (key == "depth_of_field") {
+            return parse_depth_of_field_config(p, out.depth_of_field);
         }
-        // Effect-specific parameters (e.g. bloom intensity) are accepted
-        // for forward-compatibility but PostProcessDef has no field for
-        // them yet — they round-trip through the editor JSON, not C++.
+        // Unknown keys are skipped (forward-compat, spec §2).
         return p.skip_value();
     });
+    if (!ok) return false;
+    // No explicit `kind` -> infer from the effect name (preset spelling).
+    if (!kind_explicit && out.kind == PostProcessKind::UNKNOWN) {
+        out.kind = post_process_kind_from_name(out.name);
+    }
+    return true;
 }
 
 bool parse_shadow_config(Parser& pr, ShadowConfig& out) {
@@ -775,10 +918,85 @@ std::string to_pipeline_profile_json(const PipelineProfileDef& def) {
         out += "\n";
         for (size_t i = 0; i < def.post_process_stack.size(); ++i) {
             const auto& pp = def.post_process_stack[i];
-            pad(out, 2);
-            out += "{ \"name\": "; quote(out, pp.name);
-            out += ", \"enabled\": "; emit_bool(out, pp.enabled);
-            out += " }";
+            pad(out, 2); out += "{\n";
+            pad(out, 3); out += "\"name\":    "; quote(out, pp.name); out += ",\n";
+            pad(out, 3); out += "\"enabled\": "; emit_bool(out, pp.enabled); out += ",\n";
+            pad(out, 3); out += "\"kind\":    ";
+            quote(out, post_process_kind_to_str(pp.kind));
+
+            // Emit only the parameter block matching `kind`. Effects with no
+            // host-driven implementation (UNKNOWN) carry name/enabled/kind
+            // only — their parameters live in the editor JSON, not here.
+            switch (pp.kind) {
+                case PostProcessKind::BLOOM: {
+                    const auto& b = pp.bloom;
+                    out += ",\n";
+                    pad(out, 3); out += "\"bloom\": {\n";
+                    pad(out, 4); out += "\"threshold\":      "; emit_float(out, b.threshold); out += ",\n";
+                    pad(out, 4); out += "\"soft_threshold\": "; emit_float(out, b.soft_threshold); out += ",\n";
+                    pad(out, 4); out += "\"intensity\":      "; emit_float(out, b.intensity); out += ",\n";
+                    pad(out, 4); out += "\"radius\":         "; emit_float(out, b.radius); out += ",\n";
+                    pad(out, 4); out += "\"mip_levels\":     "; emit_uint(out, b.mip_levels); out += ",\n";
+                    pad(out, 4); out += "\"scatter\":        "; emit_float(out, b.scatter); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::TONE_MAPPING: {
+                    const auto& t = pp.tone_mapping;
+                    out += ",\n";
+                    pad(out, 3); out += "\"tone_mapping\": {\n";
+                    pad(out, 4); out += "\"op\":          "; quote(out, tone_map_operator_to_str(t.op)); out += ",\n";
+                    pad(out, 4); out += "\"exposure\":    "; emit_float(out, t.exposure); out += ",\n";
+                    pad(out, 4); out += "\"gamma\":       "; emit_float(out, t.gamma); out += ",\n";
+                    pad(out, 4); out += "\"white_point\": "; emit_float(out, t.white_point); out += ",\n";
+                    pad(out, 4); out += "\"saturation\":  "; emit_float(out, t.saturation); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::VIGNETTE: {
+                    const auto& v = pp.vignette;
+                    out += ",\n";
+                    pad(out, 3); out += "\"vignette\": {\n";
+                    pad(out, 4); out += "\"intensity\": "; emit_float(out, v.intensity); out += ",\n";
+                    pad(out, 4); out += "\"radius\":    "; emit_float(out, v.radius); out += ",\n";
+                    pad(out, 4); out += "\"softness\":  "; emit_float(out, v.softness); out += ",\n";
+                    pad(out, 4); out += "\"color\":     [";
+                    emit_float(out, v.color[0]); out += ", ";
+                    emit_float(out, v.color[1]); out += ", ";
+                    emit_float(out, v.color[2]); out += "]\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::COLOR_GRADING: {
+                    const auto& c = pp.color_grading;
+                    out += ",\n";
+                    pad(out, 3); out += "\"color_grading\": {\n";
+                    pad(out, 4); out += "\"lut_path\":      "; quote(out, c.lut_path); out += ",\n";
+                    pad(out, 4); out += "\"lut_intensity\": "; emit_float(out, c.lut_intensity); out += ",\n";
+                    pad(out, 4); out += "\"lut_size\":      "; emit_uint(out, c.lut_size); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::DEPTH_OF_FIELD: {
+                    const auto& d = pp.depth_of_field;
+                    out += ",\n";
+                    pad(out, 3); out += "\"depth_of_field\": {\n";
+                    pad(out, 4); out += "\"focus_distance\": "; emit_float(out, d.focus_distance); out += ",\n";
+                    pad(out, 4); out += "\"focus_range\":    "; emit_float(out, d.focus_range); out += ",\n";
+                    pad(out, 4); out += "\"bokeh_radius\":   "; emit_float(out, d.bokeh_radius); out += ",\n";
+                    pad(out, 4); out += "\"near_start\":     "; emit_float(out, d.near_start); out += ",\n";
+                    pad(out, 4); out += "\"near_end\":       "; emit_float(out, d.near_end); out += ",\n";
+                    pad(out, 4); out += "\"far_start\":      "; emit_float(out, d.far_start); out += ",\n";
+                    pad(out, 4); out += "\"far_end\":        "; emit_float(out, d.far_end); out += ",\n";
+                    pad(out, 4); out += "\"sample_count\":   "; emit_uint(out, d.sample_count); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::UNKNOWN:
+                    out += "\n";
+                    break;
+            }
+            pad(out, 2); out += "}";
             if (i + 1 < def.post_process_stack.size()) out += ",";
             out += "\n";
         }

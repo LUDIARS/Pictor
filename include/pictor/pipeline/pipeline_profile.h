@@ -5,6 +5,7 @@
 #include "pictor/update/update_scheduler.h"
 #include "pictor/gpu/gpu_driven_pipeline.h"
 #include "pictor/gi/gi_lighting_system.h"
+#include "pictor/postprocess/postprocess_effect.h"
 #include <string>
 #include <vector>
 
@@ -17,11 +18,56 @@ struct ShadowConfig {
     ShadowFilterMode filter_mode     = ShadowFilterMode::PCF;
 };
 
-/// Post-process effect definition (§8.2)
-struct PostProcessDef {
-    std::string name;
-    bool        enabled = true;
+/// Post-process effect kind.
+///
+/// Identifies which `PostProcessConfig` slot a `PostProcessDef` drives.
+/// `UNKNOWN` covers effect names that have no host-driven implementation in
+/// `PostProcessPipeline` yet (SSAO / TAA / FXAA / VolumetricFog …): they
+/// still round-trip through JSON / the editor, but the post-process bridge
+/// ignores them (系統B phase 2 territory — see
+/// `spec/rendering-extensibility-design.md` §3).
+enum class PostProcessKind : uint8_t {
+    UNKNOWN       = 0,  ///< Name has no PostProcessConfig mapping
+    BLOOM         = 1,  ///< -> PostProcessConfig::bloom
+    TONE_MAPPING  = 2,  ///< -> PostProcessConfig::tone_mapping
+    VIGNETTE      = 3,  ///< -> PostProcessConfig::vignette
+    COLOR_GRADING = 4,  ///< -> PostProcessConfig::color_grading (LUT)
+    DEPTH_OF_FIELD = 5, ///< -> PostProcessConfig::depth_of_field
 };
+
+/// Post-process effect definition (§8.2).
+///
+/// Phase 1 of 方針2 (`spec/rendering-extensibility-design.md` §3): besides
+/// `name` / `enabled`, the def now carries a typed `kind` and one parameter
+/// struct per supported effect. Only the struct matching `kind` is
+/// meaningful; the others stay at their defaults. The serializer round-trips
+/// the active effect's parameters, and `build_post_process_config()`
+/// (`postprocess_config_bridge.h`) folds the stack into a `PostProcessConfig`
+/// that drives the real `PostProcessPipeline`.
+///
+/// `kind` is normally derived from `name` (case-insensitive) via
+/// `post_process_kind_from_name()`; an explicit `kind` field in the JSON
+/// overrides that inference.
+struct PostProcessDef {
+    std::string     name;
+    bool            enabled = true;
+    PostProcessKind kind    = PostProcessKind::UNKNOWN;
+
+    // Effect parameters — only the struct matching `kind` is consumed by the
+    // bridge. Defaults mirror `PostProcessConfig`'s per-effect defaults.
+    BloomConfig          bloom;
+    ToneMappingConfig    tone_mapping;
+    VignetteConfig       vignette;
+    ColorGradingConfig   color_grading;
+    DepthOfFieldConfig   depth_of_field;
+};
+
+/// Map an effect name (case-insensitive) to a `PostProcessKind`.
+/// Accepts the canonical preset spellings plus common aliases:
+///   Bloom, Tonemapping/ToneMapping/Tonemap, Vignette,
+///   ColorGrading/LUT/Grade, DoF/DepthOfField.
+/// Returns `UNKNOWN` for names with no host-driven implementation.
+PostProcessKind post_process_kind_from_name(const std::string& name);
 
 /// Render pass definition (§8.3)
 struct RenderPassDef {
