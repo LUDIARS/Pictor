@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <limits>
+#include <vector>
 
 // ============================================================
 // Cache-Line Alignment Configuration
@@ -174,7 +175,8 @@ enum class VertexAttributeType : uint8_t {
     INT32     = 5,
     UNORM8X4  = 6,  // Packed color
     HALF2     = 7,
-    HALF4     = 8
+    HALF4     = 8,
+    UINT32X4  = 9   // uvec4 — skinning joint indices 等
 };
 
 enum class VertexSemantic : uint8_t {
@@ -210,9 +212,52 @@ inline size_t vertex_attribute_size(VertexAttributeType type) {
         case VertexAttributeType::UNORM8X4: return 4;
         case VertexAttributeType::HALF2:    return 4;
         case VertexAttributeType::HALF4:    return 8;
+        case VertexAttributeType::UINT32X4: return 16;
         default: return 0;
     }
 }
+
+// ============================================================
+// VertexLayout — mesh 駆動の頂点入力レイアウト
+// ============================================================
+// 1 binding ぶんの頂点フォーマット記述 (attribute 集合 + stride)。
+//
+//   attributes : `VertexAttribute[]` (semantic / type / byte offset)
+//   stride     : 1 頂点のバイト幅。 0 のとき `computed_stride()` が
+//                attribute から自動算出する (= 末尾 attribute の
+//                offset + size)。
+//
+// 元は `data/vertex_data_uploader.h` の mesh 登録専用構造体だったが、
+// `spec/rendering-extensibility-design.md` §6.2 で「カスタムシェーダ
+// pipeline の頂点入力レイアウト」 にも使うため `core/types.h` へ昇格した。
+// `empty()` が真なら頂点入力空 = `gl_VertexIndex` 駆動のフォールバック。
+// Vulkan の `VkVertexInput*Description` への変換は `shader/vertex_layout.h`
+// (Vulkan 依存ヘッダ) が担う — 本構造体自体は Vulkan に非依存。
+//
+// `attributes[i]` の `VertexSemantic` は SPIR-V の `layout(location=N)` と
+// 突き合わせる必要があるが、 §6.2 phase 2 では「def に明示記述」 のみ。
+// location は attribute の登録順 (index) をそのまま割り当てる
+// (SPIR-V reflection は将来)。
+
+struct VertexLayout {
+    std::vector<VertexAttribute> attributes;
+    uint32_t stride = 0;  // Bytes per vertex. 0 = auto-compute from attributes.
+
+    bool empty() const { return attributes.empty(); }
+
+    /// Compute stride from attributes if not set.
+    /// stride が明示されていればそれをそのまま返す。
+    uint32_t computed_stride() const {
+        if (stride > 0) return stride;
+        uint32_t max_end = 0;
+        for (const auto& attr : attributes) {
+            const uint32_t end = static_cast<uint32_t>(attr.offset) +
+                static_cast<uint32_t>(vertex_attribute_size(attr.type));
+            if (end > max_end) max_end = end;
+        }
+        return max_end;
+    }
+};
 
 // ============================================================
 // Object Flags (§3.3)

@@ -32,6 +32,16 @@ VisusDesc make_sample() {
     d.shader_stages.frag.remote_url   = "https://cdn.example/custom_kuzu.frag.spv";
     d.shader_stages.frag.fetch_policy = ResourceRef::FetchPolicy::CACHE_FIRST;
 
+    // §6.2: mesh 駆動の頂点入力レイアウトも round-trip 対象。
+    d.shader_stages.vertex_layout.stride = 64;
+    d.shader_stages.vertex_layout.attributes = {
+        {VertexSemantic::POSITION,  VertexAttributeType::FLOAT3,   0},
+        {VertexSemantic::NORMAL,    VertexAttributeType::FLOAT3,   12},
+        {VertexSemantic::TEXCOORD0, VertexAttributeType::FLOAT2,   24},
+        {VertexSemantic::JOINTS,    VertexAttributeType::UINT32X4, 32},
+        {VertexSemantic::WEIGHTS,   VertexAttributeType::FLOAT4,   48},
+    };
+
     VisusMaterialSlot body;
     body.slot_name = "body";
     body.material  = 12;
@@ -90,6 +100,18 @@ bool same_desc(const VisusDesc& a, const VisusDesc& b) {
     if (!same_rr(a.shader_stages.vert, b.shader_stages.vert)) return false;
     if (!same_rr(a.shader_stages.frag, b.shader_stages.frag)) return false;
     if (!same_rr(a.shader_stages.comp, b.shader_stages.comp)) return false;
+
+    {
+        const VertexLayout& va = a.shader_stages.vertex_layout;
+        const VertexLayout& vb = b.shader_stages.vertex_layout;
+        if (va.stride != vb.stride) return false;
+        if (va.attributes.size() != vb.attributes.size()) return false;
+        for (size_t i = 0; i < va.attributes.size(); ++i) {
+            if (va.attributes[i].semantic != vb.attributes[i].semantic) return false;
+            if (va.attributes[i].type     != vb.attributes[i].type)     return false;
+            if (va.attributes[i].offset   != vb.attributes[i].offset)   return false;
+        }
+    }
 
     if (a.materials.size() != b.materials.size()) return false;
     for (size_t i = 0; i < a.materials.size(); ++i) {
@@ -230,6 +252,50 @@ int main() {
         PT_ASSERT(s.empty(), "default shader_stages empty");
         PT_ASSERT(!s.has_graphics_stages(),
                   "default shader_stages not graphics-capable");
+        PT_ASSERT(s.vertex_layout.empty(),
+                  "default shader_stages has empty vertex_layout");
+    }
+
+    // 9. §6.2: shader_stages.vertex_layout が全 attribute 型で round-trip。
+    {
+        VisusDesc src;
+        src.name          = "vlayout_fx";
+        src.geometry_kind = VisusGeometryKind::CUSTOM;
+        src.shader_stages.vert.local_path = "v.vert.spv";
+        src.shader_stages.frag.local_path = "v.frag.spv";
+        src.shader_stages.vertex_layout.stride = 0;  // inferred
+        src.shader_stages.vertex_layout.attributes = {
+            {VertexSemantic::POSITION, VertexAttributeType::FLOAT,    0},
+            {VertexSemantic::NORMAL,   VertexAttributeType::HALF2,    4},
+            {VertexSemantic::TANGENT,  VertexAttributeType::HALF4,    8},
+            {VertexSemantic::COLOR0,   VertexAttributeType::UNORM8X4, 16},
+            {VertexSemantic::JOINTS,   VertexAttributeType::UINT32X4, 20},
+            {VertexSemantic::CUSTOM0,  VertexAttributeType::INT32,    36},
+        };
+        std::string j = to_visus_json(src);
+        VisusDesc round;
+        std::string err;
+        bool ok = from_visus_json(j, round, &err);
+        PT_ASSERT(ok, "vertex_layout round-trip parses");
+        if (!ok) std::fprintf(stderr, "  parse error: %s\n", err.c_str());
+        PT_ASSERT(same_desc(src, round), "vertex_layout round-trip preserves attrs");
+        PT_ASSERT(!round.shader_stages.vertex_layout.empty(),
+                  "round-tripped vertex_layout not empty");
+    }
+
+    // 10. §6.2: VertexLayout::computed_stride — 明示 stride 優先 / 0 で推定。
+    {
+        VertexLayout vl;
+        vl.attributes = {
+            {VertexSemantic::POSITION, VertexAttributeType::FLOAT3,   0},
+            {VertexSemantic::JOINTS,   VertexAttributeType::UINT32X4, 12},
+        };
+        // 末尾 attribute offset 12 + size 16 = 28
+        PT_ASSERT_OP(vl.computed_stride(), ==, uint32_t{28},
+                     "stride==0 -> computed from last attribute");
+        vl.stride = 64;
+        PT_ASSERT_OP(vl.computed_stride(), ==, uint32_t{64},
+                     "explicit stride is kept verbatim");
     }
 
     return report("unit_visus_serializer_test");

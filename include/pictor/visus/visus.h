@@ -127,7 +127,16 @@ struct VisusShaderStages {
     ResourceRef frag;   // fragment stage SPIR-V
     ResourceRef comp;   // compute stage SPIR-V (phase 2、 vert/frag と排他)
 
-    bool empty() const { return vert.empty() && frag.empty() && comp.empty(); }
+    /// mesh 駆動の頂点入力レイアウト
+    /// (`spec/rendering-extensibility-design.md` §6.2 phase 2)。
+    /// 空のとき pipeline は頂点入力空 = phase 1 互換 (`gl_VertexIndex`
+    /// 駆動)。 非空なら vert シェーダが mesh の頂点バッファを読む。
+    VertexLayout vertex_layout;
+
+    bool empty() const {
+        return vert.empty() && frag.empty() && comp.empty() &&
+               vertex_layout.empty();
+    }
 
     /// 固定 vert+frag の graphics pipeline として使えるか (phase 1 の判定)。
     bool has_graphics_stages() const { return !vert.empty() && !frag.empty(); }
