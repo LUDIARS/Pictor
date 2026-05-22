@@ -42,17 +42,33 @@ C++ 起動順:
   4. FramebufferRegistry が render_passes[].render_targets + AttachmentRegistry から
      framebuffer を作成 (swapchain は per-image)
 
-Per-frame (RenderPassScheduler::execute):
-  for pass in profile.render_passes:
-    rp = RenderPassRegistry.get(pass.pass_name)
-    fb = FramebufferRegistry.get(pass.pass_name, frame_index)
-    bind input_textures → descriptor
-    vkCmdBeginRenderPass(rp, fb, ...)
-    if pass.shader_override != "none":
-        vkCmdBindPipeline(ShaderRegistry.pipeline(pass.shader_override))
-    record_batches(pass.filter_mask)
-    vkCmdEndRenderPass
+Init 時 (プロファイル切替 1 回):
+  PipelineCompiler が profile.render_passes[] (string 参照だらけ) を
+  compile() し、 std::vector<CompiledPass>(SoA-ish AoS) を作る。 全
+  string → index / handle を解決:
+    - attachment 名 → AttachmentRegistry の uint16_t index
+    - shader_override → VkPipeline (直値)
+    - render_pass / framebuffer → VkRenderPass / VkFramebuffer (直値)
+    - input_textures → 事前構築済 VkDescriptorSet (per-flight)
+    - filter_mask / sort_mode → 既に数値、 そのまま
+
+Per-frame (RenderPassScheduler::execute) — hot path に string / map lookup ゼロ:
+  for (const CompiledPass& cp : compiled_.passes) {
+      vkCmdBindDescriptorSets(... cp.input_sets[flight] ...);   // 事前 build
+      vkCmdBeginRenderPass(cmd, &cp.rp_begin_info[image_index], ...);
+      if (cp.pipeline != VK_NULL_HANDLE)
+          vkCmdBindPipeline(cmd, ..., cp.pipeline);
+      record_batches(cmd, cp.filter_mask, cp.sort_mode);
+      vkCmdEndRenderPass(cmd);
+  }
 ```
+
+**ノード化のオーバーヘッド方針** (`feedback_pictor_dod_layout` 準拠):
+- JSON の `render_passes[]` は宣言形式 (string 名で参照、可読性優先)
+- 起動時 `PipelineCompiler::compile()` で **CompiledGraph** (`std::vector<CompiledPass>`、 各エントリは VkHandle / index 直値のみ) へ畳み込む
+- `RenderPassScheduler::execute()` は **CompiledGraph をフラットイテレートするだけ**。 `unordered_map<string, ...>` / `std::string` / `find_by_name` は hot path に出ない
+- プロファイル切替・swapchain resize 時のみ `compile()` をやり直す (init 1 回方針)
+- `CompiledPass` は AoS 構造体だが、 主要 VkHandle 3 個 + bitmask 数個で 64-128 B 程度に収まる。 SIMD ではなく seq-iteration なので AoS のままキャッシュ効率が高い
 
 ## 3. データモデル (C++ 側)
 
@@ -165,12 +181,14 @@ public:
     void resize(VkExtent2D new_extent);
     void shutdown();
 
-    // SWAPCHAIN_COLOR は per-image だが、それ以外は per-flight (or 単一)
-    VkImageView view(const std::string& name, uint32_t frame_index) const;
-    VkImage     image(const std::string& name, uint32_t frame_index) const;
-    VkFormat    format(const std::string& name) const;
-    VkExtent2D  extent(const std::string& name) const;
-    const AttachmentDef* find(const std::string& name) const;
+    // init 時の名前解決にだけ使う。 hot path では呼ばない。
+    // 戻り値 0xFFFF = 未登録 (PipelineCompiler が fatal log)
+    uint16_t    index_of(std::string_view name) const;
+    VkImageView view(uint16_t index, uint32_t frame_index) const;
+    VkImage     image(uint16_t index, uint32_t frame_index) const;
+    VkFormat    format(uint16_t index) const;
+    VkExtent2D  extent(uint16_t index) const;
+    const AttachmentDef* find(uint16_t index) const;
 
     // ランタイムが swapchain image を inject
     void set_swapchain_images(std::span<const VkImage> images,
@@ -180,6 +198,7 @@ public:
 ```
 
 per-flight (flight_count = 2~3) で多重化、`resize()` で extent 追従。SWAPCHAIN_COLOR だけは swapchain 側からの inject に従う (`VulkanContext::recreate_swapchain` から呼ぶ)。
+**index 引きが正規** — `std::string` を hot path に出さないため、 lookup は init 時に 1 回だけ `index_of()` で `uint16_t` に解決して、 以降はその index を使い回す。
 
 ### 3.4 `RenderPassRegistry` / `FramebufferRegistry`
 
@@ -188,7 +207,8 @@ class RenderPassRegistry {
 public:
     void initialize(VkDevice device, const std::vector<RenderPassDef>& passes,
                     const AttachmentRegistry& attachments);
-    VkRenderPass get(const std::string& pass_name) const;
+    uint16_t     index_of(std::string_view pass_name) const;
+    VkRenderPass get(uint16_t index) const;
     void shutdown();
 };
 
@@ -200,12 +220,84 @@ public:
                     uint32_t flight_count, uint32_t swapchain_image_count);
     void resize(VkExtent2D new_extent);
     // swapchain attachment を含む pass は per-swapchain-image、それ以外は per-flight
-    VkFramebuffer get(const std::string& pass_name, uint32_t frame_or_image_index) const;
+    // PipelineCompiler が compile 時に per-pass で flat 配列を引き写すので
+    // hot path はこの get() も呼ばない設計
+    VkFramebuffer get(uint16_t pass_index, uint32_t frame_or_image_index) const;
     void shutdown();
 };
 ```
 
-両者は `AttachmentRegistry::resize()` 後に再構築。
+両者は `AttachmentRegistry::resize()` 後に再構築。 hot path から消すために `get()` は init 時にしか呼ばれない。
+
+### 3.5 `CompiledPass` / `CompiledGraph` — hot path 用 flat 構造
+
+`PipelineCompiler::compile()` が `profile.render_passes[]` を全 string 解決後の flat 配列へ畳み込む。 1 フレームの execute は **この配列を seq-iterate するだけ**。
+
+```cpp
+struct CompiledPass {
+    // ---- 描画コマンド側 (hot path で直値が必要) ----
+    VkRenderPass    render_pass;         // RenderPassRegistry から
+    // per-image / per-flight の framebuffer 配列。 swapchain attachment を
+    // 含む pass は per-swapchain-image (3 枚)、 含まない pass は per-flight
+    // (2~3 枚)。 indexing は image_index か flight_index のどちらか
+    // — is_swapchain で分岐 (枝予測は 1 種類しか出ない)
+    std::array<VkFramebuffer, 4> framebuffers;  // 0..framebuffer_count
+    std::array<VkDescriptorSet, 4> input_sets;  // 0..flight_count
+
+    // ---- clear 値 / extent も pre-resolve (BeginRenderPassInfo に渡す) ----
+    VkRect2D       render_area;
+    uint16_t       clear_count;
+    std::array<VkClearValue, 8> clear_values; // max 8 attachments per pass
+
+    // ---- pipeline override (NULL = scheduler が pass_type 既定を使う) ----
+    VkPipeline     pipeline;
+
+    // ---- バッチ抽出ヒント (uint で済む。 hot path で OK) ----
+    uint32_t       filter_mask;          // RenderBatch filter
+    uint8_t        sort_mode;            // FRONT_TO_BACK / BACK_TO_FRONT / NONE
+    uint8_t        pass_type;            // PassType enum を 1 byte で
+    uint8_t        framebuffer_count;    // 1=per-flight, 3=per-swapchain-image
+    uint8_t        is_swapchain : 1;
+    uint8_t        is_compute   : 1;
+    uint8_t        reserved     : 6;
+
+    // ---- 観測用 (Phase 2 §6.1 の GPU timestamp タグ) ----
+    uint16_t       timestamp_begin_query;
+    uint16_t       timestamp_end_query;
+    const char*    debug_name;           // string_view 化した名前 (static-lived)
+};
+static_assert(sizeof(CompiledPass) <= 192,
+              "CompiledPass should stay cache-line friendly");
+
+struct CompiledGraph {
+    std::vector<CompiledPass> passes;            // 実行順
+    // descriptor pool / input_set 配列の所有も graph がまとめて持つ
+    VkDescriptorPool descriptor_pool;
+    std::vector<VkDescriptorSet> descriptor_sets_storage;
+    // push constant データのバックストア (CompiledPass からは offset+size で参照)
+    std::vector<std::byte> push_constants_storage;
+};
+
+class PipelineCompiler {
+public:
+    static CompiledGraph compile(const PipelineProfileDef& profile,
+                                 const AttachmentRegistry&,
+                                 const RenderPassRegistry&,
+                                 const FramebufferRegistry&,
+                                 const ShaderRegistry&,
+                                 VkDevice device,
+                                 uint32_t flight_count,
+                                 uint32_t swapchain_image_count);
+};
+```
+
+**hot path 不変条件:**
+- `RenderPassScheduler::execute()` は `for (const auto& cp : graph.passes)` だけ。 `.find()` / `unordered_map` / `std::string` は 0 個
+- `CompiledPass` 内に解決済 VkHandle / index / push constant offset のみ。 attachment 名 / pass 名 / shader 名は文字列としては保持しない (debug_name は static literal の `const char*` のみ、 hot path で読まない)
+- `descriptor_sets_storage` は init 時に一括 allocate (pool フラグメント抑止)、 `input_sets` は span でなく 4 要素固定配列 (flight_count ≤ 4 を上限とする)
+- profile 切替 / swapchain resize 時のみ `compile()` を再実行 (init 1 回方針)
+
+これで `RenderPassScheduler::execute()` の per-frame 計算量は「pass 数 × 各 vkCmd* 呼出」 のみ、 余分な間接参照ゼロ ([[feedback_pictor_dod_layout]])。
 
 ## 4. C++ 側のリファクタリング順
 
@@ -226,17 +318,24 @@ public:
 
 検証: 既存 KS が無改変で起動できる。プロファイルに `render_passes[]` を書くと、その通りの順序で VkRenderPass が生成される。
 
-### 4.3 ステップ C: RenderPassScheduler::execute() を実描画化
+### 4.3 ステップ C: PipelineCompiler + RenderPassScheduler::execute() を実描画化
 
-- 各 case の中身を実装:
-  - `OPAQUE` / `TRANSPARENT` / `DEPTH_ONLY` / `SHADOW`: framebuffer + render pass 引いて `vkCmdBeginRenderPass` → batch を `vkCmdDraw*` (RenderBatch ベース)
-  - `POST_PROCESS`: 既存 `PostProcessPipeline::record` を chain ベースで呼ぶ (互換維持)
-  - `COMPUTE`: Phase 3 では `vkCmdDispatch` のみ、descriptor 系は Phase 4
-  - `CUSTOM`: 既存 `ICustomRenderPass::execute()` 呼出を維持
-- `input_textures[]` は descriptor set 0 の binding 0..N に sampled image として bind (固定 layout、Phase 4 で柔軟化)
-- `shader_override` が "none" 以外なら `ShaderRegistry::pipeline(handle)` を bind
+- `PipelineCompiler::compile()` を新設 (§3.5)。 起動時 / プロファイル切替 / swapchain resize で 1 回だけ呼ぶ。 `profile.render_passes[]` を全 string 解決して `CompiledGraph` (`std::vector<CompiledPass>`) へ畳み込む。
+- `RenderPassScheduler` は `CompiledGraph` を保持し、 `execute(cmd)` は **フラットイテレートのみ**:
+  - `vkCmdBindDescriptorSets(... cp.input_sets[flight] ...)` (pre-built set)
+  - `vkCmdBeginRenderPass(cmd, &cp.rp_begin[image_index|flight] ...)`
+  - `if (cp.pipeline) vkCmdBindPipeline(...)` (compile 時に NULL なら pass_type 既定パイプラインを scheduler が default として持つ)
+  - `vkCmdDispatch` or `record_batches(cmd, cp.filter_mask, cp.sort_mode)` を pass_type で分岐 (`switch` 1 個、 hot path で 1 fn ptr ジャンプ程度)
+  - `vkCmdEndRenderPass(cmd)`
+- pass_type ごとの記録経路:
+  - `OPAQUE` / `TRANSPARENT` / `DEPTH_ONLY` / `SHADOW`: `record_batches` が RenderBatch を `vkCmdDraw*` でフラッシュ
+  - `POST_PROCESS`: pass_type は CompiledPass にすでに反映済。 既存 `PostProcessPipeline` の chain 経路を CompiledPass.pipeline + framebuffer で駆動 (互換維持)
+  - `COMPUTE`: `vkCmdDispatch(cmd, group_x, group_y, group_z)`、 dispatch サイズは CompiledPass に pre-resolve
+  - `CUSTOM`: `ICustomRenderPass*` を CompiledPass に pre-resolve しておき `cp.custom->execute(cmd, frame_ctx)`
+- `input_textures[]` は compile 時に **per-flight VkDescriptorSet を一括 build**。 hot path は `cp.input_sets[flight]` を bind するだけ。 layout は 1 種類 (sampled image 0..N) を共有
+- `shader_override` は compile 時に `ShaderRegistry::pipeline(handle)` 解決 → `cp.pipeline` に直値
 
-検証: KS が無改変で起動でき、フレーム出力が従来と pixel-equivalent。`*.profile.json` で pass 順を入れ替えると実描画も追従する。
+検証: KS が無改変で起動でき、 フレーム出力が従来と pixel-equivalent。 プロファイル切替で compile が走り直して flat graph が差し替わる。 hot path に string lookup が 0 個であること (perfetto trace で `std::string`/`unordered_map` シンボルが per-frame に出ないことを確認)。
 
 ### 4.4 ステップ D: 既存呼び出し側の整理
 
@@ -267,14 +366,18 @@ public:
 - **統合**: 既存 `tests/unit_pipeline_profile_round_trip_test.cpp` に attachments[] + attachment_ops[] を含むケース追加
 - **ホスト**: KS が無改変で起動 + Custos でフレーム比較。プロファイル切替 ("standard" → "high" 等) で attachments 差分が反映されることを確認
 
-## 8. Ergo plugin 側の編集 UI 拡張
+## 8. Ergo plugin 側の編集 UI
 
-`tools/ergo/src/plugins/render_pipeline/` の Profile Editor を v2 スキーマに対応させる。詳細は Ergo 側 `spec/tool/render_pipeline.md` §「Profile Editor v2 (Phase 3)」を参照。
+Phase 3 では系統B (実 VkRenderPass チェーン) を解体し JSON 駆動にするため、 **Pictor のソースを静的 scan する意味が無くなる**。 Ergo の Scanner モード (Python regex + `scanner/render_pipeline.json`) は **削除**。 Profile が single source of truth。
 
-主な追加 UI:
-- Attachments タブ (現状の Scanner ビューの Attachments タブとは別に、Profile Editor 側にも attachments 編集を置く)
-- 各 RenderPass エントリに attachment_ops のグリッド (load/store/initial/final layout、render_targets と連動)
-- attachment 名のオートコンプリート (Profile 内宣言済の attachment 名 + 予約名 swapchain)
+Profile Editor / Timeline / DAG は **単一のグラフエディタ画面に統合**する:
+- ノード = `render_passes[]` の各 pass
+- ノード端子 = pass の `render_targets` (出力) / `input_textures` (入力)
+- エッジ = attachment 名で接続 (drag-to-connect で attachment 経由の依存を貼る)
+- timing (Phase 2 §6.1) は同グラフへ overlay 色 / バー (`{op:"timing"}` を受けたら各ノードを着色)
+- アニメーションは無効 (`physics: false` / `smooth: false`、 ノードは静的レイアウト)
+
+詳細は Ergo 側 `spec/tool/render_pipeline_system_b.md` を参照。
 
 ## 9. KS 側の対応
 
@@ -284,8 +387,8 @@ KS は本書の対象外だが、ステップ D で `data/render/kuzu.profile.js
 
 ## 10. 実装スコープ見積もり
 
-- Pictor 側: 新規ヘッダ 4 (`attachment_def.h` / `attachment_registry.h` / `render_pass_registry.h` / `framebuffer_registry.h`) + 実装 4 + 既存 `vulkan_context.cpp` / `render_pass_scheduler.cpp` / `pipeline_profile.h` / `pipeline_profile_serializer.cpp` の改修。新規 CTest 4 ファイル。
-- Ergo 側: `profile_schema.ts` を v2 化 (attachments[] + attachment_ops[]) + Profile Editor UI に Attachments タブ + 各 pass の attachment_ops グリッド。
+- Pictor 側: 新規ヘッダ 5 (`attachment_def.h` / `attachment_registry.h` / `render_pass_registry.h` / `framebuffer_registry.h` / `pipeline_compiler.h`) + 実装 5 + 既存 `vulkan_context.cpp` / `render_pass_scheduler.cpp` / `pipeline_profile.h` / `pipeline_profile_serializer.cpp` の改修。新規 CTest 5 ファイル (compiler の不変条件テスト含む — hot path に string 系シンボルが出ないことを check)。
+- Ergo 側: scanner 削除 (`scanner/render_pipeline_scan.py` / `scanner/render_pipeline.json`)、 plugin を「単一グラフエディタ」 に再構築 (`profile_schema.ts` を v2 化 + DAG ↔ ノード ↔ Profile の単一データ源)、 アニメ無効化。
 - KS 側: `data/render/kuzu.profile.json` の attachments[] 明示化 + `spec/rendering_overview.md` 追記 (別 PR)。
 
 ## 11. ブランチ + PR
