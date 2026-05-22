@@ -6,6 +6,7 @@
 
 #ifdef PICTOR_HAS_VULKAN
 #include "pictor/surface/vulkan_context.h"
+#include "pictor/shader/vertex_layout.h"
 #endif
 
 namespace pictor {
@@ -72,8 +73,8 @@ bool ShaderRegistry::build_pipelines(VulkanContext& vk,
     pipelines_.assign(shaders_.size(), VK_NULL_HANDLE);
 
     // PostProcessPipeline::create_pipelines_ と同じ graphics pipeline 生成。
-    // phase 1: 頂点入力は空 (カスタム vert シェーダは gl_VertexIndex 等で
-    // 自前のジオメトリを引く前提)。 mesh 駆動の頂点レイアウト確定は phase 2。
+    // 頂点入力は CustomShaderDef::vertex_layout から構築する (§6.2 phase 2)。
+    // 空レイアウトのときは頂点入力空 = phase 1 互換 (gl_VertexIndex 駆動)。
     bool all_ok = true;
     for (size_t i = 0; i < shaders_.size(); ++i) {
         const CustomShaderDef& def = shaders_[i];
@@ -99,8 +100,15 @@ bool ShaderRegistry::build_pipelines(VulkanContext& vk,
         stages[1].module = fs;
         stages[1].pName  = "main";
 
-        VkPipelineVertexInputStateCreateInfo vi{
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        // 頂点入力: def の VertexLayout を Vulkan 記述へ展開する。
+        // 空レイアウトなら binding/attribute 共に 0 = phase 1 互換の
+        // 頂点入力空 (gl_VertexIndex 駆動)。 vk_layout は make_create_info
+        // が指すバッファの所有者なので、 pipeline 生成まで生存させる。
+        const VkVertexInputLayout vk_layout =
+            to_vk_vertex_input(def.vertex_layout);
+        const VkPipelineVertexInputStateCreateInfo vi =
+            vk_layout.make_create_info();
+
         VkPipelineInputAssemblyStateCreateInfo ia{
             VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

@@ -62,7 +62,7 @@ KS の C++ 移植レビューで挙がった Pictor 側の不足:
 
 `ShaderKey` ヘルパー（`core/types.h`）: `shaderKey` の bit 63 を CUSTOM フラグ、bit 32-62 を `ShaderHandle` に割当て、SoA stream を増やさずカスタムシェーダ識別を運ぶ。バッチビルダの sort key（`shader_keys >> 48`）は CUSTOM object を自然にグループ化する。
 
-**phase 2 に残した範囲**: compute stage の pipeline 生成（`shader_stages.comp` はシリアライズのみ通過）、mesh 駆動の頂点入力レイアウト確定（phase 1 の pipeline は頂点入力空＝`gl_VertexIndex` 前提）、任意 uniform / descriptor バインド、シェーダ permutation。
+**phase 2 に残した範囲**: compute stage の pipeline 生成（`shader_stages.comp` はシリアライズのみ通過）、任意 uniform / descriptor バインド、シェーダ permutation。 mesh 駆動の頂点入力レイアウト確定は phase 2 項目2（§6.2）で実装済み。
 
 ## 3. 方針2 — post-process を含むレンダリングパスのツール設定
 
@@ -116,10 +116,23 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 
 **phase 2 に残した範囲**: route B（post-process 無効・単一 swapchain パス）は `decal_compose`/`postprocess` パスが構造的に存在しないため `scene_hdr` 1 本のみ計測（HUD 含む全体）。サブパス単位（post-process チェーン内の extract/blur/grade）の細分計測は項目1（任意 post-process pass 挿入）の解体と同時に行う。
 
-### 6.2 項目2 — mesh 駆動の頂点入力レイアウト
-- **現状**: `ShaderRegistry::build_pipelines` が頂点入力空（`gl_VertexIndex` 前提）。カスタムシェーダがメッシュ頂点バッファを読めない。KS の `SkinnedRenderer::create_pipeline_` は `TexturedSkinnedVertex` をベタ書き。
-- **設計**: 新規 `VertexLayout`（`VertexAttribute[]` + stride、`core/types.h` の `VertexAttribute`/`VertexSemantic` を素材に）+ `→ VkVertexInput*Description` 変換ヘルパー。`CustomShaderDef` に `VertexLayout` フィールド追加。`build_pipelines` の `vi` 構築を実装。空レイアウト（phase 1 の `gl_VertexIndex`）をフォールバックで残す。Visus serializer に頂点レイアウト記述を追加。
+### 6.2 項目2 — mesh 駆動の頂点入力レイアウト（実装済み 2026-05-22, `feat/mesh-vertex-layout`）
+- **旧現状**: `ShaderRegistry::build_pipelines` が頂点入力空（`gl_VertexIndex` 前提）。カスタムシェーダがメッシュ頂点バッファを読めなかった。KS の `SkinnedRenderer::create_pipeline_` は `TexturedSkinnedVertex` をベタ書きしていた。
+- **設計**: `VertexLayout`（`VertexAttribute[]` + stride）+ `→ VkVertexInput*Description` 変換ヘルパー。`CustomShaderDef` に `VertexLayout` フィールド追加。`build_pipelines` の `vi` 構築を実装。空レイアウト（phase 1 の `gl_VertexIndex`）をフォールバックで残す。Visus serializer に頂点レイアウト記述を追加。
 - 規模: 中、リスク: 中（`layout(location=N)` 不一致は validation でしか出ない → まずは「def に明示記述・突き合わせは検証のみ」、SPIR-V reflection は将来）。phase 1 資産の再利用率が最も高い。
+
+#### 実装内訳
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| `VertexLayout` 昇格 | 既に `data/vertex_data_uploader.h` に mesh 登録専用の `VertexLayout`（`VertexAttribute[]` + stride + `computed_stride()`）が存在したため、 新規定義を作らず `core/types.h` へ昇格して単一情報源に統合。 `vertex_data_uploader.h` 等の既存 consumer はそのまま共有定義を使う。 `VertexAttributeType::UINT32X4`（uvec4、 skinning joint indices 用）を追加 | ✅ |
+| Vulkan 変換ヘルパー | `shader/vertex_layout.h`（Vulkan 依存ヘッダ）。 `to_vk_format()`（`VertexAttributeType` → `VkFormat`）、 `to_vk_vertex_input()`（`VertexLayout` → `VkVertexInputLayout`＝binding 1 本 + attribute 配列）。 空レイアウトは空の結果＝phase 1 互換フォールバック。 `location` は attribute 登録順を割当 | ✅ |
+| `CustomShaderDef` 拡張 | `shader/shader_registry.h` の `CustomShaderDef` に `VertexLayout vertex_layout` を追加 | ✅ |
+| `build_pipelines` 配線 | `src/shader/shader_registry.cpp` の `VkPipelineVertexInputStateCreateInfo{}` 空構築を `to_vk_vertex_input(def.vertex_layout)` ＋ `make_create_info()` へ置換。 空 `vertex_layout` のとき頂点入力空＝`gl_VertexIndex` 駆動のフォールバックを維持 | ✅ |
+| Visus serializer | `VisusShaderStages` に `VertexLayout vertex_layout` を追加。 `visus_serializer.cpp` の `shader_stages` ブロックに `vertex_layout`（`stride` + `attributes[]`、 各 `{semantic,type,offset}`）を emit / parse 追加（JSON round-trip）。 `VertexSemantic`/`VertexAttributeType` の enum ↔ 文字列変換も追加 | ✅ |
+| KS 統合 | `SkinnedLayer::register_custom_shaders_` が `desc.shader_stages.vertex_layout` を `CustomShaderDef` へ伝播。 `SkinnedRenderer` の `TexturedSkinnedVertex` レイアウトを `textured_skinned_vertex_layout()`（`VertexLayout`）で表現し直し、 `create_pipeline_` のベタ書きを `to_vk_vertex_input` 経由に統合（PBR pipeline と ShaderRegistry が同一の頂点入力構築経路） | ✅ |
+
+**phase 2 に残した範囲**: SPIR-V reflection による `layout(location=N)` 自動突き合わせ（現状は def に明示記述、 不一致は validation layer 任せ）。 複数頂点バッファ / instance input rate（現状は単一 binding=0 / per-vertex のみ）。
 
 ### 6.3 項目1 — 任意 post-process pass 挿入（大規模・高リスク）
 - **現状**: `PostProcessPipeline`（851 行）に固定 4-pass（extract→blur H→blur V→grade）・3 render pass・3 ターゲット・2 descriptor レイアウト・固定 push constant。`build_post_process_config()` が `PostProcessKind::UNKNOWN`（SSAO/TAA/FXAA 等）を黙って捨てている＝系統A→B の断点。
@@ -133,5 +146,5 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 | 順 | 項目 | 状態 | リポジトリ |
 |---|---|---|---|
 | 1 | 6.1 GPU timestamp relay | ✅ 実装済み（`feat/gpu-timestamp`） | Pictor + KS + Ergo |
-| 2 | 6.2 mesh 駆動の頂点入力レイアウト | 未着手 | Pictor + KS |
+| 2 | 6.2 mesh 駆動の頂点入力レイアウト | ✅ 実装済み（`feat/mesh-vertex-layout`） | Pictor + KS |
 | 3 | 6.3 任意 post-process pass 挿入 | 未着手 | Pictor + KS |

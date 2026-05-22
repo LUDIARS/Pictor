@@ -43,6 +43,13 @@ struct CustomShaderDef {
     std::string name;        ///< 表示名 / デバッグ用 (Visus name など)
     std::string vert_spv;    ///< vertex stage SPIR-V のパス
     std::string frag_spv;    ///< fragment stage SPIR-V のパス
+
+    /// mesh 駆動の頂点入力レイアウト
+    /// (`spec/rendering-extensibility-design.md` §6.2 phase 2)。
+    /// 空 (`vertex_layout.empty()`) のとき pipeline は頂点入力空で作られ、
+    /// phase 1 互換の `gl_VertexIndex` 駆動カスタムシェーダになる。
+    /// 非空なら mesh の頂点バッファ (binding 0) を読む pipeline になる。
+    VertexLayout vertex_layout;
 };
 
 /// Visus CUSTOM kind 用の最小シェーダレジストリ。
