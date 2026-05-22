@@ -58,6 +58,8 @@ KS の C++ 移植レビューで挙がった Pictor 側の不足:
 | instantiate_visus 伝播 | CUSTOM kind かつ `desc.shader != INVALID_SHADER` のとき `customShader` 設定 + `ShaderKey::with_custom_shader` で `shaderKey` 上位ビットへ畳み込み | ✅ |
 | 描画配線 | `shaderKey` 経由で `RenderBatch` → `DrawCommand::shader_key` まで自動伝播。ホストの記録ループは `ShaderKey::is_custom()` で判定し `ShaderRegistry::pipeline()` を引いて PBR pipeline の代わりにバインドする | ✅（データ経路完了。実 `vkCmdBindPipeline` はホスト責務） |
 
+**ホスト側配線 (2026-05-22, KuzuSurvivors `feat/render-config-wiring`)**: KS は実描画に Pictor の `DrawCommand` 経路ではなく自前の `SkinnedRenderer` (固定 PBR pipeline) を使う。配線は KS 側の `SkinnedRenderer` が `ShaderRegistry` を所有し、`SkinnedLayer` が起動時に `data/visus/*.visus.json` の CUSTOM kind を走査・登録 → `build_pipelines`、`SkinnedDraw::shader_key` を持たせて `record()` の `vkCmdBindPipeline` 直前で `ShaderKey::is_custom()` を判定しカスタム pipeline へ切替える。カスタム pipeline は `SkinnedRenderer` の `pipeline_layout_` を流用するため descriptor set はそのまま有効。詳細は KS `spec/rendering_overview.md`「レンダリング設定の配線」。
+
 `ShaderKey` ヘルパー（`core/types.h`）: `shaderKey` の bit 63 を CUSTOM フラグ、bit 32-62 を `ShaderHandle` に割当て、SoA stream を増やさずカスタムシェーダ識別を運ぶ。バッチビルダの sort key（`shader_keys >> 48`）は CUSTOM object を自然にグループ化する。
 
 **phase 2 に残した範囲**: compute stage の pipeline 生成（`shader_stages.comp` はシリアライズのみ通過）、mesh 駆動の頂点入力レイアウト確定（phase 1 の pipeline は頂点入力空＝`gl_VertexIndex` 前提）、任意 uniform / descriptor バインド、シェーダ permutation。
@@ -73,6 +75,10 @@ KS の C++ 移植レビューで挙がった Pictor 側の不足:
 - **phase 1（実装対象）**: `PostProcessDef` を拡張（`kind` + パラメータ、`PostProcessConfig` を受け皿に活用）→ `pipeline_profile_serializer` で round-trip → `PipelineProfileDef` の post-process スタック → `PostProcessConfig` → `PostProcessPipeline::set_config` のブリッジを実装。これで既存エフェクト（Bloom / ToneMapping / Vignette / ColorGrading(LUT) / DoF）のパラメータと on/off が**設定駆動**になる。Ergo 側は `profile_schema.ts` を型付きフィールド化 + Editor UI でパラメータ編集。
 - **phase 2（別途）**: 任意の新規 post-process pass 挿入（SSAO / TAA / FXAA 等）。`PostProcessPipeline` の固定 4-pass・固定ターゲット数・固定 descriptor 構造の解体が必要。
 
+### phase 1 ホスト側配線（2026-05-22, KuzuSurvivors `feat/render-config-wiring`）
+
+KS の `PostProcessLayer::initialize` は `PostProcessConfig` をハードコードしていた。これを `data/render/kuzu.profile.json`（pipeline profile = 系統A）を `load_pipeline_profile_file()` でロードし、`build_post_process_config()`（`postprocess_config_bridge.h`）で `PostProcessConfig`（系統B）へ畳み込む経路へ差し替えた。プロファイル不在/破損時はハードコード既定にフォールバックして常にブート可能を保つ。起動後の `PostProcessTuner`（`data/postprocess.json` のライブ編集）はそのまま — プロファイルが「初期設定」、tuner が「実行時チューニング」の二層。詳細は KS `spec/rendering_overview.md`「レンダリング設定の配線」。
+
 ## 4. 方針3 — パイプライン/パスのタイムライン表示（実装済み 2026-05-22）
 
 render_pipeline プラグインに 3 つ目のモード **Timeline** を追加（Scanner DAG / Timeline / Profile Editor）。
@@ -84,8 +90,8 @@ render_pipeline プラグインに 3 つ目のモード **Timeline** を追加�
 | 順 | 方針 | 状態 | リポジトリ |
 |---|---|---|---|
 | 1 | 方針3 タイムライン | ✅ 実装済み（`feat/render-pipeline-timeline`） | Ergo |
-| 2 | 方針2 post-process 設定化（phase 1） | 設計済み・実装待ち | Pictor + Ergo |
-| 3 | 方針1 カスタムシェーダ（phase 1） | 設計済み・実装待ち | Pictor + Ergo |
+| 2 | 方針2 post-process 設定化（phase 1） | ✅ Pictor 機能実装（`feat/postprocess-config`）+ KS 側配線完了（`feat/render-config-wiring`） | Pictor + KS |
+| 3 | 方針1 カスタムシェーダ（phase 1） | ✅ Pictor 機能実装（`feat/visus-custom-shader`）+ KS 側配線完了（`feat/render-config-wiring`） | Pictor + KS |
 
 - 方針2 を先に行う理由: 系統A↔B 接続の最初の実例になり、方針2 で作る「シェーダ/パイプライン生成経路」を方針1 が再利用できる。
 - **phase 2（系統B のハードコード解体）は全方針で別タスク**。本フェーズは「既存の選択・設定」に限定し、`PostProcessPipeline` / pipeline 生成のハードコード構造の解体は含まない。
