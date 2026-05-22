@@ -11,6 +11,7 @@ option(PICTOR_BUILD_TESTS         "Build the headless test suite (CTest)"   ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
+option(PICTOR_BUILD_C_API         "Build C ABI export library (for WASM / Capacitor / N-API consumers)" OFF)
 option(PICTOR_ENABLE_RIVE         "Enable Rive Renderer integration (requires prebuilt rive-runtime; see cmake/FindRive.cmake)" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -359,6 +360,10 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         add_executable(pictor_rive_demo demo/rive/main.cpp)
         target_link_libraries(pictor_rive_demo PRIVATE pictor)
 
+        # Rive Cube demo: 6 Rive samples rendered onto cube faces.
+        add_executable(pictor_rive_cube_demo demo/rive_cube/main.cpp)
+        target_link_libraries(pictor_rive_cube_demo PRIVATE pictor)
+
         # 2D Texture rendering demo
         add_executable(pictor_texture2d_demo
             demo/texture2d/main.cpp
@@ -423,6 +428,31 @@ if(PICTOR_BUILD_WEBGL OR EMSCRIPTEN)
     endif()
 endif()
 
+# ============================================================
+# C ABI export (for WASM / Capacitor / N-API consumers)
+# ============================================================
+if(PICTOR_BUILD_C_API)
+    add_library(pictor_c_api STATIC
+        src/c_api/c_api.cpp
+    )
+    target_include_directories(pictor_c_api PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_compile_features(pictor_c_api PUBLIC cxx_std_20)
+    target_compile_definitions(pictor_c_api PUBLIC PICTOR_HAS_C_API=1)
+
+    # Emscripten 環境では cwrap で叩く想定なので関数を export させる
+    if(EMSCRIPTEN)
+        target_link_options(pictor_c_api PUBLIC
+            -sEXPORTED_FUNCTIONS=['_pictor_create_renderer_webgl','_pictor_destroy_renderer','_pictor_set_size','_pictor_begin_scene','_pictor_end_scene','_pictor_submit_object','_pictor_update_object','_pictor_remove_object','_pictor_render_frame','_pictor_create_texture_rgba8','_pictor_release_texture','_pictor_last_error','_pictor_c_api_version']
+            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']
+        )
+    endif()
+
+    message(STATUS "Pictor: C ABI export enabled (target pictor_c_api)")
+endif()
+
 # Shader compilation (demo shaders only)
 if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     set(PICTOR_SHADER_SOURCES
@@ -461,6 +491,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
+        ${CMAKE_SOURCE_DIR}/demo/rive_cube/shaders/rive_cube.vert
+        ${CMAKE_SOURCE_DIR}/demo/rive_cube/shaders/rive_cube.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -528,6 +560,29 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/demo/texture2d/textures)
     if(TARGET pictor_texture2d_demo)
         add_dependencies(pictor_texture2d_demo pictor_texture2d_assets)
     endif()
+endif()
+
+# Copy bundled Rive sample assets (sample1..sample5.riv) next to
+# `textures/` / `shaders/` / `fonts/` so the rive demo can find them.
+# Files come from rive-runtime's own webgpu_player/rivs sample pack.
+if(EXISTS ${CMAKE_SOURCE_DIR}/rive)
+    add_custom_target(pictor_rive_assets ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/rive
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/rive
+            ${CMAKE_BINARY_DIR}/rive
+        COMMENT "Copying rive demo sample assets to build directory"
+    )
+    if(TARGET pictor_rive_demo)
+        add_dependencies(pictor_rive_demo pictor_rive_assets)
+    endif()
+    if(TARGET pictor_rive_cube_demo)
+        add_dependencies(pictor_rive_cube_demo pictor_rive_assets)
+    endif()
+endif()
+
+if(TARGET pictor_rive_cube_demo AND TARGET pictor_shaders)
+    add_dependencies(pictor_rive_cube_demo pictor_shaders)
 endif()
 
 # Copy fbx_viewer test assets (UnityChan under UCL — see fbx/model1/LICENSE.md).
