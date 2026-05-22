@@ -46,9 +46,16 @@ namespace pictor {
 //       }
 //     ],
 //     "post_process": [
-//       { "name": "Bloom",       "enabled": true },
-//       { "name": "Tonemapping", "enabled": true }
+//       { "name": "Bloom", "enabled": true, "kind": "Bloom",
+//         "bloom": { "threshold": 0.75, "intensity": 0.8, "radius": 5.0,
+//                    "mip_levels": 5, "scatter": 0.7 } },
+//       { "name": "Tonemapping", "enabled": true, "kind": "ToneMapping",
+//         "tone_mapping": { "op": "ACES_FILMIC", "exposure": 1.0,
+//                           "gamma": 2.2, "saturation": 1.0 } }
 //     ],
+//     // `kind` ∈ Bloom|ToneMapping|Vignette|ColorGrading|DepthOfField|Unknown
+//     // (省略時は name から推論)。 effect param ブロックは kind 一致時のみ
+//     // 消費 (spec §3.4)。 Unknown (SSAO/TAA/FXAA…) は bridge が無視する。
 //     "shadow": {
 //       "cascade_count": 3, "resolution": 2048, "filter_mode": "PCF"
 //     },

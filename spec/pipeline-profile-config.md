@@ -52,10 +52,15 @@ JSON を変更すると即座に C++ ランタイム状態へ反映されるも�
 - **実 `VkRenderPass` の attachment 構成・サブパス・ロード/ストア op** —
   `vulkan_context.cpp` でハードコード。`render_passes[].render_targets` /
   `input_textures` は構造体に格納されるが、実 framebuffer 構成には未配線。
-- **post-process の実シェーダチェーン** — `postprocess_pipeline.cpp` でハードコード。
-  `post_process[]` の順序・enabled は構造体に入るが、実 GPU パスの増減は連動しない。
-  各エフェクトの **パラメータ** (bloom 強度等) は `PostProcessDef` に格納フィールドが
-  無く、JSON 上でエディタ用に round-trip するのみ (C++ には届かない / §3.4 参照)。
+- **post-process の実シェーダチェーン (固定 4-pass 構造)** —
+  `postprocess_pipeline.cpp` の extract → blur H → blur V → grade の
+  4-pass 構造・固定ターゲット数・固定 descriptor はハードコードのまま。
+  `post_process[]` に**新規 pass を挿入**しても (SSAO / TAA 等) 実 GPU
+  パスは増えない (= 系統B phase 2)。
+  一方、既存エフェクト (Bloom / ToneMapping / Vignette / ColorGrading /
+  DoF) の **パラメータと on/off** は `PostProcessDef` 拡張 +
+  `build_post_process_config()` ブリッジ経由で実描画に届く (§3.4、
+  方針2 phase 1 で実装済み)。
 - **各 pass の実ドローコール記録** — `RenderPassScheduler::execute()` の
   `PassType::OPAQUE` / `TRANSPARENT` / `SHADOW` / `DEPTH_ONLY` / `POST_PROCESS` /
   `COMPUTE` の各 case はコメントスタブ。pass の有効/無効・順序は反映されるが、
@@ -64,8 +69,10 @@ JSON を変更すると即座に C++ ランタイム状態へ反映されるも�
 
 > **要約**: このコンフィグは「系統A のプロファイル定義データを完全に外部化」する。
 > プロファイル選択・pass 列・メモリ/更新/GI/GPU-driven/プロファイラの設定値は
-> 実ランタイムに効く。実 Vulkan の描画トポロジ (attachment 構成 / 実シェーダ
-> チェーン / ドロー記録) は系統B のままで、その可変化は別タスク。
+> 実ランタイムに効く。post-process の既存エフェクトのパラメータ・on/off も
+> `build_post_process_config()` ブリッジ経由で実描画に効く (§3.4)。実 Vulkan
+> の描画トポロジ (attachment 構成 / 実シェーダチェーンの pass 増減 / ドロー
+> 記録) は系統B のままで、その可変化は別タスク。
 
 ---
 
@@ -120,15 +127,48 @@ UTF-8 テキスト (BOM 許容)。標準 JSON。コメント不可。
 |------|----|----|------|
 | `name` | string | `""` | エフェクト名 (`Bloom` / `SSAO` / `Tonemapping` / `TAA` / `FXAA` / `VolumetricFog` 等) |
 | `enabled` | bool | `true` | 有効/無効 |
+| `kind` | enum string | (name から推論) | エフェクト種別。§3.4 参照 |
+| `bloom` / `tone_mapping` / `vignette` / `color_grading` / `depth_of_field` | object | — | `kind` に対応するエフェクトのパラメータ。§3.4 参照 |
 
-### 3.4 post-process のエフェクトパラメータ (将来拡張)
+### 3.4 post-process のエフェクトパラメータ (実装済み — 方針2 phase 1)
 
-`PostProcessDef` には現状 `name` / `enabled` しかフィールドが無い。
-エフェクト固有パラメータ (bloom threshold 等) を `post_process[]` の要素に
-書いた場合、シリアライザは**黙ってスキップ**する (構文エラーにはしない)。
-これは Ergo-web エディタがパラメータを JSON 上で保持・編集できるようにする
-ための前方互換措置。C++ 側へパラメータを届けるには `PostProcessDef` の
-構造体拡張が別途必要 (本タスクのスコープ外)。
+`PostProcessDef` は `kind` (種別タグ) + エフェクトごとのパラメータ構造体を
+持つ。`kind` で選ばれた構造体だけが意味を持ち、`build_post_process_config()`
+(`include/pictor/postprocess/postprocess_config_bridge.h`) が
+`post_process[]` スタックを `PostProcessConfig` に畳み込んで、実描画の
+`PostProcessPipeline::set_config` へ渡せるようにする。これで Bloom /
+ToneMapping / Vignette / ColorGrading(LUT) / DoF の **パラメータと on/off が
+設定駆動**になる (設計書 `rendering-extensibility-design.md` §3)。
+
+**`kind`** — 次のいずれか:
+`Bloom` / `ToneMapping` / `Vignette` / `ColorGrading` / `DepthOfField` /
+`Unknown`。省略時は `name` から推論される (大文字小文字不問、
+`Tonemap` / `LUT` / `Grade` / `DoF` 等の別名も受理)。`SSAO` / `TAA` /
+`FXAA` / `VolumetricFog` 等、host-driven な `PostProcessPipeline` に実装の
+無いエフェクトは `Unknown` に解決され、ブリッジは黙って無視する (固定
+4-pass 構造の解体 = 系統B phase 2 の領分)。
+
+**エフェクトパラメータブロック** — `kind` に一致するキーだけが消費される
+(他は前方互換のため黙ってスキップ)。各ブロックのフィールドは
+`include/pictor/postprocess/postprocess_effect.h` の構造体に対応する:
+
+- `bloom`: `threshold`, `soft_threshold`, `intensity`, `radius`,
+  `mip_levels` (uint), `scatter` (float)。
+- `tone_mapping`: `op` (enum: `ACES_FILMIC` / `REINHARD` / `REINHARD_EXT` /
+  `UNCHARTED2` / `LINEAR_CLAMP`), `exposure`, `gamma`, `white_point`,
+  `saturation`。
+- `vignette`: `intensity`, `radius`, `softness`, `color` ([r,g,b] float 配列)。
+- `color_grading`: `lut_path` (string), `lut_intensity`, `lut_size` (uint)。
+- `depth_of_field`: `focus_distance`, `focus_range`, `bokeh_radius`,
+  `near_start`, `near_end`, `far_start`, `far_end`, `sample_count` (uint)。
+
+`enabled=false` のエフェクトもパラメータは保持・round-trip される
+(ブリッジは `.enabled=false` を転写するだけ)。スタックに現れない
+エフェクトはブリッジで `enabled=false` に倒される。
+
+ブリッジが扱わない `HDRConfig` / `GaussianBlurConfig` は `PostProcessDef`
+表現を持たない。`build_post_process_config(stack, base)` の `base` 引数で
+ホスト側の HDR / blur 設定を持ち越せる。
 
 ### 3.5 `shadow` (オブジェクト) — `ShadowConfig`
 
@@ -271,6 +311,25 @@ void PictorRenderer::reload_active_profile();
 `apply_profile()` を呼ぶ。`apply_profile()` は `RenderPassScheduler::reconfigure()`、
 `UpdateScheduler::set_config()`、GI / GPU-driven の再構成、バッチ無効化を行う。
 
+post-process ブリッジ (`postprocess_config_bridge.h`):
+
+```cpp
+#include "pictor/postprocess/postprocess_config_bridge.h"
+
+// post_process スタックを PostProcessConfig に畳み込む。
+// `base` で HDR / gaussian_blur (PostProcessDef 表現なし) を持ち越す。
+PostProcessConfig build_post_process_config(
+    const std::vector<PostProcessDef>& stack, const PostProcessConfig& base = {});
+PostProcessConfig build_post_process_config(
+    const PipelineProfileDef& profile, const PostProcessConfig& base = {});
+```
+
+`PostProcessPipeline` は host-driven で `PictorRenderer` は所有しない。
+ホストはプロファイルの `post_process_stack` を `build_post_process_config()`
+に渡し、結果を `PostProcessPipeline::set_config()` (または
+`initialize_vulkan` の `config` 引数) へ渡すことで、プロファイルの
+post-process 設定を実描画に反映する。
+
 ---
 
 ## 5. プリセット外部化
@@ -291,7 +350,9 @@ C++ ファクトリ (`create_lite_profile()` 等) は **削除していない**�
 
 - **`shader_override` / `render_targets` / `input_textures`** — `RenderPassDef`
   に格納されるが `RenderPassScheduler` が消費しない。系統B 配線時に意味を持つ。
-- **post-process パラメータ** — §3.4。`PostProcessDef` 拡張は別タスク。
+- **post-process パラメータ** — §3.4。`PostProcessDef` 拡張 + ブリッジは
+  方針2 phase 1 で実装済み。残るのは任意 pass 挿入 (固定 4-pass の解体 =
+  系統B phase 2)。
 - **enum の前方互換** — 未知の enum 文字列は preset/既定値にフォールバックする
   (構文エラーにはしない)。新しい `PassType` 等を追加したら本ドキュメントを更新。
 - **検証は最小限** — シリアライザは「構文が JSON か」しか見ない。
