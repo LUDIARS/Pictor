@@ -60,6 +60,49 @@ int main() {
                   "distinct ObjectIds per slot");
     }
 
+    // 3b. CUSTOM kind の VisusDesc は desc.shader を ObjectDescriptor に
+    //     伝播する (customShader フィールド + shaderKey 上位ビット)。
+    {
+        VisusDesc d;
+        d.name          = "custom_obj";
+        d.geometry_kind = VisusGeometryKind::CUSTOM;
+        d.mesh          = 11;
+        d.shader        = 5;   // ShaderRegistry の handle 想定
+
+        const float4x4 xf = float4x4::identity();
+        const AABB     bb = {{0, 0, 0}, {1, 1, 1}};
+
+        auto ids = instantiate_visus(scene, d, xf, bb);
+        PT_ASSERT_OP(ids.size(), ==, size_t{1}, "CUSTOM with no materials -> 1");
+
+        auto loc = scene.find_object(ids[0]);
+        PT_ASSERT(loc.valid, "CUSTOM object locatable");
+
+        // ShaderKey ヘルパーの round-trip
+        uint64_t key = ShaderKey::with_custom_shader(0, 5);
+        PT_ASSERT(ShaderKey::is_custom(key), "shaderKey carries CUSTOM flag");
+        PT_ASSERT_OP(ShaderKey::custom_shader(key), ==, ShaderHandle{5},
+                     "shaderKey decodes the shader handle");
+    }
+
+    // 3c. 非 CUSTOM kind は shader が立っていても customShader を引かない。
+    {
+        VisusDesc d;
+        d.name          = "primitive_obj";
+        d.geometry_kind = VisusGeometryKind::PRIMITIVE;
+        d.mesh          = 12;
+        d.shader        = 7;   // ignored: kind != CUSTOM
+
+        const float4x4 xf = float4x4::identity();
+        const AABB     bb = {{0, 0, 0}, {1, 1, 1}};
+        auto ids = instantiate_visus(scene, d, xf, bb);
+        PT_ASSERT_OP(ids.size(), ==, size_t{1}, "PRIMITIVE -> 1 object");
+
+        uint64_t plain = ShaderKey::with_custom_shader(0, INVALID_SHADER);
+        PT_ASSERT(!ShaderKey::is_custom(plain),
+                  "INVALID_SHADER does not set the CUSTOM flag");
+    }
+
     // 3. VisusRegistry に登録 → handle 単調増加 + get で復元できる。
     {
         VisusRegistry reg;
