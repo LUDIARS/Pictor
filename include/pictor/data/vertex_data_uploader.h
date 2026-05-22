@@ -8,22 +8,9 @@
 
 namespace pictor {
 
-/// Describes a vertex layout (set of attributes + stride)
-struct VertexLayout {
-    std::vector<VertexAttribute> attributes;
-    uint32_t stride = 0;  // Bytes per vertex. 0 = auto-compute from attributes.
-
-    /// Compute stride from attributes if not set
-    uint32_t computed_stride() const {
-        if (stride > 0) return stride;
-        uint32_t max_end = 0;
-        for (const auto& attr : attributes) {
-            uint32_t end = attr.offset + static_cast<uint32_t>(vertex_attribute_size(attr.type));
-            if (end > max_end) max_end = end;
-        }
-        return max_end;
-    }
-};
+// `VertexLayout` (attribute 集合 + stride) は `core/types.h` に移動した
+// (`spec/rendering-extensibility-design.md` §6.2)。 ここでは mesh 登録 API が
+// その共通定義をそのまま使う。
 
 /// Descriptor for registering a mesh with flexible vertex data
 struct MeshDataDescriptor {

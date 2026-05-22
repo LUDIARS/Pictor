@@ -25,6 +25,18 @@ namespace pictor {
 //         "fetch_policy": "cache_first",   // local_only|cache_first|revalidate|always_fetch
 //         "headers": [ { "name": "X-Auth", "value": "${env:CDN_TOKEN}" } ]
 //       },
+//       "shader_stages": {                   // CUSTOM kind: vert/frag/comp
+//         "vert": { /* ResourceRef */ },
+//         "frag": { /* ResourceRef */ },
+//         "comp": { /* ResourceRef */ },
+//         "vertex_layout": {                 // §6.2 mesh 駆動の頂点入力
+//           "stride": 64,                    //   0 = attribute から推定
+//           "attributes": [                  //   空配列 = gl_VertexIndex 駆動
+//             { "semantic": "position", "type": "float3",   "offset": 0  },
+//             { "semantic": "joints",   "type": "uint32x4", "offset": 32 }
+//           ]
+//         }
+//       },
 //       "rive_artboard": "",                // RIVE only
 //       "text_default":  "",                // TEXT only
 //

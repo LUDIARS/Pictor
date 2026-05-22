@@ -92,6 +92,70 @@ VisusAnimationDefault::Kind anim_kind_from_str(std::string_view s) {
     return VisusAnimationDefault::Kind::NONE;
 }
 
+// ---- vertex layout enums (§6.2) ------------------------------------------
+
+const char* vertex_semantic_to_str(VertexSemantic s) {
+    switch (s) {
+        case VertexSemantic::POSITION:  return "position";
+        case VertexSemantic::NORMAL:    return "normal";
+        case VertexSemantic::TANGENT:   return "tangent";
+        case VertexSemantic::TEXCOORD0: return "texcoord0";
+        case VertexSemantic::TEXCOORD1: return "texcoord1";
+        case VertexSemantic::COLOR0:    return "color0";
+        case VertexSemantic::JOINTS:    return "joints";
+        case VertexSemantic::WEIGHTS:   return "weights";
+        case VertexSemantic::CUSTOM0:   return "custom0";
+        case VertexSemantic::CUSTOM1:   return "custom1";
+        case VertexSemantic::CUSTOM2:   return "custom2";
+        case VertexSemantic::CUSTOM3:   return "custom3";
+    }
+    return "position";
+}
+
+VertexSemantic vertex_semantic_from_str(std::string_view s) {
+    if (s == "normal")    return VertexSemantic::NORMAL;
+    if (s == "tangent")   return VertexSemantic::TANGENT;
+    if (s == "texcoord0") return VertexSemantic::TEXCOORD0;
+    if (s == "texcoord1") return VertexSemantic::TEXCOORD1;
+    if (s == "color0")    return VertexSemantic::COLOR0;
+    if (s == "joints")    return VertexSemantic::JOINTS;
+    if (s == "weights")   return VertexSemantic::WEIGHTS;
+    if (s == "custom0")   return VertexSemantic::CUSTOM0;
+    if (s == "custom1")   return VertexSemantic::CUSTOM1;
+    if (s == "custom2")   return VertexSemantic::CUSTOM2;
+    if (s == "custom3")   return VertexSemantic::CUSTOM3;
+    return VertexSemantic::POSITION;
+}
+
+const char* vertex_attr_type_to_str(VertexAttributeType t) {
+    switch (t) {
+        case VertexAttributeType::FLOAT:    return "float";
+        case VertexAttributeType::FLOAT2:   return "float2";
+        case VertexAttributeType::FLOAT3:   return "float3";
+        case VertexAttributeType::FLOAT4:   return "float4";
+        case VertexAttributeType::UINT32:   return "uint32";
+        case VertexAttributeType::INT32:    return "int32";
+        case VertexAttributeType::UNORM8X4: return "unorm8x4";
+        case VertexAttributeType::HALF2:    return "half2";
+        case VertexAttributeType::HALF4:    return "half4";
+        case VertexAttributeType::UINT32X4: return "uint32x4";
+    }
+    return "float";
+}
+
+VertexAttributeType vertex_attr_type_from_str(std::string_view s) {
+    if (s == "float2")   return VertexAttributeType::FLOAT2;
+    if (s == "float3")   return VertexAttributeType::FLOAT3;
+    if (s == "float4")   return VertexAttributeType::FLOAT4;
+    if (s == "uint32")   return VertexAttributeType::UINT32;
+    if (s == "int32")    return VertexAttributeType::INT32;
+    if (s == "unorm8x4") return VertexAttributeType::UNORM8X4;
+    if (s == "half2")    return VertexAttributeType::HALF2;
+    if (s == "half4")    return VertexAttributeType::HALF4;
+    if (s == "uint32x4") return VertexAttributeType::UINT32X4;
+    return VertexAttributeType::FLOAT;
+}
+
 // ---- handle ↔ string -----------------------------------------------------
 
 constexpr uint32_t INVALID_HANDLE_U32 = std::numeric_limits<uint32_t>::max();
@@ -171,6 +235,31 @@ void emit_resource_ref(std::string& out, const ResourceRef& r, int indent) {
             out += ", \"value\": "; quote(out, r.headers[i].second);
             out += " }";
             if (i + 1 < r.headers.size()) out += ",";
+            out += "\n";
+        }
+        pad(indent + 1);
+    }
+    out += "]\n";
+    pad(indent); out += "}";
+}
+
+// `VisusShaderStages::vertex_layout` を出力する (§6.2)。 空 layout でも
+// `{ "stride": 0, "attributes": [] }` を書き、 round-trip を安定させる。
+void emit_vertex_layout(std::string& out, const VertexLayout& vl, int indent) {
+    auto pad = [&](int n) { out.append(static_cast<size_t>(n) * 2, ' '); };
+    out += "{\n";
+    pad(indent + 1); out += "\"stride\":     "; emit_uint(out, vl.stride); out += ",\n";
+    pad(indent + 1); out += "\"attributes\": [";
+    if (!vl.attributes.empty()) {
+        out += "\n";
+        for (size_t i = 0; i < vl.attributes.size(); ++i) {
+            const VertexAttribute& a = vl.attributes[i];
+            pad(indent + 2);
+            out += "{ \"semantic\": "; quote(out, vertex_semantic_to_str(a.semantic));
+            out += ", \"type\": ";     quote(out, vertex_attr_type_to_str(a.type));
+            out += ", \"offset\": ";   emit_uint(out, a.offset);
+            out += " }";
+            if (i + 1 < vl.attributes.size()) out += ",";
             out += "\n";
         }
         pad(indent + 1);
@@ -374,6 +463,65 @@ bool parse_resource_ref(Parser& pr, ResourceRef& out) {
     }
 }
 
+bool parse_vertex_attribute(Parser& pr, VertexAttribute& out) {
+    if (!pr.expect('{')) return false;
+    pr.skip_ws();
+    if (pr.consume('}')) return true;
+    while (true) {
+        std::string key;
+        if (!pr.parse_string(key)) return false;
+        if (!pr.expect(':')) return false;
+
+        if (key == "semantic") {
+            std::string s; if (pr.parse_string(s)) out.semantic = vertex_semantic_from_str(s);
+        } else if (key == "type") {
+            std::string s; if (pr.parse_string(s)) out.type = vertex_attr_type_from_str(s);
+        } else if (key == "offset") {
+            double v; if (pr.parse_number(v)) out.offset = static_cast<uint16_t>(v);
+        } else {
+            pr.skip_value();
+        }
+
+        if (pr.consume(',')) continue;
+        if (pr.consume('}')) return true;
+        return pr.fail("expected , or }");
+    }
+}
+
+bool parse_vertex_layout(Parser& pr, VertexLayout& out) {
+    if (!pr.expect('{')) return false;
+    pr.skip_ws();
+    if (pr.consume('}')) return true;
+    while (true) {
+        std::string key;
+        if (!pr.parse_string(key)) return false;
+        if (!pr.expect(':')) return false;
+
+        if (key == "stride") {
+            double v; if (pr.parse_number(v)) out.stride = static_cast<uint32_t>(v);
+        } else if (key == "attributes") {
+            if (!pr.expect('[')) return false;
+            pr.skip_ws();
+            if (!pr.consume(']')) {
+                while (true) {
+                    VertexAttribute a{};
+                    if (!parse_vertex_attribute(pr, a)) return false;
+                    out.attributes.push_back(a);
+                    if (pr.consume(',')) continue;
+                    if (pr.consume(']')) break;
+                    return pr.fail("expected , or ]");
+                }
+            }
+        } else {
+            pr.skip_value();
+        }
+
+        if (pr.consume(',')) continue;
+        if (pr.consume('}')) return true;
+        return pr.fail("expected , or }");
+    }
+}
+
 bool parse_shader_stages(Parser& pr, VisusShaderStages& out) {
     if (!pr.expect('{')) return false;
     pr.skip_ws();
@@ -389,6 +537,8 @@ bool parse_shader_stages(Parser& pr, VisusShaderStages& out) {
             if (!parse_resource_ref(pr, out.frag)) return false;
         } else if (key == "comp") {
             if (!parse_resource_ref(pr, out.comp)) return false;
+        } else if (key == "vertex_layout") {
+            if (!parse_vertex_layout(pr, out.vertex_layout)) return false;
         } else {
             pr.skip_value();
         }
@@ -558,7 +708,9 @@ std::string to_visus_json(const VisusDesc& desc) {
     out += "    \"shader_stages\": {\n";
     out += "      \"vert\": "; emit_resource_ref(out, desc.shader_stages.vert, 3); out += ",\n";
     out += "      \"frag\": "; emit_resource_ref(out, desc.shader_stages.frag, 3); out += ",\n";
-    out += "      \"comp\": "; emit_resource_ref(out, desc.shader_stages.comp, 3); out += "\n";
+    out += "      \"comp\": "; emit_resource_ref(out, desc.shader_stages.comp, 3); out += ",\n";
+    out += "      \"vertex_layout\": ";
+    emit_vertex_layout(out, desc.shader_stages.vertex_layout, 3); out += "\n";
     out += "    },\n";
     out += "    \"rive_artboard\":  "; quote(out, desc.rive_artboard); out += ",\n";
     out += "    \"text_default\":   "; quote(out, desc.text_default);  out += ",\n";
