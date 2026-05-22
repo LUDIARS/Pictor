@@ -1,7 +1,47 @@
 ﻿#include "pictor/pipeline/pipeline_profile.h"
 #include <algorithm>
+#include <cctype>
+#include <string>
 
 namespace pictor {
+
+namespace {
+
+/// ASCII-lowercase a copy of `s` for case-insensitive name matching.
+std::string ascii_lower(const std::string& s) {
+    std::string out = s;
+    for (char& c : out) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return out;
+}
+
+/// Resolve `kind` from `name` for every effect whose kind is still UNKNOWN.
+/// Factory presets use positional aggregate init (`{"Bloom", true}`), which
+/// leaves `kind` defaulted; this lets the serializer and the bridge see the
+/// proper typed kind without each preset having to spell it out.
+void normalize_post_process_kinds(PipelineProfileDef& def) {
+    for (auto& pp : def.post_process_stack) {
+        if (pp.kind == PostProcessKind::UNKNOWN) {
+            pp.kind = post_process_kind_from_name(pp.name);
+        }
+    }
+}
+
+} // namespace
+
+PostProcessKind post_process_kind_from_name(const std::string& name) {
+    const std::string n = ascii_lower(name);
+    if (n == "bloom")                                  return PostProcessKind::BLOOM;
+    if (n == "tonemapping" || n == "tonemap" ||
+        n == "tone_mapping")                           return PostProcessKind::TONE_MAPPING;
+    if (n == "vignette")                               return PostProcessKind::VIGNETTE;
+    if (n == "colorgrading" || n == "color_grading" ||
+        n == "lut" || n == "grade")                    return PostProcessKind::COLOR_GRADING;
+    if (n == "dof" || n == "depthoffield" ||
+        n == "depth_of_field")                         return PostProcessKind::DEPTH_OF_FIELD;
+    return PostProcessKind::UNKNOWN;
+}
 
 PipelineProfileManager::PipelineProfileManager() = default;
 PipelineProfileManager::~PipelineProfileManager() = default;
@@ -111,6 +151,7 @@ PipelineProfileDef PipelineProfileManager::create_lite_profile() {
         {"FXAA", true},
     };
 
+    normalize_post_process_kinds(def);
     return def;
 }
 
@@ -181,6 +222,7 @@ PipelineProfileDef PipelineProfileManager::create_standard_profile() {
         {"TAA", true},
     };
 
+    normalize_post_process_kinds(def);
     return def;
 }
 
@@ -268,6 +310,7 @@ PipelineProfileDef PipelineProfileManager::create_ultra_profile() {
         {"VolumetricFog", true},
     };
 
+    normalize_post_process_kinds(def);
     return def;
 }
 
@@ -328,6 +371,7 @@ PipelineProfileDef PipelineProfileManager::create_mobile_low_profile() {
         {"Tonemapping", true},
     };
 
+    normalize_post_process_kinds(def);
     return def;
 }
 
@@ -384,6 +428,7 @@ PipelineProfileDef PipelineProfileManager::create_mobile_high_profile() {
         {"Tonemapping", true},
         {"FXAA",        true},
     };
+    normalize_post_process_kinds(def);
 
     return def;
 }

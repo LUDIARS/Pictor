@@ -5,8 +5,10 @@
 #include "pictor/pipeline/pipeline_profile_serializer.h"
 #include "pictor/pipeline/pipeline_profile_loader.h"
 #include "pictor/pipeline/pipeline_builder.h"
+#include "pictor/postprocess/postprocess_config_bridge.h"
 #include "test_common.h"
 
+#include <cmath>
 #include <string>
 
 using namespace pictor;
@@ -213,6 +215,173 @@ void test_file_io() {
     PT_ASSERT(!err.empty(), "missing file populates error");
 }
 
+bool near_eq(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+
+void test_post_process_param_roundtrip() {
+    // A profile with a typed post-process stack must round-trip every
+    // effect parameter, not just name/enabled (方針2 phase 1).
+    PipelineProfileDef src;
+    src.profile_name = "PPParams";
+
+    PostProcessDef bloom;
+    bloom.name = "Bloom";
+    bloom.kind = PostProcessKind::BLOOM;
+    bloom.enabled = true;
+    bloom.bloom.threshold      = 0.62f;
+    bloom.bloom.soft_threshold = 0.33f;
+    bloom.bloom.intensity      = 0.91f;
+    bloom.bloom.radius         = 7.5f;
+    bloom.bloom.mip_levels     = 6;
+    bloom.bloom.scatter        = 0.44f;
+
+    PostProcessDef tm;
+    tm.name = "ToneMapping";
+    tm.kind = PostProcessKind::TONE_MAPPING;
+    tm.enabled = false;
+    tm.tone_mapping.op         = ToneMapOperator::UNCHARTED2;
+    tm.tone_mapping.exposure   = 1.3f;
+    tm.tone_mapping.saturation = 1.1f;
+
+    PostProcessDef vig;
+    vig.name = "Vignette";
+    vig.kind = PostProcessKind::VIGNETTE;
+    vig.vignette.intensity = 0.5f;
+    vig.vignette.radius    = 0.6f;
+    vig.vignette.color[0]  = 0.1f;
+    vig.vignette.color[1]  = 0.2f;
+    vig.vignette.color[2]  = 0.3f;
+
+    PostProcessDef grade;
+    grade.name = "ColorGrading";
+    grade.kind = PostProcessKind::COLOR_GRADING;
+    grade.color_grading.lut_path      = "data/lut/warm.png";
+    grade.color_grading.lut_intensity = 0.8f;
+    grade.color_grading.lut_size      = 32;
+
+    PostProcessDef dof;
+    dof.name = "DoF";
+    dof.kind = PostProcessKind::DEPTH_OF_FIELD;
+    dof.depth_of_field.focus_distance = 12.5f;
+    dof.depth_of_field.bokeh_radius   = 5.0f;
+    dof.depth_of_field.sample_count   = 24;
+
+    // SSAO has no host-driven implementation — kind stays UNKNOWN.
+    PostProcessDef ssao;
+    ssao.name = "SSAO";
+
+    src.post_process_stack = {bloom, tm, vig, grade, dof, ssao};
+
+    std::string json = to_pipeline_profile_json(src);
+    PipelineProfileDef dst;
+    std::string err;
+    PT_ASSERT(from_pipeline_profile_json(json, dst, &err), err.c_str());
+
+    PT_ASSERT_OP(dst.post_process_stack.size(), ==, 6u, "post_process count round-trips");
+
+    const auto& b = dst.post_process_stack[0];
+    PT_ASSERT(b.kind == PostProcessKind::BLOOM, "bloom kind round-trips");
+    PT_ASSERT(b.enabled, "bloom enabled round-trips");
+    PT_ASSERT(near_eq(b.bloom.threshold, 0.62f), "bloom threshold round-trips");
+    PT_ASSERT(near_eq(b.bloom.intensity, 0.91f), "bloom intensity round-trips");
+    PT_ASSERT_OP(b.bloom.mip_levels, ==, 6u, "bloom mip_levels round-trips");
+
+    const auto& t = dst.post_process_stack[1];
+    PT_ASSERT(t.kind == PostProcessKind::TONE_MAPPING, "tonemap kind round-trips");
+    PT_ASSERT(!t.enabled, "tonemap disabled round-trips");
+    PT_ASSERT(t.tone_mapping.op == ToneMapOperator::UNCHARTED2,
+              "tonemap operator round-trips");
+    PT_ASSERT(near_eq(t.tone_mapping.exposure, 1.3f), "tonemap exposure round-trips");
+
+    const auto& v = dst.post_process_stack[2];
+    PT_ASSERT(near_eq(v.vignette.intensity, 0.5f), "vignette intensity round-trips");
+    PT_ASSERT(near_eq(v.vignette.color[2], 0.3f), "vignette color round-trips");
+
+    const auto& g = dst.post_process_stack[3];
+    PT_ASSERT(g.color_grading.lut_path == "data/lut/warm.png", "LUT path round-trips");
+    PT_ASSERT_OP(g.color_grading.lut_size, ==, 32u, "LUT size round-trips");
+
+    const auto& d = dst.post_process_stack[4];
+    PT_ASSERT(near_eq(d.depth_of_field.focus_distance, 12.5f),
+              "DoF focus_distance round-trips");
+    PT_ASSERT_OP(d.depth_of_field.sample_count, ==, 24u, "DoF sample_count round-trips");
+
+    // SSAO: kind inferred as UNKNOWN, no host implementation.
+    PT_ASSERT(dst.post_process_stack[5].kind == PostProcessKind::UNKNOWN,
+              "SSAO resolves to UNKNOWN kind");
+}
+
+void test_post_process_kind_inference() {
+    // A bare { "name": ... } with no explicit "kind" must still resolve to
+    // the right kind on parse (preset spelling compatibility).
+    const std::string j = R"({
+      "profile_name": "Inferred",
+      "post_process": [
+        { "name": "Bloom",       "enabled": true },
+        { "name": "Tonemapping", "enabled": true },
+        { "name": "Grade",       "enabled": true },
+        { "name": "FXAA",        "enabled": true }
+      ]
+    })";
+    PipelineProfileDef out;
+    std::string err;
+    PT_ASSERT(from_pipeline_profile_json(j, out, &err), err.c_str());
+    PT_ASSERT_OP(out.post_process_stack.size(), ==, 4u, "stack parsed");
+    PT_ASSERT(out.post_process_stack[0].kind == PostProcessKind::BLOOM,
+              "name 'Bloom' infers BLOOM");
+    PT_ASSERT(out.post_process_stack[1].kind == PostProcessKind::TONE_MAPPING,
+              "name 'Tonemapping' infers TONE_MAPPING");
+    PT_ASSERT(out.post_process_stack[2].kind == PostProcessKind::COLOR_GRADING,
+              "name 'Grade' infers COLOR_GRADING");
+    PT_ASSERT(out.post_process_stack[3].kind == PostProcessKind::UNKNOWN,
+              "name 'FXAA' infers UNKNOWN");
+}
+
+void test_post_process_bridge() {
+    // build_post_process_config folds a stack into a PostProcessConfig.
+    PipelineProfileDef profile;
+
+    PostProcessDef bloom;
+    bloom.name = "Bloom";
+    bloom.kind = PostProcessKind::BLOOM;
+    bloom.enabled = true;
+    bloom.bloom.intensity = 0.77f;
+
+    PostProcessDef vig;
+    vig.name = "Vignette";
+    vig.kind = PostProcessKind::VIGNETTE;
+    vig.enabled = false;            // present but disabled
+    vig.vignette.intensity = 0.9f;
+
+    PostProcessDef ssao;            // UNKNOWN — must be ignored
+    ssao.name = "SSAO";
+
+    profile.post_process_stack = {bloom, vig, ssao};
+
+    PostProcessConfig cfg = build_post_process_config(profile);
+
+    // Bloom: enabled with the def's parameter.
+    PT_ASSERT(cfg.bloom.enabled, "bridge enables Bloom from stack");
+    PT_ASSERT(near_eq(cfg.bloom.intensity, 0.77f), "bridge applies bloom intensity");
+
+    // Vignette present-but-disabled: parameters copied, enabled=false.
+    PT_ASSERT(!cfg.vignette.enabled, "bridge keeps Vignette disabled");
+    PT_ASSERT(near_eq(cfg.vignette.intensity, 0.9f),
+              "bridge still applies disabled-effect params");
+
+    // Tone-mapping NOT in the stack -> forced off.
+    PT_ASSERT(!cfg.tone_mapping.enabled, "effect absent from stack is disabled");
+    PT_ASSERT(!cfg.color_grading.enabled, "absent color_grading disabled");
+    PT_ASSERT(!cfg.depth_of_field.enabled, "absent depth_of_field disabled");
+
+    // `base` HDR / gaussian_blur survive (no PostProcessDef mapping).
+    PostProcessConfig base;
+    base.hdr.exposure = 2.5f;
+    base.gaussian_blur.enabled = true;
+    PostProcessConfig merged = build_post_process_config(profile, base);
+    PT_ASSERT(near_eq(merged.hdr.exposure, 2.5f), "bridge preserves base HDR");
+    PT_ASSERT(merged.gaussian_blur.enabled, "bridge preserves base gaussian_blur");
+}
+
 } // namespace
 
 int main() {
@@ -223,5 +392,8 @@ int main() {
     test_builder_structured_pass();
     test_preset_loader_fallback();
     test_file_io();
+    test_post_process_param_roundtrip();
+    test_post_process_kind_inference();
+    test_post_process_bridge();
     return report("unit_pipeline_profile_serializer_test");
 }
