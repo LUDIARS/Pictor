@@ -38,6 +38,41 @@ int main() {
                   "INVALID_SHADER -> nullptr");
     }
 
+    // 1b. §6.2: CustomShaderDef::vertex_layout が登録後も保持される。
+    {
+        ShaderRegistry reg;
+        CustomShaderDef def;
+        def.name     = "mesh_driven";
+        def.vert_spv = "shaders/mesh.vert.spv";
+        def.frag_spv = "shaders/mesh.frag.spv";
+        def.vertex_layout.stride = 64;
+        def.vertex_layout.attributes = {
+            {VertexSemantic::POSITION,  VertexAttributeType::FLOAT3,   0},
+            {VertexSemantic::TEXCOORD0, VertexAttributeType::FLOAT2,   12},
+            {VertexSemantic::JOINTS,    VertexAttributeType::UINT32X4, 20},
+        };
+        ShaderHandle h = reg.register_shader(def);
+        PT_ASSERT_OP(h, !=, INVALID_SHADER, "vert+frag def with layout accepted");
+
+        const CustomShaderDef* got = reg.get(h);
+        PT_ASSERT(got != nullptr, "registered def retrievable");
+        PT_ASSERT(!got->vertex_layout.empty(), "vertex_layout preserved (non-empty)");
+        PT_ASSERT_OP(got->vertex_layout.attributes.size(), ==, size_t{3},
+                     "all 3 attributes preserved");
+        PT_ASSERT_OP(got->vertex_layout.computed_stride(), ==, uint32_t{64},
+                     "explicit stride preserved");
+
+        // 空 vertex_layout の def は phase 1 互換フォールバック。
+        CustomShaderDef legacy;
+        legacy.name     = "index_driven";
+        legacy.vert_spv = "shaders/idx.vert.spv";
+        legacy.frag_spv = "shaders/idx.frag.spv";
+        ShaderHandle hl = reg.register_shader(legacy);
+        PT_ASSERT_OP(hl, !=, INVALID_SHADER, "layout-less def still accepted");
+        PT_ASSERT(reg.get(hl)->vertex_layout.empty(),
+                  "absent vertex_layout stays empty (phase 1 fallback)");
+    }
+
     // 2. vert / frag が欠けた定義は拒否される (phase 1 は固定 vert+frag のみ)。
     {
         ShaderRegistry reg;
