@@ -134,11 +134,24 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 
 **phase 2 に残した範囲**: SPIR-V reflection による `layout(location=N)` 自動突き合わせ（現状は def に明示記述、 不一致は validation layer 任せ）。 複数頂点バッファ / instance input rate（現状は単一 binding=0 / per-vertex のみ）。
 
-### 6.3 項目1 — 任意 post-process pass 挿入（大規模・高リスク）
-- **現状**: `PostProcessPipeline`（851 行）に固定 4-pass（extract→blur H→blur V→grade）・3 render pass・3 ターゲット・2 descriptor レイアウト・固定 push constant。`build_post_process_config()` が `PostProcessKind::UNKNOWN`（SSAO/TAA/FXAA 等）を黙って捨てている＝系統A→B の断点。
-- **設計**: 固定構造を解体し、独立 `PostProcessChainBuilder` + 汎用 `PostProcessPassDef`（シェーダ `ResourceRef` + 入出力ターゲット名 + push constant レイアウト記述）を新設（`RenderPassDef` が雛形）。ターゲットを `std::vector<RenderTarget>` + 名前→index マップ化。subpass dependency を挿入順から動的生成。固定エフェクトは「組み込み pass テンプレート」として汎用チェーンに吸収。`ShaderRegistry::build_pipelines` と `PostProcessPipeline::create_pipelines_` の重複を統合。
+### 6.3 項目1 — 任意 post-process pass 挿入（実装済み 2026-05-22, `feat/postprocess-chain`）
+- **旧現状**: `PostProcessPipeline`（851 行）に固定 4-pass（extract→blur H→blur V→grade）・3 render pass・3 ターゲット・2 descriptor レイアウト・固定 push constant。`build_post_process_config()` が `PostProcessKind::UNKNOWN`（SSAO/TAA/FXAA 等）を黙って捨てている＝系統A→B の断点。
+- **設計**: 固定構造を解体し、汎用 `PostProcessPassDef`（シェーダパス + 入出力ターゲット名 + push constant レイアウト/バイト列）を新設（`RenderPassDef` が雛形）。ターゲットを `std::vector<RenderTarget>` + 名前→index マップ化。subpass dependency を挿入順から動的生成。固定エフェクトは「組み込み pass テンプレート」として汎用チェーンに吸収。`ShaderRegistry::build_pipelines` と `PostProcessPipeline::create_pipelines_` の重複を統合。
 - 規模: 大、リスク: 高（subpass dependency 動的生成の誤りで validation error / GPU hang、TAA history buffer はターゲットライフタイム >1 フレームで現 resize ロジックと非互換、push constant の汎用化）。
-- `build_post_process_chain()`（`PostProcessDef[]` → `PostProcessPassDef[]`）を `build_post_process_config()` と並列に新設する。
+- `build_post_process_chain()`（`PostProcessConfig` → `PostProcessChain` = `PostProcessPassDef[]`）を `build_post_process_config()` と並列に新設する。
+
+#### 実装内訳
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| `PostProcessPassDef` / `PostProcessChain` | `include/pictor/postprocess/postprocess_chain.h`。 1 pass = fullscreen triangle 1 枚（vert/frag SPIR-V パス + 入力論理ターゲット名列 + 出力論理ターゲット名 + push constant レイアウト記述 `PushFieldDesc[]` + 確定バイト列 `push_data`）。 `PostProcessChain` = 実行順 `passes[]` + 中間ターゲット論理名集合。 予約名 `__scene__` / `__output__` / `__lut__` で scene HDR / swapchain / LUT を指す | ✅ |
+| `build_post_process_chain()` | `src/postprocess/postprocess_chain.cpp`。 `PostProcessConfig` を汎用チェーンへ畳み込む第二経路。 組み込み 4 エフェクト（Bloom/ToneMapping/Vignette/ColorGrading）を旧 `record()` と**ビット単位で同一**の 4 pass（extract→blur H→blur V→grade）として生成。 無効エフェクトは旧実装同様 push constant で恒等へ縮退（Bloom 無効→threshold 1e9、tonemap 無効→op=LINEAR_CLAMP、sRGB→gamma 1.0 等）。 任意追加 pass（SSAO/FXAA）は `extra` 引数で末尾に挿入。 `refresh_post_process_chain()` が config/解像度依存 push を毎フレーム詰め直す | ✅ |
+| 固定構造の解体 | `src/postprocess/postprocess_pipeline.cpp`。 固定 3 render pass を「scene + 共有 inter（HDR）+ 共有 output（swapchain）」へ。 固定 3 ターゲット（scene/ping/pong）を `std::vector<RenderTarget>` + `unordered_map<name,index>` へ。 固定 2 descriptor レイアウトを「入力数→`VkDescriptorSetLayout`」のキャッシュへ。 固定 4-pass ベタ書きの `record()` を `CompiledPass[]` の挿入順イテレートへ。 subpass dependency は inter/output render pass の EXTERNAL↔0 依存で挿入順の RAW/WAR を保証 | ✅ |
+| pipeline ビルダ統合（項目6） | `include/pictor/shader/graphics_pipeline_builder.h`。 `ShaderRegistry::build_pipelines` と `PostProcessPipeline::create_pipelines_` がベタ書きしていた `VkGraphicsPipelineCreateInfo` 構築を共通 `build_graphics_pipeline()` に統合。 差分（cull mode / depth test / 頂点入力レイアウト）は `GraphicsPipelineDesc` で表現。 両 call site を置換 | ✅ |
+| 挙動保存の検証 | `tests/unit_postprocess_chain_test.cpp`（CTest）。 組み込みチェーンが厳密に 4 pass であること、入出力ターゲット配線が旧固定 4-pass と一致すること、有効/無効エフェクトの push constant バイト列が旧 `record()` と一致すること、`refresh` が pass 構造を変えず push のみ更新すること、extra pass が末尾に追加されることをバイト単位で検証 | ✅ |
+| KS 側互換 | `PostProcessPipeline::initialize_vulkan` / `record` / `scene_render_pass()` 等の signature を完全維持。 KS `PostProcessLayer` は無改変で組み込みチェーン経路を使う（`initialize_vulkan` が内部で `build_post_process_chain()` を呼ぶ）。 任意 pass を挿むホストは新 `initialize_chain()` を使う | ✅ |
+
+**phase 2 に残した範囲**: TAA 等の history buffer（ターゲットライフタイム >1 フレーム、現 resize ロジックは毎フレーム中間ターゲットを破棄するため非互換）。 SSAO 等が要する深度/法線入力の汎用配線（現状 `__scene__` color と中間 HDR ターゲットのみ）。 compute pass（現状 graphics fullscreen pass のみ）。 `PostProcessDef`（系統A JSON）→ `build_post_process_chain()` の直結（現状は `build_post_process_config()` 経由で `PostProcessConfig` を挟む — `UNKNOWN` kind を JSON から汎用 pass へ落とすには `PostProcessDef` にシェーダ参照フィールドの追加が要る）。
 
 ### 6.4 Phase 2 実装順序
 **3 → 2 → 1**（観測 → 局所改修 → 大規模解体）。項目3 を先に行うと項目1 の解体の影響（pass 数増減によるフレーム時間）をタイムラインで可視化しながら進められる。項目2 が項目1 の pipeline ビルダ統合の前提整理になる。
@@ -147,4 +160,4 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 |---|---|---|---|
 | 1 | 6.1 GPU timestamp relay | ✅ 実装済み（`feat/gpu-timestamp`） | Pictor + KS + Ergo |
 | 2 | 6.2 mesh 駆動の頂点入力レイアウト | ✅ 実装済み（`feat/mesh-vertex-layout`） | Pictor + KS |
-| 3 | 6.3 任意 post-process pass 挿入 | 未着手 | Pictor + KS |
+| 3 | 6.3 任意 post-process pass 挿入 | ✅ 実装済み（`feat/postprocess-chain`） | Pictor + KS |

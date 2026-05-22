@@ -1,8 +1,16 @@
 #pragma once
 
+// core/types.h を Vulkan ヘッダより先に取り込む。 Win32 では <vulkan/vulkan.h>
+// が <windows.h> 経由で GDI の `TRANSPARENT` / `OPAQUE` 等をマクロ定義する
+// ため、 これらと同名の enum / constexpr を持つ core ヘッダは vulkan.h より
+// 先に処理する必要がある。
+#include "pictor/core/types.h"
+
 #include "pictor/postprocess/postprocess_effect.h"
+#include "pictor/postprocess/postprocess_chain.h"
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef PICTOR_HAS_VULKAN
@@ -17,14 +25,23 @@ class VulkanContext;
 ///
 /// The host renders its 3D scene into the pipeline-owned HDR target
 /// (`scene_render_pass()` / `scene_framebuffer()`), then calls `record()`
-/// to run the effect chain straight onto a swapchain image:
+/// to run the effect chain straight onto a swapchain image.
 ///
+/// 構造 (`spec/rendering-extensibility-design.md` §6.3, phase 2 項目1):
+///   旧実装は固定 4-pass (extract → blur H → blur V → grade) をベタ書き
+///   していた。 現在は `PostProcessChain` (`PostProcessPassDef[]`) を
+///   `build_post_process_chain()` で生成し、 `PostProcessPipeline` は
+///   その記述から render pass / ターゲット / descriptor / pipeline を
+///   動的に構築する。 組み込み 4 エフェクトは「組み込み pass テンプレート」
+///   として同じ汎用チェーンへ畳み込まれ、 SSAO / FXAA 等の任意 pass を
+///   挿入できる。
+///
+/// 既定 (= KS が使う組み込みチェーン) の流れは旧実装と同一:
 ///   scene(HDR) → bloom extract → blur H → blur V
 ///              → final composite (bloom + tonemap + LUT + vignette) → output
 ///
-/// All four effects always execute; a disabled effect collapses to an
-/// identity via its push-constant parameters, so intermediate image
-/// layouts stay valid every frame.
+/// disabled なエフェクトは push-constant により恒等へ縮退するため、
+/// 中間 image レイアウトは毎フレーム有効を保つ。
 class PostProcessPipeline {
 public:
     PostProcessPipeline();
@@ -49,6 +66,10 @@ public:
     /// `lut_w` x `lut_h`); pass nullptr for no LUT. Pictor stays free of any
     /// image-decoding dependency — the host loads `config.color_grading.lut_path`.
     /// Returns false on failure.
+    ///
+    /// 内部で `build_post_process_chain()` を呼んで組み込みチェーンを
+    /// 構築する。 任意 pass を挿入したいホストは `initialize_chain()` を
+    /// 使う。
     bool initialize_vulkan(VulkanContext& vk,
                            const std::string& shader_dir,
                            uint32_t width, uint32_t height,
@@ -57,6 +78,19 @@ public:
                            const PostProcessConfig& config,
                            const unsigned char* lut_rgba = nullptr,
                            int lut_w = 0, int lut_h = 0);
+
+    /// 明示的な `PostProcessChain` を渡す初期化。 SSAO / FXAA 等の任意 pass
+    /// を含むチェーンをホストが組んで渡せる。 `initialize_vulkan()` は
+    /// 組み込みチェーンを生成して本関数を呼ぶ薄いラッパ。
+    bool initialize_chain(VulkanContext& vk,
+                          const std::string& shader_dir,
+                          uint32_t width, uint32_t height,
+                          VkFormat output_format,
+                          const std::vector<VkImageView>& output_views,
+                          const PostProcessConfig& config,
+                          const PostProcessChain& chain,
+                          const unsigned char* lut_rgba = nullptr,
+                          int lut_w = 0, int lut_h = 0);
 
     /// Render pass / framebuffer the host renders its 3D scene into.
     /// rp_scene_ は color (RGBA16F) + depth (D32_SFLOAT) の 2 アタッチメント。
@@ -67,9 +101,9 @@ public:
     VkExtent2D    extent() const { return extent_; }
 
     /// シーンカラー HDR ビュー (RGBA16F)。 DecalSystem 等がこれへ合成する。
-    VkImageView   scene_color_view() const { return scene_.view; }
+    VkImageView   scene_color_view() const;
     /// シーンの深度ビュー (D32_SFLOAT)。 DecalSystem 等が read する。
-    VkImageView   scene_depth_view() const { return scene_.depth_view; }
+    VkImageView   scene_depth_view() const;
 
     /// Record the post-process chain into `output_views[output_index]`.
     /// The output image is left in COLOR_ATTACHMENT_OPTIMAL so the host can
@@ -93,15 +127,19 @@ private:
     bool              vulkan_ready_ = false;
 
 #ifdef PICTOR_HAS_VULKAN
+    /// 1 個の名前付き中間 / シーンターゲット (HDR RGBA16F)。
     struct RenderTarget {
         VkImage        image  = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView    view   = VK_NULL_HANDLE;
         VkFramebuffer  fb     = VK_NULL_HANDLE;
-        // 深度アタッチメント (scene_ のみ使用。 ping/pong は VK_NULL_HANDLE)。
+        // 深度アタッチメント (scene_ のみ使用。 中間ターゲットは VK_NULL_HANDLE)。
         VkImage        depth_image  = VK_NULL_HANDLE;
         VkDeviceMemory depth_memory = VK_NULL_HANDLE;
         VkImageView    depth_view   = VK_NULL_HANDLE;
+        // この target を出力先とする pass 用の framebuffer の render pass。
+        VkRenderPass   fb_render_pass = VK_NULL_HANDLE;
+        bool           has_depth      = false;
     };
     struct Texture {
         VkImage        image  = VK_NULL_HANDLE;
@@ -109,32 +147,59 @@ private:
         VkImageView    view   = VK_NULL_HANDLE;
     };
 
-    bool create_render_passes_(VkFormat output_format);
+    /// 1 個の汎用 pass を実行するための解決済み Vulkan リソース。
+    struct CompiledPass {
+        std::string           name;
+        VkRenderPass          render_pass = VK_NULL_HANDLE;  ///< 共有 (所有しない)
+        VkPipeline            pipeline    = VK_NULL_HANDLE;
+        VkPipelineLayout      layout      = VK_NULL_HANDLE;  ///< 共有 (所有しない)
+        VkDescriptorSet       desc_set    = VK_NULL_HANDLE;
+        uint32_t              input_count = 0;               ///< descriptor binding 数
+        int32_t               output_index = -1;             ///< targets_ index / -1=swapchain
+        std::vector<int32_t>  input_indices;                 ///< targets_ index 列
+        std::vector<uint8_t>  push_data;
+        uint32_t              push_size = 0;
+    };
+
+    bool build_from_chain_(VkFormat output_format,
+                           const std::vector<VkImageView>& output_views);
+    bool create_scene_render_pass_();
+    VkRenderPass get_or_create_inter_render_pass_();
+    VkRenderPass get_or_create_output_render_pass_(VkFormat output_format);
+    bool create_target_(RenderTarget& rt, VkRenderPass rp, bool with_depth);
     bool create_targets_();
     bool create_samplers_();
+    bool upload_lut_(const unsigned char* rgba, int w, int h);
     bool create_descriptors_();
     void write_descriptor_sets_();
-    bool create_pipelines_(const std::string& shader_dir);
+    VkDescriptorSetLayout get_or_create_dsl_(uint32_t input_count);
+    VkPipelineLayout      get_or_create_layout_(uint32_t input_count,
+                                                uint32_t push_size);
+    bool create_pipelines_();
     bool create_output_framebuffers_(const std::vector<VkImageView>& views);
-    bool upload_lut_(const unsigned char* rgba, int w, int h);
     VkShaderModule load_shader_(const std::string& path) const;
-    /// `with_depth` が true なら深度アタッチメント (D32_SFLOAT) も作る (scene_ 用)。
-    bool create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPass rp, bool with_depth);
     uint32_t find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
+    /// 論理ターゲット名 → targets_ index。 不明名は -1。
+    int32_t resolve_target_(const std::string& name) const;
 
     VulkanContext* vk_     = nullptr;
     VkDevice       device_ = VK_NULL_HANDLE;
     VkExtent2D     extent_ = {0, 0};
     bool           output_is_srgb_ = false;
+    VkFormat       output_format_  = VK_FORMAT_UNDEFINED;
+    std::string    shader_dir_;
+
+    PostProcessChain chain_;
 
     VkRenderPass rp_scene_  = VK_NULL_HANDLE;  // RGBA16F + D32_SFLOAT, CLEAR
     VkRenderPass rp_inter_  = VK_NULL_HANDLE;  // RGBA16F, DONT_CARE
     VkRenderPass rp_output_ = VK_NULL_HANDLE;  // swapchain format, DONT_CARE
 
-    RenderTarget scene_;   // host renders the 3D scene here (HDR)
-    RenderTarget ping_;    // bloom intermediate
-    RenderTarget pong_;    // bloom intermediate
-    VkFramebuffer fb_scene_ = VK_NULL_HANDLE;  // alias of scene_.fb
+    // 名前付きターゲット集合。 index 0 = scene、 以降は chain の中間ターゲット。
+    std::vector<RenderTarget>                targets_;
+    std::unordered_map<std::string, int32_t> target_index_;
+    int32_t       scene_index_ = -1;
+    VkFramebuffer fb_scene_    = VK_NULL_HANDLE;  // alias of targets_[scene].fb
 
     std::vector<VkFramebuffer> output_fbs_;    // one per swapchain image
 
@@ -142,19 +207,13 @@ private:
     bool      lut_loaded_ = false;
     VkSampler sampler_ = VK_NULL_HANDLE;
 
-    VkDescriptorPool      desc_pool_   = VK_NULL_HANDLE;
-    VkDescriptorSetLayout dsl_single_  = VK_NULL_HANDLE;  // 1 sampler
-    VkDescriptorSetLayout dsl_grade_   = VK_NULL_HANDLE;  // 3 samplers
-    VkDescriptorSet       ds_extract_  = VK_NULL_HANDLE;  // samples scene_
-    VkDescriptorSet       ds_blur_h_   = VK_NULL_HANDLE;  // samples ping_
-    VkDescriptorSet       ds_blur_v_   = VK_NULL_HANDLE;  // samples pong_
-    VkDescriptorSet       ds_grade_    = VK_NULL_HANDLE;  // scene_ + ping_ + lut_
+    VkDescriptorPool desc_pool_ = VK_NULL_HANDLE;
+    // input 数 → descriptor set layout。 組み込みチェーンは 1 と 3 を使う。
+    std::unordered_map<uint32_t, VkDescriptorSetLayout> dsl_by_input_count_;
+    // (input 数, push サイズ) → pipeline layout。
+    std::vector<std::pair<uint64_t, VkPipelineLayout>>  layout_cache_;
 
-    VkPipelineLayout pl_single_ = VK_NULL_HANDLE;
-    VkPipelineLayout pl_grade_  = VK_NULL_HANDLE;
-    VkPipeline       pipe_extract_ = VK_NULL_HANDLE;
-    VkPipeline       pipe_blur_    = VK_NULL_HANDLE;
-    VkPipeline       pipe_grade_   = VK_NULL_HANDLE;
+    std::vector<CompiledPass> compiled_;
 #endif
 };
 
