@@ -132,6 +132,40 @@ public:
         const PipelineProfileDef& preset,
         const std::unordered_map<std::string, std::string>& kv);
 
+    // ---- Structured render-pass construction -------------------------------
+    //
+    // flat-KV from_key_value() can only express pass *names* (all forced to
+    // OPAQUE). These helpers let a structured loader (e.g. the JSON serializer
+    // in pipeline_profile_serializer.h) build a fully-specified RenderPassDef
+    // from string/enum tokens without touching enum headers directly, and is
+    // the seam the Ergo-web pipeline editor drives.
+
+    /// Build a RenderPassDef from string tokens. Unknown enum strings fall
+    /// back to the supplied default. `shader_override` accepts "none" or
+    /// "handle:<u32>". This performs no I/O.
+    static RenderPassDef make_pass(
+        const std::string&              pass_name,
+        const std::string&              pass_type_str,      // see PassType
+        const std::string&              sort_mode_str    = "FRONT_TO_BACK",
+        const std::vector<std::string>& render_targets   = {},
+        const std::vector<std::string>& input_textures   = {},
+        const std::vector<std::string>& required_streams = {},
+        uint16_t                        filter_mask      = 0xFFFF,
+        bool                            gpu_driven_pass  = false,
+        const std::string&              shader_override  = "none");
+
+    /// Append a fully-specified pass built from string tokens.
+    PipelineProfileBuilder& add_pass_tokens(
+        const std::string&              pass_name,
+        const std::string&              pass_type_str,
+        const std::string&              sort_mode_str    = "FRONT_TO_BACK",
+        const std::vector<std::string>& render_targets   = {},
+        const std::vector<std::string>& input_textures   = {},
+        const std::vector<std::string>& required_streams = {},
+        uint16_t                        filter_mask      = 0xFFFF,
+        bool                            gpu_driven_pass  = false,
+        const std::string&              shader_override  = "none");
+
 private:
     PipelineProfileDef def_{};
 };

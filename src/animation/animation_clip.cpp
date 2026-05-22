@@ -10,6 +10,7 @@ AnimationClip::AnimationClip(const AnimationClipDescriptor& desc)
     , sample_rate_(desc.sample_rate)
     , wrap_mode_(desc.wrap_mode)
     , channels_(desc.channels)
+    , bone_names_(desc.bone_names)
 {}
 
 float AnimationClip::wrap_time(float time, WrapMode mode) const {
@@ -167,6 +168,37 @@ void AnimationClip::evaluate(float time, Transform* out_transforms, uint32_t max
                 // Morph target weights — store in translation as temp
                 t.translation = {values[0], values[1], values[2]};
                 break;
+        }
+    }
+}
+
+void AnimationClip::evaluate_remapped(float time, Transform* out_transforms,
+                                      uint32_t max_targets,
+                                      const int* remap, std::size_t remap_size) const {
+    if (!remap || remap_size == 0) {
+        evaluate(time, out_transforms, max_targets);
+        return;
+    }
+    float wrapped = wrap_time(time, wrap_mode_);
+    for (std::size_t i = 0; i < channels_.size(); ++i) {
+        const auto& channel = channels_[i];
+        int dst_idx = (i < remap_size) ? remap[i] : -1;
+        if (dst_idx < 0) continue;
+        if (static_cast<uint32_t>(dst_idx) >= max_targets) continue;
+
+        float values[4] = {};
+        evaluate_channel(channel, wrapped, values);
+
+        Transform& t = out_transforms[dst_idx];
+        switch (channel.target) {
+            case ChannelTarget::TRANSLATION:
+                t.translation = {values[0], values[1], values[2]}; break;
+            case ChannelTarget::ROTATION:
+                t.rotation = {values[0], values[1], values[2], values[3]}; break;
+            case ChannelTarget::SCALE:
+                t.scale = {values[0], values[1], values[2]}; break;
+            case ChannelTarget::WEIGHTS:
+                t.translation = {values[0], values[1], values[2]}; break;
         }
     }
 }

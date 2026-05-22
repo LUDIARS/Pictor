@@ -12,6 +12,9 @@ set(PICTOR_TESTS
     unit_frame_allocator_test
     unit_radix_sort_test
     unit_culling_test
+    unit_visus_serializer_test
+    unit_visus_instantiator_test
+    unit_pipeline_profile_serializer_test
     pixel_text_test
     fps_baseline_test
 )
@@ -20,6 +23,10 @@ foreach(_t ${PICTOR_TESTS})
     add_executable(${_t} ${_t}.cpp)
     target_link_libraries(${_t} PRIVATE pictor)
     target_include_directories(${_t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    # MSVC: tests も UTF-8 ソースとして読む (日本語コメントを含む header を取り込むため)
+    if(MSVC)
+        target_compile_options(${_t} PRIVATE /utf-8)
+    endif()
     add_test(NAME ${_t}
              COMMAND ${_t}
              WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

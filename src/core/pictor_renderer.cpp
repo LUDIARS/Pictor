@@ -1,4 +1,5 @@
 ﻿#include "pictor/core/pictor_renderer.h"
+#include "pictor/pipeline/pipeline_profile_serializer.h"
 
 namespace pictor {
 
@@ -91,29 +92,9 @@ void PictorRenderer::initialize(const RendererConfig& config) {
     data_handler_ = std::make_unique<DataHandler>(
         memory_->gpu_allocator(), *gpu_buffer_manager_, *animation_system_);
 
-    // 18. Post-Process Pipeline
-    postprocess_ = std::make_unique<PostProcessPipeline>();
-    {
-        // Build default post-process config from profile's post_process_stack
-        PostProcessConfig pp_config;
-        // Default HDR config
-        pp_config.hdr.enabled = true;
-        pp_config.hdr.exposure = 1.0f;
-        pp_config.hdr.gamma = 2.2f;
-
-        // Enable effects based on profile stack
-        pp_config.bloom.enabled = false;
-        pp_config.tone_mapping.enabled = false;
-        pp_config.depth_of_field.enabled = false;
-        pp_config.gaussian_blur.enabled = false;
-
-        for (const auto& pp_def : profile.post_process_stack) {
-            if (pp_def.name == "Bloom")        pp_config.bloom.enabled = pp_def.enabled;
-            if (pp_def.name == "Tonemapping")  pp_config.tone_mapping.enabled = pp_def.enabled;
-        }
-
-        postprocess_->initialize(config.screen_width, config.screen_height, pp_config);
-    }
+    // 18. Post-Process は host-driven の `PostProcessPipeline` を使う。
+    //     ホストがシーンを HDR ターゲットへ描き、 自前で初期化/record する
+    //     (PrivateGame WorldRenderer 参照)。 managed レンダラは関与しない。
 
     initialized_ = true;
 }
@@ -122,7 +103,6 @@ void PictorRenderer::shutdown() {
     if (!initialized_) return;
 
     // §12: Release all resources, GPU sync
-    postprocess_.reset();
     animation_system_.reset();
     data_handler_.reset();
     data_exporter_.reset();
@@ -244,15 +224,8 @@ void PictorRenderer::render(const Camera& camera) {
         mem_stats.gpu_stats.ssbo_capacity + mem_stats.gpu_stats.mesh_pool_capacity
     );
 
-    // Post-process pipeline execution
-    if (postprocess_ && postprocess_->is_initialized() &&
-        postprocess_->enabled_effect_count() > 0) {
-        profiler_->begin_gpu_section("PostProcess");
-        // In production: scene_color/depth/output would be actual texture handles
-        // from the framebuffer manager. Here we use placeholders.
-        postprocess_->execute(0, 1, 2, delta_time_);
-        profiler_->end_gpu_section("PostProcess");
-    }
+    // Post-process は host-driven (`PostProcessPipeline`)。 managed レンダラは
+    // 関与しない — ホストがシーンを HDR ターゲットへ描き自前で record する。
 
     // Render profiler overlay (§13.6)
     if (profiler_->is_enabled() && profiler_->overlay_mode() != OverlayMode::OFF) {
@@ -318,6 +291,42 @@ bool PictorRenderer::set_profile(const std::string& name) {
 void PictorRenderer::register_custom_profile(const PipelineProfileDef& def) {
     if (!initialized_) return;
     profile_manager_->register_profile(def);
+}
+
+bool PictorRenderer::load_profile_from_file(const std::string& path,
+                                            std::string*       error) {
+    if (!initialized_) {
+        if (error) *error = "renderer not initialized";
+        return false;
+    }
+
+    // Seed from the currently active profile so a partial config file only
+    // needs to express overrides.
+    PipelineProfileDef def;
+    if (!load_pipeline_profile_file(path, profile_manager_->current_profile(),
+                                    def, error)) {
+        return false;
+    }
+    if (def.profile_name.empty()) {
+        if (error) *error = "profile JSON has empty profile_name";
+        return false;
+    }
+
+    // Register (replaces same-named profile) then activate + reconfigure.
+    profile_manager_->register_profile(def);
+    if (!profile_manager_->set_profile(def.profile_name)) {
+        if (error) *error = "failed to activate loaded profile";
+        return false;
+    }
+    apply_profile(profile_manager_->current_profile());
+    return true;
+}
+
+void PictorRenderer::reload_active_profile() {
+    if (!initialized_) return;
+    // §8.4 step 5: re-run the profile switch procedure (scheduler reconfigure,
+    // batch invalidation, GI/GPU-driven reconfigure) for the current profile.
+    apply_profile(profile_manager_->current_profile());
 }
 
 const std::string& PictorRenderer::current_profile_name() const {
@@ -633,12 +642,6 @@ GIBakeResult PictorRenderer::load_bake(const std::string& path) {
 
 void PictorRenderer::set_bake_data_provider(IBakeDataProvider* provider) {
     if (bake_system_) bake_system_->set_bake_data_provider(provider);
-}
-
-// ---- Post-Process ----
-
-void PictorRenderer::set_postprocess_config(const PostProcessConfig& config) {
-    if (postprocess_) postprocess_->set_config(config);
 }
 
 // ---- Data Export ----

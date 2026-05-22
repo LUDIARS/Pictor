@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "profile_name": "MobileHigh",
+  "rendering_path": "FORWARD",
+  "max_lights": 32,
+  "msaa_samples": 2,
+  "gpu_driven_enabled": false,
+  "compute_update_enabled": false,
+  "render_passes": [
+    { "pass_name": "ShadowPass",      "pass_type": "SHADOW",       "sort_mode": "NONE",          "required_streams": ["bounds", "transforms"] },
+    { "pass_name": "DepthPrePass",    "pass_type": "DEPTH_ONLY",   "sort_mode": "FRONT_TO_BACK", "required_streams": ["bounds", "transforms"] },
+    { "pass_name": "OpaquePass",      "pass_type": "OPAQUE",       "sort_mode": "FRONT_TO_BACK", "required_streams": ["transforms", "shaderKeys"] },
+    { "pass_name": "TransparentPass", "pass_type": "TRANSPARENT",  "sort_mode": "BACK_TO_FRONT", "required_streams": ["transforms", "sortKeys"] },
+    { "pass_name": "PostProcess",     "pass_type": "POST_PROCESS", "sort_mode": "NONE" }
+  ],
+  "post_process": [
+    { "name": "Bloom",       "enabled": true },
+    { "name": "Tonemapping", "enabled": true },
+    { "name": "FXAA",        "enabled": true }
+  ],
+  "shadow": {
+    "cascade_count": 1,
+    "resolution": 1024,
+    "filter_mode": "PCF"
+  },
+  "gi": {
+    "shadow_enabled": true,
+    "ssao_enabled": false,
+    "gi_probes_enabled": false,
+    "shadow": {
+      "cascade_count": 1,
+      "resolution": 1024,
+      "depth_bias": 0.005,
+      "filter_mode": "PCF"
+    }
+  },
+  "memory": {
+    "frame_allocator_size": 4194304,
+    "flight_count": 2,
+    "gpu": {
+      "mesh_pool_size": 134217728,
+      "ssbo_pool_size": 33554432,
+      "instance_buffer_size": 16777216,
+      "staging_buffer_size": 16777216
+    }
+  },
+  "gpu_driven": {
+    "compute_update": false
+  },
+  "update": {
+    "chunk_size": 8192,
+    "nt_store_enabled": false
+  },
+  "profiler": {
+    "enabled": true,
+    "overlay_mode": "STANDARD",
+    "max_queries": 32
+  }
+}

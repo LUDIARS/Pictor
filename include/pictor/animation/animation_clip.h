@@ -19,6 +19,11 @@ public:
     /// @param max_targets     Size of out_transforms array
     void evaluate(float time, Transform* out_transforms, uint32_t max_targets) const;
 
+    /// Montage extension: 各 channel.target_index を `remap[channel_index]` で
+    /// 差し替えてから書き込む。 remap[i] < 0 のチャンネルはスキップ。
+    void evaluate_remapped(float time, Transform* out_transforms, uint32_t max_targets,
+                           const int* remap, std::size_t remap_size) const;
+
     /// Evaluate a single channel at the given time
     void evaluate_channel(const AnimationChannel& channel, float time, float out[4]) const;
 
@@ -30,6 +35,10 @@ public:
     float sample_rate() const { return sample_rate_; }
     WrapMode wrap_mode() const { return wrap_mode_; }
     const std::vector<AnimationChannel>& channels() const { return channels_; }
+
+    /// Montage extension: source-skeleton bone names per channel. Empty for
+    /// legacy clips. See `animation_types.h` `AnimationClipDescriptor::bone_names`.
+    const std::vector<std::string>& bone_names() const { return bone_names_; }
 
     void set_wrap_mode(WrapMode mode) { wrap_mode_ = mode; }
 
@@ -49,6 +58,7 @@ private:
     float       sample_rate_ = 30.0f;
     WrapMode    wrap_mode_   = WrapMode::LOOP;
     std::vector<AnimationChannel> channels_;
+    std::vector<std::string>      bone_names_;   // Montage extension (may be empty)
 };
 
 } // namespace pictor
