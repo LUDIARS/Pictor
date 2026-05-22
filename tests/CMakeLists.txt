@@ -17,6 +17,7 @@ set(PICTOR_TESTS
     unit_shader_registry_test
     unit_pipeline_profile_serializer_test
     unit_postprocess_chain_test
+    unit_attachment_def_test
     pixel_text_test
     fps_baseline_test
 )

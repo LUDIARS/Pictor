@@ -234,6 +234,62 @@ void emit_string_array(std::string& out, const std::vector<std::string>& arr) {
 
 void pad(std::string& out, int n) { out.append(static_cast<size_t>(n) * 2, ' '); }
 
+// Emit a string array of usage flag names from a `AttachmentUsageBits` mask.
+void emit_attachment_usage(std::string& out, uint32_t mask) {
+    out.push_back('[');
+    bool first = true;
+    auto add = [&](const char* name) {
+        if (!first) out += ", ";
+        quote(out, name);
+        first = false;
+    };
+    if (mask & USAGE_TRANSFER_SRC)              add("TRANSFER_SRC");
+    if (mask & USAGE_TRANSFER_DST)              add("TRANSFER_DST");
+    if (mask & USAGE_SAMPLED)                   add("SAMPLED");
+    if (mask & USAGE_STORAGE)                   add("STORAGE");
+    if (mask & USAGE_COLOR_ATTACHMENT)          add("COLOR_ATTACHMENT");
+    if (mask & USAGE_DEPTH_STENCIL_ATTACHMENT)  add("DEPTH_STENCIL_ATTACHMENT");
+    if (mask & USAGE_TRANSIENT_ATTACHMENT)      add("TRANSIENT_ATTACHMENT");
+    if (mask & USAGE_INPUT_ATTACHMENT)          add("INPUT_ATTACHMENT");
+    out.push_back(']');
+}
+
+void emit_attachment_def(std::string& out, const AttachmentDef& a, int indent) {
+    pad(out, indent); out += "{\n";
+    pad(out, indent+1); out += "\"name\":         "; quote(out, a.name); out += ",\n";
+    pad(out, indent+1); out += "\"kind\":         "; quote(out, to_string(a.kind)); out += ",\n";
+    pad(out, indent+1); out += "\"format\":       "; quote(out, to_string(a.format)); out += ",\n";
+    pad(out, indent+1); out += "\"sizing\":       "; quote(out, to_string(a.sizing)); out += ",\n";
+    if (a.sizing == AttachmentSizing::SWAPCHAIN_RELATIVE) {
+        pad(out, indent+1); out += "\"scale\":        "; emit_float(out, a.scale); out += ",\n";
+    } else {
+        pad(out, indent+1); out += "\"width\":        "; emit_uint(out, a.width);  out += ",\n";
+        pad(out, indent+1); out += "\"height\":       "; emit_uint(out, a.height); out += ",\n";
+    }
+    pad(out, indent+1); out += "\"usage\":        "; emit_attachment_usage(out, a.usage); out += ",\n";
+    if (a.kind == AttachmentKind::DEPTH) {
+        pad(out, indent+1); out += "\"clear_depth\":  "; emit_float(out, a.clear_depth);   out += ",\n";
+        pad(out, indent+1); out += "\"clear_stencil\":"; emit_uint(out, a.clear_stencil);  out += "\n";
+    } else {
+        pad(out, indent+1); out += "\"clear_color\":  [";
+        emit_float(out, a.clear_color[0]); out += ", ";
+        emit_float(out, a.clear_color[1]); out += ", ";
+        emit_float(out, a.clear_color[2]); out += ", ";
+        emit_float(out, a.clear_color[3]); out += "]\n";
+    }
+    pad(out, indent); out += "}";
+}
+
+void emit_attachment_ops(std::string& out, const AttachmentOpsDef& o, int indent) {
+    pad(out, indent); out += "{";
+    out += "\"attachment\": ";     quote(out, o.attachment_name);
+    out += ", \"load\": ";         quote(out, to_string(o.load_op));
+    out += ", \"store\": ";        quote(out, to_string(o.store_op));
+    out += ", \"initial_layout\":"; quote(out, to_string(o.initial_layout));
+    out += ", \"final_layout\": "; quote(out, to_string(o.final_layout));
+    out += "}";
+}
+
 // ---- parser ---------------------------------------------------------------
 
 struct Parser {
@@ -399,6 +455,32 @@ struct Parser {
         }
     }
 
+    // Parse a JSON array of 4 numbers into a float4-like {x,y,z,w}.
+    // Missing tail elements stay at their current value.
+    bool parse_float4(float& x, float& y, float& z, float& w) {
+        if (!expect('[')) return false;
+        double v;
+        skip_ws();
+        if (consume(']')) return true;
+        if (!parse_number(v)) return false; x = static_cast<float>(v);
+        if (consume(']')) return true;
+        if (!expect(',')) return false;
+        if (!parse_number(v)) return false; y = static_cast<float>(v);
+        if (consume(']')) return true;
+        if (!expect(',')) return false;
+        if (!parse_number(v)) return false; z = static_cast<float>(v);
+        if (consume(']')) return true;
+        if (!expect(',')) return false;
+        if (!parse_number(v)) return false; w = static_cast<float>(v);
+        if (consume(']')) return true;
+        while (true) {
+            if (!skip_value()) return false;
+            if (consume(',')) continue;
+            if (consume(']')) return true;
+            return fail("expected , or ]");
+        }
+    }
+
     // Parse a JSON array of 3 numbers into a float3-like {x,y,z}.
     bool parse_float3(float& x, float& y, float& z) {
         if (!expect('[')) return false;
@@ -443,6 +525,98 @@ bool parse_object(Parser& pr, Fn&& on_key) {
 
 // ---- nested object parsers ------------------------------------------------
 
+// ============================================================
+// Phase 3 (schema v2): attachments[] と RenderPassDef::attachment_ops[]
+// ============================================================
+
+bool parse_attachment_def(Parser& pr, AttachmentDef& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "name") {
+            return p.parse_string(out.name);
+        } else if (key == "kind") {
+            std::string s; if (!p.parse_string(s)) return false;
+            (void)parse_attachment_kind(s, out.kind);
+            return true;
+        } else if (key == "format") {
+            std::string s; if (!p.parse_string(s)) return false;
+            (void)parse_attachment_format(s, out.format);
+            return true;
+        } else if (key == "sizing") {
+            std::string s; if (!p.parse_string(s)) return false;
+            (void)parse_attachment_sizing(s, out.sizing);
+            return true;
+        } else if (key == "scale") {
+            return p.parse_float_field(out.scale);
+        } else if (key == "width") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.width = static_cast<uint32_t>(v); return true;
+        } else if (key == "height") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.height = static_cast<uint32_t>(v); return true;
+        } else if (key == "usage") {
+            // Either a uint bitmask OR a string array of flag names.
+            std::vector<std::string> names;
+            // Try string array first; if it fails, fall back to uint.
+            // The Parser doesn't speculate, so probe by peeking the first
+            // non-ws char.
+            // (Simple approach: try array, on failure parse number.)
+            uint64_t mask = 0;
+            if (p.parse_string_array(names)) {
+                for (const auto& n : names) {
+                    if      (n == "TRANSFER_SRC")              mask |= USAGE_TRANSFER_SRC;
+                    else if (n == "TRANSFER_DST")              mask |= USAGE_TRANSFER_DST;
+                    else if (n == "SAMPLED")                   mask |= USAGE_SAMPLED;
+                    else if (n == "STORAGE")                   mask |= USAGE_STORAGE;
+                    else if (n == "COLOR_ATTACHMENT")          mask |= USAGE_COLOR_ATTACHMENT;
+                    else if (n == "DEPTH_STENCIL_ATTACHMENT")  mask |= USAGE_DEPTH_STENCIL_ATTACHMENT;
+                    else if (n == "TRANSIENT_ATTACHMENT")      mask |= USAGE_TRANSIENT_ATTACHMENT;
+                    else if (n == "INPUT_ATTACHMENT")          mask |= USAGE_INPUT_ATTACHMENT;
+                }
+                out.usage = static_cast<uint32_t>(mask);
+                return true;
+            }
+            // Fallback path: raw integer.
+            if (!p.parse_uint_field(mask)) return false;
+            out.usage = static_cast<uint32_t>(mask);
+            return true;
+        } else if (key == "clear_color") {
+            return p.parse_float4(out.clear_color[0], out.clear_color[1],
+                                  out.clear_color[2], out.clear_color[3]);
+        } else if (key == "clear_depth") {
+            return p.parse_float_field(out.clear_depth);
+        } else if (key == "clear_stencil") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.clear_stencil = static_cast<uint32_t>(v); return true;
+        }
+        return p.skip_value();
+    });
+}
+
+bool parse_attachment_ops_def(Parser& pr, AttachmentOpsDef& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "attachment") {
+            return p.parse_string(out.attachment_name);
+        } else if (key == "load") {
+            std::string s; if (!p.parse_string(s)) return false;
+            (void)parse_attachment_load_op(s, out.load_op);
+            return true;
+        } else if (key == "store") {
+            std::string s; if (!p.parse_string(s)) return false;
+            (void)parse_attachment_store_op(s, out.store_op);
+            return true;
+        } else if (key == "initial_layout") {
+            std::string s; if (!p.parse_string(s)) return false;
+            (void)parse_image_layout(s, out.initial_layout);
+            return true;
+        } else if (key == "final_layout") {
+            std::string s; if (!p.parse_string(s)) return false;
+            (void)parse_image_layout(s, out.final_layout);
+            return true;
+        }
+        return p.skip_value();
+    });
+}
+
 bool parse_render_pass(Parser& pr, RenderPassDef& out) {
     return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
         if (key == "pass_name") {
@@ -475,6 +649,20 @@ bool parse_render_pass(Parser& pr, RenderPassDef& out) {
             return p.parse_bool(out.gpu_driven_pass);
         } else if (key == "required_streams") {
             return p.parse_string_array(out.required_streams);
+        } else if (key == "attachment_ops") {
+            // Phase 3 (schema v2): per-attachment load/store/layout overrides.
+            if (!p.expect('[')) return false;
+            out.attachment_ops.clear();
+            p.skip_ws();
+            if (p.consume(']')) return true;
+            while (true) {
+                AttachmentOpsDef ops;
+                if (!parse_attachment_ops_def(p, ops)) return false;
+                out.attachment_ops.push_back(std::move(ops));
+                if (p.consume(',')) continue;
+                if (p.consume(']')) return true;
+                return false;
+            }
         }
         return p.skip_value();
     });
@@ -817,6 +1005,21 @@ bool decode(const std::string& json, PipelineProfileDef& out, std::string* error
             ok = pr.parse_bool(out.gpu_driven_enabled);
         } else if (key == "compute_update_enabled") {
             ok = pr.parse_bool(out.compute_update_enabled);
+        } else if (key == "attachments") {
+            // Phase 3 (schema v2): named attachments used by render_passes.
+            if (!pr.expect('[')) return fail("expected array");
+            out.attachments.clear();
+            pr.skip_ws();
+            if (!pr.consume(']')) {
+                while (true) {
+                    AttachmentDef att;
+                    if (!parse_attachment_def(pr, att)) return fail("bad attachment");
+                    out.attachments.push_back(std::move(att));
+                    if (pr.consume(',')) continue;
+                    if (pr.consume(']')) break;
+                    return fail("expected , or ]");
+                }
+            }
         } else if (key == "render_passes") {
             if (!pr.expect('[')) return fail("expected array");
             out.render_passes.clear();
@@ -880,13 +1083,26 @@ std::string to_pipeline_profile_json(const PipelineProfileDef& def) {
     out.reserve(4096);
 
     out += "{\n";
-    out += "  \"version\": 1,\n";
+    out += "  \"version\": 2,\n";
     out += "  \"profile_name\": "; quote(out, def.profile_name); out += ",\n";
     out += "  \"rendering_path\": "; quote(out, rendering_path_to_str(def.rendering_path)); out += ",\n";
     out += "  \"max_lights\": "; emit_uint(out, def.max_lights); out += ",\n";
     out += "  \"msaa_samples\": "; emit_uint(out, def.msaa_samples); out += ",\n";
     out += "  \"gpu_driven_enabled\": "; emit_bool(out, def.gpu_driven_enabled); out += ",\n";
     out += "  \"compute_update_enabled\": "; emit_bool(out, def.compute_update_enabled); out += ",\n";
+
+    // attachments (Phase 3, schema v2)
+    out += "  \"attachments\": [";
+    if (!def.attachments.empty()) {
+        out += "\n";
+        for (size_t i = 0; i < def.attachments.size(); ++i) {
+            emit_attachment_def(out, def.attachments[i], 2);
+            if (i + 1 < def.attachments.size()) out += ",";
+            out += "\n";
+        }
+        pad(out, 1);
+    }
+    out += "],\n";
 
     // render_passes
     out += "  \"render_passes\": [";
@@ -903,7 +1119,19 @@ std::string to_pipeline_profile_json(const PipelineProfileDef& def) {
             pad(out, 3); out += "\"sort_mode\":        "; quote(out, sort_mode_to_str(rp.sort_mode)); out += ",\n";
             pad(out, 3); out += "\"filter_mask\":      "; emit_uint(out, rp.filter_mask); out += ",\n";
             pad(out, 3); out += "\"gpu_driven_pass\":  "; emit_bool(out, rp.gpu_driven_pass); out += ",\n";
-            pad(out, 3); out += "\"required_streams\": "; emit_string_array(out, rp.required_streams); out += "\n";
+            pad(out, 3); out += "\"required_streams\": "; emit_string_array(out, rp.required_streams);
+            if (!rp.attachment_ops.empty()) {
+                out += ",\n";
+                pad(out, 3); out += "\"attachment_ops\": [\n";
+                for (size_t j = 0; j < rp.attachment_ops.size(); ++j) {
+                    emit_attachment_ops(out, rp.attachment_ops[j], 4);
+                    if (j + 1 < rp.attachment_ops.size()) out += ",";
+                    out += "\n";
+                }
+                pad(out, 3); out += "]\n";
+            } else {
+                out += "\n";
+            }
             pad(out, 2); out += "}";
             if (i + 1 < def.render_passes.size()) out += ",";
             out += "\n";
