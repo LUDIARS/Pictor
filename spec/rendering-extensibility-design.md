@@ -95,3 +95,26 @@ render_pipeline プラグインに 3 つ目のモード **Timeline** を追加�
 
 - 方針2 を先に行う理由: 系統A↔B 接続の最初の実例になり、方針2 で作る「シェーダ/パイプライン生成経路」を方針1 が再利用できる。
 - **phase 2（系統B のハードコード解体）は全方針で別タスク**。本フェーズは「既存の選択・設定」に限定し、`PostProcessPipeline` / pipeline 生成のハードコード構造の解体は含まない。
+
+## 6. Phase 2 設計 — 系統B のハードコード解体（2026-05-22 起草）
+
+Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegistry` / `build_post_process_config()` / `PipelineProfileDef`）を作った。Phase 2 は固定構造そのものを解体する。3 項目。
+
+### 6.1 項目3 — GPU timestamp relay（最優先・低リスク）
+- **現状**: `GpuTimerManager`（`profiler/gpu_timer.*`）は完全な CPU シミュレーション（`vkCmdWriteTimestamp` / `VkQueryPool` が一切無く、コメントのみ。`value` 常に 0）。Ergo render_pipeline の timing UI（`app.js` の `injectTiming` / `applyTimingMessage`）は配線済み、`index.ts` の relay と Pictor の実装が残。
+- **設計**: `GpuTimerManager` を実 Vulkan 実装へ置換（`VkQueryPool` 作成 / `vkCmdWriteTimestamp` / `vkGetQueryPoolResults` / `timestampPeriod` 取得）。インタフェースと `flight_count` バッファリング枠は現状のまま中身差し替え。計測点は KS 側（`FrameComposer` に per-pass timestamp hook 追加、または `PostProcessPipeline::record` に直挿し）。timing を WS push する小経路を KS 側に新設（`ScreenshotBridge` の HTTP を拡張）。Ergo `index.ts` の `onUpgrade` に `{op:"timing"}` の `broadcast` を 1 行。pass ID は scanner の `PASS_DAG`（scene_hdr / decal_compose / postprocess / hud_load）に合わせる。
+- 規模: 中、リスク: 低〜中（観測のみ、描画構造を壊さない）。
+
+### 6.2 項目2 — mesh 駆動の頂点入力レイアウト
+- **現状**: `ShaderRegistry::build_pipelines` が頂点入力空（`gl_VertexIndex` 前提）。カスタムシェーダがメッシュ頂点バッファを読めない。KS の `SkinnedRenderer::create_pipeline_` は `TexturedSkinnedVertex` をベタ書き。
+- **設計**: 新規 `VertexLayout`（`VertexAttribute[]` + stride、`core/types.h` の `VertexAttribute`/`VertexSemantic` を素材に）+ `→ VkVertexInput*Description` 変換ヘルパー。`CustomShaderDef` に `VertexLayout` フィールド追加。`build_pipelines` の `vi` 構築を実装。空レイアウト（phase 1 の `gl_VertexIndex`）をフォールバックで残す。Visus serializer に頂点レイアウト記述を追加。
+- 規模: 中、リスク: 中（`layout(location=N)` 不一致は validation でしか出ない → まずは「def に明示記述・突き合わせは検証のみ」、SPIR-V reflection は将来）。phase 1 資産の再利用率が最も高い。
+
+### 6.3 項目1 — 任意 post-process pass 挿入（大規模・高リスク）
+- **現状**: `PostProcessPipeline`（851 行）に固定 4-pass（extract→blur H→blur V→grade）・3 render pass・3 ターゲット・2 descriptor レイアウト・固定 push constant。`build_post_process_config()` が `PostProcessKind::UNKNOWN`（SSAO/TAA/FXAA 等）を黙って捨てている＝系統A→B の断点。
+- **設計**: 固定構造を解体し、独立 `PostProcessChainBuilder` + 汎用 `PostProcessPassDef`（シェーダ `ResourceRef` + 入出力ターゲット名 + push constant レイアウト記述）を新設（`RenderPassDef` が雛形）。ターゲットを `std::vector<RenderTarget>` + 名前→index マップ化。subpass dependency を挿入順から動的生成。固定エフェクトは「組み込み pass テンプレート」として汎用チェーンに吸収。`ShaderRegistry::build_pipelines` と `PostProcessPipeline::create_pipelines_` の重複を統合。
+- 規模: 大、リスク: 高（subpass dependency 動的生成の誤りで validation error / GPU hang、TAA history buffer はターゲットライフタイム >1 フレームで現 resize ロジックと非互換、push constant の汎用化）。
+- `build_post_process_chain()`（`PostProcessDef[]` → `PostProcessPassDef[]`）を `build_post_process_config()` と並列に新設する。
+
+### 6.4 Phase 2 実装順序
+**3 → 2 → 1**（観測 → 局所改修 → 大規模解体）。項目3 を先に行うと項目1 の解体の影響（pass 数増減によるフレーム時間）をタイムラインで可視化しながら進められる。項目2 が項目1 の pipeline ビルダ統合の前提整理になる。
