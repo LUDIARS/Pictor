@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "profile_name": "MobileLow",
+  "rendering_path": "FORWARD",
+  "max_lights": 8,
+  "msaa_samples": 0,
+  "gpu_driven_enabled": false,
+  "compute_update_enabled": false,
+  "render_passes": [
+    { "pass_name": "OpaquePass",      "pass_type": "OPAQUE",       "sort_mode": "FRONT_TO_BACK", "required_streams": ["transforms", "shaderKeys"] },
+    { "pass_name": "TransparentPass", "pass_type": "TRANSPARENT",  "sort_mode": "BACK_TO_FRONT", "required_streams": ["transforms", "sortKeys"] },
+    { "pass_name": "PostProcess",     "pass_type": "POST_PROCESS", "sort_mode": "NONE" }
+  ],
+  "post_process": [
+    { "name": "Tonemapping", "enabled": true }
+  ],
+  "shadow": {
+    "cascade_count": 0,
+    "resolution": 0,
+    "filter_mode": "NONE"
+  },
+  "gi": {
+    "shadow_enabled": false,
+    "ssao_enabled": false,
+    "gi_probes_enabled": false
+  },
+  "memory": {
+    "frame_allocator_size": 1048576,
+    "flight_count": 2,
+    "gpu": {
+      "mesh_pool_size": 33554432,
+      "ssbo_pool_size": 16777216,
+      "instance_buffer_size": 4194304,
+      "staging_buffer_size": 4194304
+    }
+  },
+  "gpu_driven": {
+    "compute_update": false
+  },
+  "update": {
+    "chunk_size": 4096,
+    "nt_store_enabled": false
+  },
+  "profiler": {
+    "enabled": true,
+    "overlay_mode": "MINIMAL",
+    "max_queries": 16
+  }
+}

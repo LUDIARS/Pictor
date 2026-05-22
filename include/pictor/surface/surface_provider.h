@@ -27,8 +27,9 @@ struct NativeWindowHandle {
         Xlib    = 2,   // VK_KHR_xlib_surface
         Xcb     = 3,   // VK_KHR_xcb_surface
         Wayland = 4,   // VK_KHR_wayland_surface
-        Cocoa   = 5,   // VK_MVK_macos_surface / VK_EXT_metal_surface
+        Cocoa   = 5,   // VK_MVK_macos_surface / VK_EXT_metal_surface (macOS)
         Android = 6,   // VK_KHR_android_surface
+        iOS     = 7,   // VK_EXT_metal_surface (MoltenVK, CAMetalLayer)
     };
 
     Type type = Type::None;
@@ -67,6 +68,11 @@ struct NativeWindowHandle {
         void* native_window = nullptr; // ANativeWindow*
     };
 
+    // iOS / Metal (MoltenVK)
+    struct IOS {
+        void* metal_layer = nullptr;   // CAMetalLayer*
+    };
+
     union {
         Win32   win32;
         Xlib    xlib;
@@ -74,6 +80,7 @@ struct NativeWindowHandle {
         Wayland wayland;
         Cocoa   cocoa;
         Android android;
+        IOS     ios;
     };
 
     NativeWindowHandle() : type(Type::None) { win32 = {}; }

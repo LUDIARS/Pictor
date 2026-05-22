@@ -108,6 +108,42 @@ public:
     /// Pick an artboard by index. -1 selects the default artboard.
     bool set_artboard(int index = -1);
 
+    /// 現在選択中の artboard の native サイズ (`.riv` にベイクされた幅・高さ) を返す。
+    /// 呼び出し側がレンダリング先のアスペクト比 / quad 形状を決めるのに使う。
+    /// artboard 未選択時は (0, 0) を返し false。
+    bool artboard_size(float& width, float& height) const;
+
+    // ─── Introspection (Rive 内部を Web UI 等が覗くため) ─────────
+    // 全て読み取り専用。 状態を変えない。 file/artboard 未ロード時は 0 / "" を返す。
+
+    int         file_artboard_count() const;
+    std::string file_artboard_name(int index) const;
+
+    /// 現在選択中の artboard の SM / animation 一覧。
+    int         current_state_machine_count() const;
+    std::string current_state_machine_name(int index) const;
+    int         current_animation_count() const;
+    std::string current_animation_name(int index) const;
+    /// アニメーション instance を一度だけ作って duration を取り出す (秒)。
+    /// instance はその場で delete するので外部状態に影響しない。
+    float       current_animation_duration(int index) const;
+
+    /// 今 scene として何が選ばれているか:
+    ///   "none" / "state_machine" / "animation"
+    std::string current_scene_kind() const;
+
+    // ─── State Machine input 操作 (scene が SM の時のみ有効) ─────
+
+    int         sm_input_count() const;
+    std::string sm_input_name(int index) const;
+    /// "bool" / "number" / "trigger" / "" (unknown)
+    std::string sm_input_kind(int index) const;
+    /// 値取得 (bool は 0/1、 number はそのまま、 trigger は常に 0)。
+    double      sm_input_get(int index) const;
+    bool        sm_input_set_bool   (const std::string& name, bool value);
+    bool        sm_input_set_number (const std::string& name, double value);
+    bool        sm_input_fire_trigger(const std::string& name);
+
     /// Pick a state machine. Use `set_state_machine(-1)` to disable and
     /// fall back to an animation.
     bool set_state_machine(int index);

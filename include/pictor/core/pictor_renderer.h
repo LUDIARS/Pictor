@@ -20,7 +20,6 @@
 #include "pictor/data/data_query_api.h"
 #include "pictor/gi/gi_lighting_system.h"
 #include "pictor/gi/gi_bake.h"
-#include "pictor/postprocess/postprocess_pipeline.h"
 #include "pictor/animation/animation_system.h"
 #include <memory>
 
@@ -102,6 +101,20 @@ public:
     bool set_profile(const std::string& name);
     void register_custom_profile(const PipelineProfileDef& def);
     const std::string& current_profile_name() const;
+
+    /// Load a pipeline profile from an external JSON file (系統A external
+    /// config, see pipeline_profile_serializer.h), register it, and make it
+    /// the active profile — re-running apply_profile() so the RenderPassScheduler,
+    /// GI system, GPU-driven pipeline and update scheduler all reconfigure.
+    /// This is the runtime-reload seam for tooling (e.g. the Ergo-web editor).
+    /// Returns false on I/O or parse error; `error` (optional) carries why.
+    bool load_profile_from_file(const std::string& path,
+                                std::string*       error = nullptr);
+
+    /// Re-apply the currently active profile after it has been mutated in
+    /// place (e.g. re-registered via register_custom_profile with the same
+    /// name). Reconfigures all downstream subsystems. No-op if uninitialized.
+    void reload_active_profile();
 
     // ---- Mobile Lifecycle ----
     //
@@ -219,14 +232,10 @@ public:
     /// Access bake system
     GIBakeSystem* bake_system() { return bake_system_.get(); }
 
-    // ---- Post-Process Pipeline ----
-
-    /// Access the post-process pipeline
-    PostProcessPipeline& post_process() { return *postprocess_; }
-    const PostProcessPipeline& post_process() const { return *postprocess_; }
-
-    /// Set full post-process configuration
-    void set_postprocess_config(const PostProcessConfig& config);
+    // ---- Post-Process ----
+    // host-driven の `pictor::PostProcessPipeline` を使う。 ホストがシーンを
+    // HDR ターゲットへ描き、 自前で initialize_vulkan / record する
+    // (KuzuSurvivors WorldRenderer 参照)。 PictorRenderer は関与しない。
 
     // ---- Data Export (§13.7) ----
 
@@ -267,7 +276,6 @@ private:
     std::unique_ptr<DataHandler>            data_handler_;
     std::unique_ptr<GILightingSystem>       gi_system_;
     std::unique_ptr<GIBakeSystem>           bake_system_;
-    std::unique_ptr<PostProcessPipeline>    postprocess_;
     std::unique_ptr<AnimationSystem>        animation_system_;
 
     RendererConfig config_;

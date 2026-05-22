@@ -227,6 +227,13 @@ struct AnimationClipDescriptor {
     float       sample_rate  = 30.0f;      // Original sample rate (for reference)
     WrapMode    wrap_mode    = WrapMode::LOOP;
     std::vector<AnimationChannel> channels;
+
+    // -- Montage extension (optional) --
+    // bone_names[i] is the source-skeleton bone name that channels[i].target_index
+    // refers to. When non-empty, MontagePlayer can compute a per-target
+    // skeleton remap so the clip plays on any rig with matching bone names.
+    // Leave empty for legacy clips — target_index is used directly.
+    std::vector<std::string> bone_names;
 };
 
 // ============================================================
@@ -425,6 +432,12 @@ struct AnimationPlayback {
     WrapMode            wrap   = WrapMode::LOOP;
     AnimBlendMode       blend  = AnimBlendMode::OVERRIDE;
     bool                playing = true;
+
+    /// Montage extension: clip の channel index → 再生先 skeleton の bone index に
+    /// マップする optional テーブル。 nullptr / 空ベクトル時は target_index 直叩き
+    /// (legacy behavior)。 MontagePlayer が `(clip, skel)` 単位でキャッシュした
+    /// remap を渡す。
+    const std::vector<int>* channel_remap = nullptr;
 };
 
 // ============================================================

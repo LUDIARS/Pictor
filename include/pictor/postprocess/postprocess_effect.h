@@ -1,6 +1,9 @@
 ﻿#pragma once
 
-#include "pictor/core/types.h"
+/// ポストプロセスの設定構造体。 実 Vulkan の実行は `PostProcessPipeline`
+/// (host-driven) が担う。 旧 `PostProcessEffect` 抽象クラスと per-effect
+/// クラス群 (BloomEffect 等) は実装パイプラインへ統合され撤去済み。
+
 #include <string>
 #include <cstdint>
 
@@ -71,6 +74,25 @@ struct ToneMappingConfig {
     float             saturation  = 1.0f; ///< Post-tonemap saturation (1.0 = unchanged)
 };
 
+/// Vignette configuration — darkens (or tints) screen edges.
+struct VignetteConfig {
+    bool   enabled   = true;
+    float  intensity = 0.35f;          ///< 0 = none, 1 = strong edge darkening
+    float  radius    = 0.75f;          ///< Normalized distance where falloff starts
+    float  softness  = 0.45f;          ///< Falloff width (larger = smoother)
+    float  color[3]  = {0.0f, 0.0f, 0.0f}; ///< Edge tint (usually black)
+};
+
+/// Color-grading configuration — applies a neutral LUT strip (PNG).
+/// The strip is a `lut_size` tall by `lut_size*lut_size` wide RGBA8 image
+/// (e.g. 16x256), the standard Unity / industry "neutral LUT" layout.
+struct ColorGradingConfig {
+    bool        enabled       = false;
+    std::string lut_path;              ///< PNG LUT strip; empty disables the LUT
+    float       lut_intensity = 1.0f;  ///< Blend 0..1 between original and graded
+    uint32_t    lut_size      = 16;    ///< LUT cube edge (strip = size x size*size)
+};
+
 /// Aggregated post-process stack configuration.
 /// Determines which effects are active and their parameters.
 struct PostProcessConfig {
@@ -79,43 +101,8 @@ struct PostProcessConfig {
     DepthOfFieldConfig   depth_of_field;
     GaussianBlurConfig   gaussian_blur;
     ToneMappingConfig    tone_mapping;
-};
-
-/// Abstract base class for a single post-process effect.
-///
-/// Each effect reads from an input framebuffer (HDR color + depth)
-/// and writes to an output framebuffer. Effects are chained by the
-/// PostProcessPipeline in stack order.
-class PostProcessEffect {
-public:
-    virtual ~PostProcessEffect() = default;
-
-    /// Human-readable name (e.g. "Bloom", "DoF")
-    virtual const char* name() const = 0;
-
-    /// Whether this effect is currently active
-    virtual bool is_enabled() const = 0;
-    virtual void set_enabled(bool enabled) = 0;
-
-    /// Initialize GPU resources (called once at pipeline setup)
-    virtual void initialize(uint32_t width, uint32_t height) = 0;
-
-    /// Resize internal resources on viewport change
-    virtual void resize(uint32_t width, uint32_t height) = 0;
-
-    /// Release GPU resources
-    virtual void shutdown() = 0;
-
-    /// Execute the effect.
-    ///
-    /// @param input_color   Handle to the HDR color texture from the previous stage
-    /// @param input_depth   Handle to the depth buffer (linear depth)
-    /// @param output_color  Handle to the output render target
-    /// @param delta_time    Frame delta time (for temporal effects)
-    virtual void execute(TextureHandle input_color,
-                         TextureHandle input_depth,
-                         TextureHandle output_color,
-                         float delta_time) = 0;
+    VignetteConfig       vignette;
+    ColorGradingConfig   color_grading;
 };
 
 } // namespace pictor
