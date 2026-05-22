@@ -8,6 +8,8 @@
 
 #ifdef PICTOR_HAS_VULKAN
 #include "pictor/surface/vulkan_context.h"
+#include "pictor/shader/vertex_layout.h"
+#include "pictor/shader/graphics_pipeline_builder.h"
 #endif
 
 namespace pictor {
@@ -36,18 +38,17 @@ bool is_srgb_format(VkFormat f) {
             return false;
     }
 }
-
-struct ExtractPC { float threshold, soft_threshold, pad0, pad1; };
-struct BlurPC    { float dir_x, dir_y, radius, pad0; };
-struct GradePC {
-    float    bloom_intensity;
-    uint32_t tonemap_op;
-    float    exposure, gamma, white_point, saturation;
-    float    vignette_intensity, vignette_radius, vignette_softness;
-    float    lut_intensity, lut_size;
-    float    vig_r, vig_g, vig_b;
-};
 } // namespace
+
+VkImageView PostProcessPipeline::scene_color_view() const {
+    if (scene_index_ < 0) return VK_NULL_HANDLE;
+    return targets_[static_cast<size_t>(scene_index_)].view;
+}
+
+VkImageView PostProcessPipeline::scene_depth_view() const {
+    if (scene_index_ < 0) return VK_NULL_HANDLE;
+    return targets_[static_cast<size_t>(scene_index_)].depth_view;
+}
 
 uint32_t PostProcessPipeline::find_memory_type_(uint32_t filter,
                                                 VkMemoryPropertyFlags props) const {
@@ -58,8 +59,8 @@ uint32_t PostProcessPipeline::find_memory_type_(uint32_t filter,
             (mp.memoryTypes[i].propertyFlags & props) == props)
             return i;
     }
-    // 失敗時は UINT32_MAX を返す。 create_rt_ 等は直後の vkAllocateMemory 失敗で
-    // 検知できる (0 を返すと誤ったメモリタイプに静かにバインドしてしまう)。
+    // 失敗時は UINT32_MAX を返す。 直後の vkAllocateMemory 失敗で検知できる
+    // (0 を返すと誤ったメモリタイプに静かにバインドしてしまう)。
     return UINT32_MAX;
 }
 
@@ -84,129 +85,180 @@ VkShaderModule PostProcessPipeline::load_shader_(const std::string& path) const 
     return m;
 }
 
-bool PostProcessPipeline::create_render_passes_(VkFormat output_format) {
-    auto make_pass = [&](VkFormat fmt, VkAttachmentLoadOp load,
-                         VkImageLayout final_layout, VkRenderPass& out) -> bool {
-        VkAttachmentDescription att{};
-        att.format         = fmt;
-        att.samples        = VK_SAMPLE_COUNT_1_BIT;
-        att.loadOp         = load;
-        att.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-        att.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        att.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-        att.finalLayout    = final_layout;
+// ── scene render pass: color (RGBA16F) + depth (D32_SFLOAT), CLEAR ──────────
+//    旧実装の rp_scene_ と同一。 DecalSystem 等が color/depth をサンプルする。
+bool PostProcessPipeline::create_scene_render_pass_() {
+    VkAttachmentDescription atts[2]{};
+    atts[0].format         = kHdrFormat;
+    atts[0].samples        = VK_SAMPLE_COUNT_1_BIT;
+    atts[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    atts[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    atts[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    atts[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    atts[1].format         = kDepthFormat;
+    atts[1].samples        = VK_SAMPLE_COUNT_1_BIT;
+    atts[1].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    atts[1].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    atts[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    atts[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-        VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkSubpassDescription sub{};
-        sub.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        sub.colorAttachmentCount = 1;
-        sub.pColorAttachments    = &ref;
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount    = 1;
+    sub.pColorAttachments       = &colorRef;
+    sub.pDepthStencilAttachment = &depthRef;
 
-        VkSubpassDependency deps[2]{};
-        deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
-        deps[0].dstSubpass    = 0;
-        deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        deps[1].srcSubpass    = 0;
-        deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
-        deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                                VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass    = 0;
+    deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass    = 0;
+    deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-        VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        rp.attachmentCount = 1;
-        rp.pAttachments    = &att;
-        rp.subpassCount    = 1;
-        rp.pSubpasses      = &sub;
-        rp.dependencyCount = 2;
-        rp.pDependencies   = deps;
-        return vkCreateRenderPass(device_, &rp, nullptr, &out) == VK_SUCCESS;
-    };
-
-    // rp_scene_ は color (RGBA16F) + depth (D32_SFLOAT) の 2 アタッチメント。
-    // depth は CLEAR/STORE し、 finalLayout を READ_ONLY にして DecalSystem 等が
-    // テクスチャとしてサンプルできるようにする。
-    {
-        VkAttachmentDescription atts[2]{};
-        atts[0].format         = kHdrFormat;
-        atts[0].samples        = VK_SAMPLE_COUNT_1_BIT;
-        atts[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        atts[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-        atts[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        atts[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        atts[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-        atts[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        atts[1].format         = kDepthFormat;
-        atts[1].samples        = VK_SAMPLE_COUNT_1_BIT;
-        atts[1].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        atts[1].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-        atts[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        atts[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        atts[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-        atts[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-
-        VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-        VkSubpassDescription sub{};
-        sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        sub.colorAttachmentCount    = 1;
-        sub.pColorAttachments       = &colorRef;
-        sub.pDepthStencilAttachment = &depthRef;
-
-        VkSubpassDependency deps[2]{};
-        deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
-        deps[0].dstSubpass    = 0;
-        deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        deps[1].srcSubpass    = 0;
-        deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
-        deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        rp.attachmentCount = 2;
-        rp.pAttachments    = atts;
-        rp.subpassCount    = 1;
-        rp.pSubpasses      = &sub;
-        rp.dependencyCount = 2;
-        rp.pDependencies   = deps;
-        if (vkCreateRenderPass(device_, &rp, nullptr, &rp_scene_) != VK_SUCCESS)
-            return false;
-    }
-    if (!make_pass(kHdrFormat, VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, rp_inter_))
-        return false;
-    // Output pass leaves the image in COLOR_ATTACHMENT_OPTIMAL so the host
-    // can draw a HUD on top with a LOAD render pass before presenting.
-    if (!make_pass(output_format, VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, rp_output_))
-        return false;
-    return true;
+    VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    rp.attachmentCount = 2;
+    rp.pAttachments    = atts;
+    rp.subpassCount    = 1;
+    rp.pSubpasses      = &sub;
+    rp.dependencyCount = 2;
+    rp.pDependencies   = deps;
+    return vkCreateRenderPass(device_, &rp, nullptr, &rp_scene_) == VK_SUCCESS;
 }
 
-bool PostProcessPipeline::create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPass rp,
-                                     bool with_depth) {
+// ── 汎用 intermediate render pass: RGBA16F, DONT_CARE → SHADER_READ_ONLY ────
+//    全ての「HDR 中間ターゲットへ書く pass」 が共有する。
+//    subpass dependency は「直前 pass の fragment-read / color-write を
+//    今 pass の color-write がブロック」 + 「今 pass の color-write を
+//    次 pass の fragment-read / color-read がブロック」 の 2 本。
+//    pass を何枚挟んでも、 各 pass がこの EXTERNAL↔0 依存を持つため
+//    挿入順どおりの read-after-write / write-after-read が成立する。
+VkRenderPass PostProcessPipeline::get_or_create_inter_render_pass_() {
+    if (rp_inter_ != VK_NULL_HANDLE) return rp_inter_;
+
+    VkAttachmentDescription att{};
+    att.format         = kHdrFormat;
+    att.samples        = VK_SAMPLE_COUNT_1_BIT;
+    att.loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    att.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    att.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 1;
+    sub.pColorAttachments    = &ref;
+
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass    = 0;
+    deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass    = 0;
+    deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+
+    VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    rp.attachmentCount = 1;
+    rp.pAttachments    = &att;
+    rp.subpassCount    = 1;
+    rp.pSubpasses      = &sub;
+    rp.dependencyCount = 2;
+    rp.pDependencies   = deps;
+    if (vkCreateRenderPass(device_, &rp, nullptr, &rp_inter_) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return rp_inter_;
+}
+
+// ── 出力 render pass: swapchain format, DONT_CARE → COLOR_ATTACHMENT ────────
+//    出力 image を COLOR_ATTACHMENT_OPTIMAL のまま残し、 ホストが HUD を
+//    LOAD パスで重ねられるようにする。 旧実装の rp_output_ と同一。
+VkRenderPass PostProcessPipeline::get_or_create_output_render_pass_(VkFormat fmt) {
+    if (rp_output_ != VK_NULL_HANDLE) return rp_output_;
+
+    VkAttachmentDescription att{};
+    att.format         = fmt;
+    att.samples        = VK_SAMPLE_COUNT_1_BIT;
+    att.loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    att.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    att.finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 1;
+    sub.pColorAttachments    = &ref;
+
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass    = 0;
+    deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass    = 0;
+    deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+
+    VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    rp.attachmentCount = 1;
+    rp.pAttachments    = &att;
+    rp.subpassCount    = 1;
+    rp.pSubpasses      = &sub;
+    rp.dependencyCount = 2;
+    rp.pDependencies   = deps;
+    if (vkCreateRenderPass(device_, &rp, nullptr, &rp_output_) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return rp_output_;
+}
+
+bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
+                                         bool with_depth) {
+    rt.fb_render_pass = rp;
+    rt.has_depth      = with_depth;
+
     // ── color image ──
     VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ic.imageType   = VK_IMAGE_TYPE_2D;
-    ic.format      = fmt;
+    ic.format      = kHdrFormat;
     ic.extent      = {extent_.width, extent_.height, 1};
     ic.mipLevels   = 1;
     ic.arrayLayers = 1;
@@ -229,11 +281,11 @@ bool PostProcessPipeline::create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPas
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image    = rt.image;
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format   = fmt;
+    vi.format   = kHdrFormat;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     if (vkCreateImageView(device_, &vi, nullptr, &rt.view) != VK_SUCCESS) return false;
 
-    // ── depth image (scene_ のみ) ──
+    // ── depth image (scene のみ) ──
     if (with_depth) {
         VkImageCreateInfo dic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         dic.imageType   = VK_IMAGE_TYPE_2D;
@@ -279,11 +331,30 @@ bool PostProcessPipeline::create_rt_(RenderTarget& rt, VkFormat fmt, VkRenderPas
     return vkCreateFramebuffer(device_, &fi, nullptr, &rt.fb) == VK_SUCCESS;
 }
 
+// scene + chain の中間ターゲットを名前付きで確保する。
 bool PostProcessPipeline::create_targets_() {
-    if (!create_rt_(scene_, kHdrFormat, rp_scene_, /*with_depth=*/true))  return false;
-    if (!create_rt_(ping_,  kHdrFormat, rp_inter_, /*with_depth=*/false)) return false;
-    if (!create_rt_(pong_,  kHdrFormat, rp_inter_, /*with_depth=*/false)) return false;
-    fb_scene_ = scene_.fb;
+    targets_.clear();
+    target_index_.clear();
+
+    VkRenderPass rp_inter = get_or_create_inter_render_pass_();
+    if (rp_inter == VK_NULL_HANDLE) return false;
+
+    // index 0: scene HDR ターゲット (color + depth, scene render pass)。
+    {
+        RenderTarget scene;
+        if (!create_target_(scene, rp_scene_, /*with_depth=*/true)) return false;
+        scene_index_ = static_cast<int32_t>(targets_.size());
+        target_index_[kPostProcessSceneTarget] = scene_index_;
+        targets_.push_back(scene);
+        fb_scene_ = scene.fb;
+    }
+    // chain が宣言する中間ターゲット (ping / pong …)。 depth 無し。
+    for (const auto& name : chain_.intermediate_names) {
+        RenderTarget rt;
+        if (!create_target_(rt, rp_inter, /*with_depth=*/false)) return false;
+        target_index_[name] = static_cast<int32_t>(targets_.size());
+        targets_.push_back(rt);
+    }
     return true;
 }
 
@@ -396,187 +467,162 @@ bool PostProcessPipeline::upload_lut_(const unsigned char* rgba, int w, int h) {
     return true;
 }
 
-bool PostProcessPipeline::create_descriptors_() {
-    VkDescriptorSetLayoutBinding b{};
-    b.binding         = 0;
-    b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    b.descriptorCount = 1;
-    b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+// input 数ぶんの COMBINED_IMAGE_SAMPLER binding を持つ descriptor set layout。
+// 組み込みチェーンは input 数 1 (extract/blur) と 3 (grade) を使う。
+VkDescriptorSetLayout PostProcessPipeline::get_or_create_dsl_(uint32_t input_count) {
+    auto it = dsl_by_input_count_.find(input_count);
+    if (it != dsl_by_input_count_.end()) return it->second;
 
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.bindingCount = 1;
-    li.pBindings    = &b;
-    if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &dsl_single_) != VK_SUCCESS)
-        return false;
-
-    VkDescriptorSetLayoutBinding gb[3]{};
-    for (uint32_t i = 0; i < 3; ++i) {
-        gb[i].binding         = i;
-        gb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        gb[i].descriptorCount = 1;
-        gb[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::vector<VkDescriptorSetLayoutBinding> binds(input_count);
+    for (uint32_t i = 0; i < input_count; ++i) {
+        binds[i].binding         = i;
+        binds[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binds[i].descriptorCount = 1;
+        binds[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    li.bindingCount = 3;
-    li.pBindings    = gb;
-    if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &dsl_grade_) != VK_SUCCESS)
-        return false;
+    VkDescriptorSetLayoutCreateInfo li{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.bindingCount = input_count;
+    li.pBindings    = input_count ? binds.data() : nullptr;
+    VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
+    if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &dsl) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    dsl_by_input_count_[input_count] = dsl;
+    return dsl;
+}
 
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
+// (input 数, push サイズ) の組ごとに pipeline layout をキャッシュする。
+VkPipelineLayout PostProcessPipeline::get_or_create_layout_(uint32_t input_count,
+                                                            uint32_t push_size) {
+    const uint64_t key = (static_cast<uint64_t>(input_count) << 32) | push_size;
+    for (const auto& kv : layout_cache_)
+        if (kv.first == key) return kv.second;
+
+    VkDescriptorSetLayout dsl = get_or_create_dsl_(input_count);
+    if (dsl == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+
+    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts    = &dsl;
+    VkPushConstantRange pr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, push_size};
+    if (push_size > 0) {
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges    = &pr;
+    }
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    if (vkCreatePipelineLayout(device_, &pl, nullptr, &layout) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    layout_cache_.emplace_back(key, layout);
+    return layout;
+}
+
+// chain の各 pass ぶんに 1 つ descriptor set を確保する。
+bool PostProcessPipeline::create_descriptors_() {
+    uint32_t total_images = 0;
+    for (const auto& cp : compiled_) total_images += cp.input_count;
+    if (total_images == 0) total_images = 1;  // pool は 0 不可
+
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, total_images};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.maxSets       = 4;
+    pi.maxSets       = static_cast<uint32_t>(compiled_.size() ? compiled_.size() : 1);
     pi.poolSizeCount = 1;
     pi.pPoolSizes    = &ps;
     if (vkCreateDescriptorPool(device_, &pi, nullptr, &desc_pool_) != VK_SUCCESS)
         return false;
 
-    auto alloc = [&](VkDescriptorSetLayout layout, VkDescriptorSet& out) {
-        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    for (auto& cp : compiled_) {
+        VkDescriptorSetLayout dsl = get_or_create_dsl_(cp.input_count);
+        if (dsl == VK_NULL_HANDLE) return false;
+        VkDescriptorSetAllocateInfo ai{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         ai.descriptorPool     = desc_pool_;
         ai.descriptorSetCount = 1;
-        ai.pSetLayouts        = &layout;
-        return vkAllocateDescriptorSets(device_, &ai, &out) == VK_SUCCESS;
-    };
-    if (!alloc(dsl_single_, ds_extract_)) return false;
-    if (!alloc(dsl_single_, ds_blur_h_))  return false;
-    if (!alloc(dsl_single_, ds_blur_v_))  return false;
-    if (!alloc(dsl_grade_,  ds_grade_))   return false;
-
+        ai.pSetLayouts        = &dsl;
+        if (vkAllocateDescriptorSets(device_, &ai, &cp.desc_set) != VK_SUCCESS)
+            return false;
+    }
     write_descriptor_sets_();
     return true;
 }
 
+// pass ごとの入力 image view を descriptor set へ書く。
+// resize 時 (view 作り直し時) にも再度呼ぶ — set 自体は再 alloc 不要。
 void PostProcessPipeline::write_descriptor_sets_() {
-    // ターゲットの image view を descriptor set に書く。 resize 時にも
-    // (view が作り直されるので) 再度呼ぶ。 set 自体は再 alloc 不要。
-    auto write1 = [&](VkDescriptorSet set, uint32_t binding, VkImageView view) {
-        VkDescriptorImageInfo ii{};
-        ii.sampler     = sampler_;
-        ii.imageView   = view;
-        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w.dstSet          = set;
-        w.dstBinding      = binding;
-        w.descriptorCount = 1;
-        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w.pImageInfo      = &ii;
-        vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
-    };
-    write1(ds_extract_, 0, scene_.view);
-    write1(ds_blur_h_,  0, ping_.view);
-    write1(ds_blur_v_,  0, pong_.view);
-    write1(ds_grade_,   0, scene_.view);  // scene HDR
-    write1(ds_grade_,   1, ping_.view);   // bloom result (after blur V)
-    write1(ds_grade_,   2, lut_.view);    // LUT strip
+    for (const auto& cp : compiled_) {
+        if (cp.desc_set == VK_NULL_HANDLE) continue;
+        std::vector<VkDescriptorImageInfo> infos(cp.input_count);
+        std::vector<VkWriteDescriptorSet>  writes(cp.input_count);
+        for (uint32_t i = 0; i < cp.input_count; ++i) {
+            // 入力 index < 0 のときは LUT (専用 Texture)。 それ以外は targets_。
+            VkImageView view = VK_NULL_HANDLE;
+            const int32_t idx = cp.input_indices[i];
+            if (idx >= 0) view = targets_[static_cast<size_t>(idx)].view;
+            else          view = lut_.view;
+
+            infos[i].sampler     = sampler_;
+            infos[i].imageView   = view;
+            infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            writes[i] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            writes[i].dstSet          = cp.desc_set;
+            writes[i].dstBinding      = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo      = &infos[i];
+        }
+        if (!writes.empty())
+            vkUpdateDescriptorSets(device_,
+                                   static_cast<uint32_t>(writes.size()),
+                                   writes.data(), 0, nullptr);
+    }
 }
 
-bool PostProcessPipeline::create_pipelines_(const std::string& shader_dir) {
-    VkShaderModule vs = load_shader_(shader_dir + "/fullscreen_quad.vert.spv");
-    if (!vs) return false;
+// chain の各 pass ぶんに graphics pipeline を生成する。
+// graphics pipeline 生成は共通ヘルパー `build_graphics_pipeline()` に委譲
+// する (§6.3 項目6 — ShaderRegistry との重複統合)。 post-process pass は
+// fullscreen triangle なのでカリング無し / 深度テスト無し / 頂点入力空
+// (gl_VertexIndex 駆動)。
+bool PostProcessPipeline::create_pipelines_() {
+    bool all_ok = true;
+    for (auto& cp : compiled_) {
+        // chain の対応する pass を名前で引く。
+        const PostProcessPassDef* def = nullptr;
+        for (const auto& p : chain_.passes)
+            if (p.name == cp.name) { def = &p; break; }
+        if (!def) { all_ok = false; continue; }
 
-    auto make_pipeline = [&](const std::string& frag_spv, VkRenderPass rp,
-                             VkPipelineLayout layout, VkPipeline& out) -> bool {
-        VkShaderModule fs = load_shader_(shader_dir + "/" + frag_spv);
-        if (!fs) return false;
+        VkShaderModule vs = load_shader_(def->vert_spv);
+        VkShaderModule fs = VK_NULL_HANDLE;
+        if (vs) fs = load_shader_(def->frag_spv);
+        if (!vs || !fs) {
+            if (vs) vkDestroyShaderModule(device_, vs, nullptr);
+            std::fprintf(stderr, "[postprocess] pass '%s': shader load failed\n",
+                         cp.name.c_str());
+            all_ok = false;
+            continue;
+        }
 
-        VkPipelineShaderStageCreateInfo stages[2]{};
-        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-        stages[0].module = vs;
-        stages[0].pName  = "main";
-        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[1].module = fs;
-        stages[1].pName  = "main";
+        GraphicsPipelineDesc gd;
+        gd.vert        = vs;
+        gd.frag        = fs;
+        gd.render_pass = cp.render_pass;
+        gd.subpass     = 0;
+        gd.layout      = cp.layout;
+        gd.cull_back   = false;  // fullscreen triangle — カリング無し
+        gd.depth_test  = false;  // post-process — 深度テスト無し
+        // vertex_layout 既定 (空) — 頂点入力空 = gl_VertexIndex 駆動。
 
-        VkPipelineVertexInputStateCreateInfo vi{
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineInputAssemblyStateCreateInfo ia{
-            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineViewportStateCreateInfo vp{
-            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        vp.viewportCount = 1;
-        vp.scissorCount  = 1;
-
-        VkPipelineRasterizationStateCreateInfo rs{
-            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode    = VK_CULL_MODE_NONE;
-        rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        rs.lineWidth   = 1.0f;
-
-        VkPipelineMultisampleStateCreateInfo ms{
-            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        VkPipelineDepthStencilStateCreateInfo dss{
-            VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-
-        VkPipelineColorBlendAttachmentState ba{};
-        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        ba.blendEnable = VK_FALSE;
-        VkPipelineColorBlendStateCreateInfo cb{
-            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        cb.attachmentCount = 1;
-        cb.pAttachments    = &ba;
-
-        VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dy{
-            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        dy.dynamicStateCount = 2;
-        dy.pDynamicStates    = dyn;
-
-        VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        gp.stageCount          = 2;
-        gp.pStages             = stages;
-        gp.pVertexInputState   = &vi;
-        gp.pInputAssemblyState = &ia;
-        gp.pViewportState      = &vp;
-        gp.pRasterizationState = &rs;
-        gp.pMultisampleState   = &ms;
-        gp.pDepthStencilState  = &dss;
-        gp.pColorBlendState    = &cb;
-        gp.pDynamicState       = &dy;
-        gp.layout              = layout;
-        gp.renderPass          = rp;
-        gp.subpass             = 0;
-        VkResult r = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp,
-                                               nullptr, &out);
+        const bool ok = build_graphics_pipeline(device_, gd, cp.pipeline);
+        vkDestroyShaderModule(device_, vs, nullptr);
         vkDestroyShaderModule(device_, fs, nullptr);
-        return r == VK_SUCCESS;
-    };
-
-    // single-texture layout (extract / blur), 16-byte fragment push range
-    VkPushConstantRange pr_single{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
-    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pl.setLayoutCount         = 1;
-    pl.pSetLayouts            = &dsl_single_;
-    pl.pushConstantRangeCount = 1;
-    pl.pPushConstantRanges    = &pr_single;
-    if (vkCreatePipelineLayout(device_, &pl, nullptr, &pl_single_) != VK_SUCCESS) {
-        vkDestroyShaderModule(device_, vs, nullptr);
-        return false;
+        if (!ok) {
+            std::fprintf(stderr, "[postprocess] pass '%s': pipeline create failed\n",
+                         cp.name.c_str());
+            cp.pipeline = VK_NULL_HANDLE;
+            all_ok = false;
+        }
     }
-
-    // grade layout (3 textures), 56-byte fragment push range
-    VkPushConstantRange pr_grade{VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                 static_cast<uint32_t>(sizeof(GradePC))};
-    pl.setLayoutCount         = 1;
-    pl.pSetLayouts            = &dsl_grade_;
-    pl.pushConstantRangeCount = 1;
-    pl.pPushConstantRanges    = &pr_grade;
-    if (vkCreatePipelineLayout(device_, &pl, nullptr, &pl_grade_) != VK_SUCCESS) {
-        vkDestroyShaderModule(device_, vs, nullptr);
-        return false;
-    }
-
-    bool ok = make_pipeline("bloom_extract.frag.spv", rp_inter_,  pl_single_, pipe_extract_)
-           && make_pipeline("bloom_blur.frag.spv",    rp_inter_,  pl_single_, pipe_blur_)
-           && make_pipeline("color_grade.frag.spv",   rp_output_, pl_grade_,  pipe_grade_);
-    vkDestroyShaderModule(device_, vs, nullptr);
-    return ok;
+    return all_ok;
 }
 
 bool PostProcessPipeline::create_output_framebuffers_(
@@ -596,20 +642,124 @@ bool PostProcessPipeline::create_output_framebuffers_(
     return true;
 }
 
-bool PostProcessPipeline::initialize_vulkan(VulkanContext& vk,
-                                            const std::string& shader_dir,
-                                            uint32_t width, uint32_t height,
-                                            VkFormat output_format,
-                                            const std::vector<VkImageView>& output_views,
-                                            const PostProcessConfig& config,
-                                            const unsigned char* lut_rgba,
-                                            int lut_w, int lut_h) {
+int32_t PostProcessPipeline::resolve_target_(const std::string& name) const {
+    if (name == kPostProcessOutputTarget) return -1;  // swapchain
+    auto it = target_index_.find(name);
+    if (it != target_index_.end()) return it->second;
+    return -2;  // 不明 (LUT は呼び出し側が個別解決)
+}
+
+// chain_ から CompiledPass 列 + render pass / target / descriptor / pipeline を
+// 構築する。 初期化 / resize の共通ボディ。
+bool PostProcessPipeline::build_from_chain_(
+        VkFormat output_format,
+        const std::vector<VkImageView>& output_views) {
+    // ── render passes ──
+    if (rp_scene_ == VK_NULL_HANDLE && !create_scene_render_pass_()) {
+        std::fprintf(stderr, "[postprocess] scene render pass creation failed\n");
+        return false;
+    }
+    VkRenderPass rp_inter = get_or_create_inter_render_pass_();
+    VkRenderPass rp_out   = get_or_create_output_render_pass_(output_format);
+    if (rp_inter == VK_NULL_HANDLE || rp_out == VK_NULL_HANDLE) {
+        std::fprintf(stderr, "[postprocess] render pass creation failed\n");
+        return false;
+    }
+
+    // ── targets ──
+    if (!create_targets_()) {
+        std::fprintf(stderr, "[postprocess] target creation failed\n");
+        return false;
+    }
+
+    // ── pass を CompiledPass へ解決する ──
+    //    LUT 入力は論理名 "__lut__" を持つ — input index = -1 で表現する。
+    compiled_.clear();
+    compiled_.reserve(chain_.passes.size());
+    for (const auto& def : chain_.passes) {
+        CompiledPass cp;
+        cp.name        = def.name;
+        cp.push_data   = def.push_data;
+        cp.push_size   = def.push_size();
+        cp.input_count = static_cast<uint32_t>(def.inputs.size());
+
+        // 入力ターゲットを index へ解決する。
+        cp.input_indices.reserve(def.inputs.size());
+        for (const auto& in_name : def.inputs) {
+            if (in_name == kPostProcessLutTarget) {
+                cp.input_indices.push_back(-1);  // LUT (専用 Texture)
+                continue;
+            }
+            int32_t idx = resolve_target_(in_name);
+            if (idx < 0) {
+                std::fprintf(stderr,
+                             "[postprocess] pass '%s': unknown input target '%s'\n",
+                             def.name.c_str(), in_name.c_str());
+                return false;
+            }
+            cp.input_indices.push_back(idx);
+        }
+
+        // 出力ターゲット + 対応する render pass を解決する。
+        if (def.output == kPostProcessOutputTarget) {
+            cp.output_index = -1;            // swapchain
+            cp.render_pass  = rp_out;
+        } else {
+            int32_t idx = resolve_target_(def.output);
+            if (idx < 0) {
+                std::fprintf(stderr,
+                             "[postprocess] pass '%s': unknown output target '%s'\n",
+                             def.name.c_str(), def.output.c_str());
+                return false;
+            }
+            cp.output_index = idx;
+            cp.render_pass  = targets_[static_cast<size_t>(idx)].fb_render_pass;
+        }
+
+        cp.layout = get_or_create_layout_(cp.input_count, cp.push_size);
+        if (cp.layout == VK_NULL_HANDLE) {
+            std::fprintf(stderr, "[postprocess] pass '%s': pipeline layout failed\n",
+                         def.name.c_str());
+            return false;
+        }
+        compiled_.push_back(std::move(cp));
+    }
+
+    // ── descriptor sets + pipelines ──
+    if (!create_descriptors_()) {
+        std::fprintf(stderr, "[postprocess] descriptor setup failed\n");
+        return false;
+    }
+    if (!create_pipelines_()) {
+        std::fprintf(stderr, "[postprocess] pipeline creation failed\n");
+        return false;
+    }
+    if (!create_output_framebuffers_(output_views)) {
+        std::fprintf(stderr, "[postprocess] output framebuffer creation failed\n");
+        return false;
+    }
+    return true;
+}
+
+bool PostProcessPipeline::initialize_chain(
+        VulkanContext& vk,
+        const std::string& shader_dir,
+        uint32_t width, uint32_t height,
+        VkFormat output_format,
+        const std::vector<VkImageView>& output_views,
+        const PostProcessConfig& config,
+        const PostProcessChain& chain,
+        const unsigned char* lut_rgba,
+        int lut_w, int lut_h) {
     vk_      = &vk;
     device_  = vk.device();
     width_   = width;
     height_  = height;
     extent_  = {width, height};
     config_  = config;
+    chain_   = chain;
+    shader_dir_     = shader_dir;
+    output_format_  = output_format;
     output_is_srgb_ = is_srgb_format(output_format);
 
     // HDR 中間ターゲットのフォーマットが color attachment + sampled に
@@ -627,126 +777,93 @@ bool PostProcessPipeline::initialize_vulkan(VulkanContext& vk,
         }
     }
 
-    if (!create_render_passes_(output_format)) {
-        std::fprintf(stderr, "[postprocess] render pass creation failed\n");
+    if (!create_samplers_()) {
+        std::fprintf(stderr, "[postprocess] sampler creation failed\n");
         return false;
     }
-    if (!create_targets_())  { std::fprintf(stderr, "[postprocess] target creation failed\n");  return false; }
-    if (!create_samplers_()) { std::fprintf(stderr, "[postprocess] sampler creation failed\n"); return false; }
     if (!upload_lut_(lut_rgba, lut_w, lut_h)) {
         std::fprintf(stderr, "[postprocess] LUT setup failed\n");
         return false;
     }
-    if (!create_descriptors_()) { std::fprintf(stderr, "[postprocess] descriptor setup failed\n"); return false; }
-    if (!create_pipelines_(shader_dir)) {
-        std::fprintf(stderr, "[postprocess] pipeline creation failed\n");
-        return false;
-    }
-    if (!create_output_framebuffers_(output_views)) {
-        std::fprintf(stderr, "[postprocess] output framebuffer creation failed\n");
-        return false;
-    }
+    if (!build_from_chain_(output_format, output_views)) return false;
 
     vulkan_ready_ = true;
-    std::fprintf(stderr, "[postprocess] ready: %ux%u, lut=%s\n",
-                 width, height, lut_loaded_ ? config_.color_grading.lut_path.c_str() : "(none)");
+    std::fprintf(stderr, "[postprocess] ready: %ux%u, %zu pass, lut=%s\n",
+                 width, height, compiled_.size(),
+                 lut_loaded_ ? config_.color_grading.lut_path.c_str() : "(none)");
     return true;
+}
+
+bool PostProcessPipeline::initialize_vulkan(
+        VulkanContext& vk,
+        const std::string& shader_dir,
+        uint32_t width, uint32_t height,
+        VkFormat output_format,
+        const std::vector<VkImageView>& output_views,
+        const PostProcessConfig& config,
+        const unsigned char* lut_rgba,
+        int lut_w, int lut_h) {
+    // 組み込みチェーン (extract → blur H → blur V → grade) を生成して
+    // initialize_chain() に委譲する。 lut_loaded はこの時点で未確定なので、
+    // lut_rgba の有無で先読みし、 upload 後に refresh で正しい値へ詰め直す。
+    const bool lut_expected = (lut_rgba != nullptr && lut_w > 0 && lut_h > 0);
+    PostProcessChain chain = build_post_process_chain(
+        config, shader_dir, width, height, is_srgb_format(output_format),
+        lut_expected, /*extra=*/{});
+    return initialize_chain(vk, shader_dir, width, height, output_format,
+                            output_views, config, chain, lut_rgba, lut_w, lut_h);
 }
 
 void PostProcessPipeline::record(VkCommandBuffer cmd, uint32_t output_index,
                                  float /*delta_time*/) {
     if (!vulkan_ready_ || output_index >= output_fbs_.size()) return;
 
+    // 組み込み 4 pass の push_data を現フレームの config / 解像度へ詰め直す。
+    // (PostProcessTuner のライブ編集を毎フレーム反映するため。 旧 record()
+    //  が push constant をその場で組んでいたのと等価。)
+    refresh_post_process_chain(chain_, config_, extent_.width, extent_.height,
+                               output_is_srgb_, lut_loaded_);
+    for (auto& cp : compiled_) {
+        for (const auto& p : chain_.passes)
+            if (p.name == cp.name) { cp.push_data = p.push_data; break; }
+    }
+
     VkViewport vp{0.0f, 0.0f, static_cast<float>(extent_.width),
                   static_cast<float>(extent_.height), 0.0f, 1.0f};
     VkRect2D sc{{0, 0}, extent_};
 
-    auto begin_pass = [&](VkRenderPass rp, VkFramebuffer fb) {
+    // chain の pass を挿入順に記録する。 各 pass は自前の render pass を
+    // begin/end する — render pass の EXTERNAL↔0 subpass dependency が
+    // pass 間の read-after-write / write-after-read を保証する。
+    for (const auto& cp : compiled_) {
+        if (cp.pipeline == VK_NULL_HANDLE) continue;
+
+        VkFramebuffer fb = VK_NULL_HANDLE;
+        if (cp.output_index < 0) {
+            fb = output_fbs_[output_index];
+        } else {
+            fb = targets_[static_cast<size_t>(cp.output_index)].fb;
+        }
+
         VkRenderPassBeginInfo rpi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-        rpi.renderPass      = rp;
+        rpi.renderPass      = cp.render_pass;
         rpi.framebuffer     = fb;
         rpi.renderArea      = {{0, 0}, extent_};
         rpi.clearValueCount = 0;
         vkCmdBeginRenderPass(cmd, &rpi, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
-    };
 
-    const auto& bloom = config_.bloom;
-    const auto& tm    = config_.tone_mapping;
-    const auto& vig   = config_.vignette;
-    const auto& cg    = config_.color_grading;
-
-    // ── Pass 1: bright-pass extraction → ping_ ──
-    begin_pass(rp_inter_, ping_.fb);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_extract_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl_single_,
-                            0, 1, &ds_extract_, 0, nullptr);
-    {
-        // disabled bloom → impossibly high threshold so nothing is extracted
-        ExtractPC pc{bloom.enabled ? bloom.threshold : 1.0e9f,
-                     bloom.soft_threshold, 0.0f, 0.0f};
-        vkCmdPushConstants(cmd, pl_single_, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(pc), &pc);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cp.pipeline);
+        if (cp.desc_set != VK_NULL_HANDLE)
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    cp.layout, 0, 1, &cp.desc_set, 0, nullptr);
+        if (cp.push_size > 0 && !cp.push_data.empty())
+            vkCmdPushConstants(cmd, cp.layout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, cp.push_size, cp.push_data.data());
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
     }
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRenderPass(cmd);
-
-    const float radius = bloom.enabled ? bloom.radius : 1.0f;
-
-    // ── Pass 2: horizontal blur → pong_ ──
-    begin_pass(rp_inter_, pong_.fb);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_blur_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl_single_,
-                            0, 1, &ds_blur_h_, 0, nullptr);
-    {
-        BlurPC pc{1.0f / static_cast<float>(extent_.width), 0.0f, radius, 0.0f};
-        vkCmdPushConstants(cmd, pl_single_, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(pc), &pc);
-    }
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRenderPass(cmd);
-
-    // ── Pass 3: vertical blur → ping_ ──
-    begin_pass(rp_inter_, ping_.fb);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_blur_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl_single_,
-                            0, 1, &ds_blur_v_, 0, nullptr);
-    {
-        BlurPC pc{0.0f, 1.0f / static_cast<float>(extent_.height), radius, 0.0f};
-        vkCmdPushConstants(cmd, pl_single_, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(pc), &pc);
-    }
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRenderPass(cmd);
-
-    // ── Pass 4: final composite (bloom + tonemap + LUT + vignette) → output ──
-    begin_pass(rp_output_, output_fbs_[output_index]);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_grade_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl_grade_,
-                            0, 1, &ds_grade_, 0, nullptr);
-    {
-        GradePC pc{};
-        pc.bloom_intensity = bloom.enabled ? bloom.intensity : 0.0f;
-        pc.tonemap_op      = tm.enabled ? static_cast<uint32_t>(tm.op) : 4u;
-        pc.exposure        = tm.enabled ? tm.exposure : 1.0f;
-        // sRGB swapchain encodes linear→sRGB in hardware; avoid double gamma.
-        pc.gamma           = output_is_srgb_ ? 1.0f : tm.gamma;
-        pc.white_point     = tm.white_point;
-        pc.saturation      = tm.enabled ? tm.saturation : 1.0f;
-        pc.vignette_intensity = vig.enabled ? vig.intensity : 0.0f;
-        pc.vignette_radius    = vig.radius;
-        pc.vignette_softness  = vig.softness;
-        pc.lut_intensity      = (cg.enabled && lut_loaded_) ? cg.lut_intensity : 0.0f;
-        pc.lut_size           = static_cast<float>(cg.lut_size);
-        pc.vig_r = vig.color[0];
-        pc.vig_g = vig.color[1];
-        pc.vig_b = vig.color[2];
-        vkCmdPushConstants(cmd, pl_grade_, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(pc), &pc);
-    }
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRenderPass(cmd);
 }
 
 bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
@@ -758,7 +875,10 @@ bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
 
     vkDeviceWaitIdle(device_);
 
-    // サイズ依存リソースのみ破棄 (render pass / pipeline / pool / sampler / LUT は維持)。
+    // サイズ依存リソースのみ破棄 (render pass / sampler / LUT / descriptor
+    // set layout / pipeline layout は維持)。 pipeline / descriptor pool は
+    // pass 数に依存しないが、 descriptor set は target view に紐づくため
+    // 再生成する。
     auto destroy_rt = [&](RenderTarget& rt) {
         if (rt.fb)           vkDestroyFramebuffer(device_, rt.fb, nullptr);
         if (rt.view)         vkDestroyImageView(device_, rt.view, nullptr);
@@ -767,32 +887,32 @@ bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
         if (rt.depth_view)   vkDestroyImageView(device_, rt.depth_view, nullptr);
         if (rt.depth_image)  vkDestroyImage(device_, rt.depth_image, nullptr);
         if (rt.depth_memory) vkFreeMemory(device_, rt.depth_memory, nullptr);
-        rt = RenderTarget{};
     };
     for (VkFramebuffer fb : output_fbs_)
         if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
     output_fbs_.clear();
-    destroy_rt(scene_);
-    destroy_rt(ping_);
-    destroy_rt(pong_);
-    fb_scene_ = VK_NULL_HANDLE;
+    for (auto& rt : targets_) destroy_rt(rt);
+    targets_.clear();
+    target_index_.clear();
+    scene_index_ = -1;
+    fb_scene_    = VK_NULL_HANDLE;
+
+    for (auto& cp : compiled_)
+        if (cp.pipeline) vkDestroyPipeline(device_, cp.pipeline, nullptr);
+    if (desc_pool_) vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
+    desc_pool_ = VK_NULL_HANDLE;
+    compiled_.clear();
 
     width_  = width;
     height_ = height;
     extent_ = {width, height};
 
-    if (!create_targets_()) {
-        std::fprintf(stderr, "[postprocess] resize: target creation failed\n");
+    // build_from_chain_ は render pass を再利用 (rp_* が非 null なら維持)。
+    if (!build_from_chain_(output_format_, output_views)) {
+        std::fprintf(stderr, "[postprocess] resize: rebuild failed\n");
         vulkan_ready_ = false;
         return false;
     }
-    if (!create_output_framebuffers_(output_views)) {
-        std::fprintf(stderr, "[postprocess] resize: output framebuffer creation failed\n");
-        vulkan_ready_ = false;
-        return false;
-    }
-    // image view が作り直されたので descriptor set を書き直す。
-    write_descriptor_sets_();
     return true;
 }
 
@@ -810,38 +930,43 @@ void PostProcessPipeline::shutdown() {
             if (rt.depth_view)   vkDestroyImageView(device_, rt.depth_view, nullptr);
             if (rt.depth_image)  vkDestroyImage(device_, rt.depth_image, nullptr);
             if (rt.depth_memory) vkFreeMemory(device_, rt.depth_memory, nullptr);
-            rt = RenderTarget{};
         };
         for (VkFramebuffer fb : output_fbs_)
             if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
         output_fbs_.clear();
-        destroy_rt(scene_);
-        destroy_rt(ping_);
-        destroy_rt(pong_);
-        fb_scene_ = VK_NULL_HANDLE;
+        for (auto& rt : targets_) destroy_rt(rt);
+        targets_.clear();
+        target_index_.clear();
+        scene_index_ = -1;
+        fb_scene_    = VK_NULL_HANDLE;
+
         if (lut_.view)   vkDestroyImageView(device_, lut_.view, nullptr);
         if (lut_.image)  vkDestroyImage(device_, lut_.image, nullptr);
         if (lut_.memory) vkFreeMemory(device_, lut_.memory, nullptr);
         lut_ = Texture{};
-        if (pipe_extract_) vkDestroyPipeline(device_, pipe_extract_, nullptr);
-        if (pipe_blur_)    vkDestroyPipeline(device_, pipe_blur_, nullptr);
-        if (pipe_grade_)   vkDestroyPipeline(device_, pipe_grade_, nullptr);
-        if (pl_single_)    vkDestroyPipelineLayout(device_, pl_single_, nullptr);
-        if (pl_grade_)     vkDestroyPipelineLayout(device_, pl_grade_, nullptr);
-        if (desc_pool_)    vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
-        if (dsl_single_)   vkDestroyDescriptorSetLayout(device_, dsl_single_, nullptr);
-        if (dsl_grade_)    vkDestroyDescriptorSetLayout(device_, dsl_grade_, nullptr);
-        if (sampler_)      vkDestroySampler(device_, sampler_, nullptr);
-        if (rp_scene_)     vkDestroyRenderPass(device_, rp_scene_, nullptr);
-        if (rp_inter_)     vkDestroyRenderPass(device_, rp_inter_, nullptr);
-        if (rp_output_)    vkDestroyRenderPass(device_, rp_output_, nullptr);
-        pipe_extract_ = pipe_blur_ = pipe_grade_ = VK_NULL_HANDLE;
-        pl_single_ = pl_grade_ = VK_NULL_HANDLE;
+
+        for (auto& cp : compiled_)
+            if (cp.pipeline) vkDestroyPipeline(device_, cp.pipeline, nullptr);
+        compiled_.clear();
+
+        for (const auto& kv : layout_cache_)
+            if (kv.second) vkDestroyPipelineLayout(device_, kv.second, nullptr);
+        layout_cache_.clear();
+
+        if (desc_pool_) vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
         desc_pool_ = VK_NULL_HANDLE;
-        dsl_single_ = dsl_grade_ = VK_NULL_HANDLE;
-        sampler_ = VK_NULL_HANDLE;
+
+        for (const auto& kv : dsl_by_input_count_)
+            if (kv.second) vkDestroyDescriptorSetLayout(device_, kv.second, nullptr);
+        dsl_by_input_count_.clear();
+
+        if (sampler_)   vkDestroySampler(device_, sampler_, nullptr);
+        if (rp_scene_)  vkDestroyRenderPass(device_, rp_scene_, nullptr);
+        if (rp_inter_)  vkDestroyRenderPass(device_, rp_inter_, nullptr);
+        if (rp_output_) vkDestroyRenderPass(device_, rp_output_, nullptr);
+        sampler_  = VK_NULL_HANDLE;
         rp_scene_ = rp_inter_ = rp_output_ = VK_NULL_HANDLE;
-        device_ = VK_NULL_HANDLE;
+        device_   = VK_NULL_HANDLE;
     }
     vk_ = nullptr;
 #endif
