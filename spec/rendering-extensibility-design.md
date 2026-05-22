@@ -83,7 +83,7 @@ KS の `PostProcessLayer::initialize` は `PostProcessConfig` をハードコー
 
 render_pipeline プラグインに 3 つ目のモード **Timeline** を追加（Scanner DAG / Timeline / Profile Editor）。
 - 静的ガントチャート: topological level + レーン割当 + sub-pass ネスト + attachment ライフタイム。外部ライブラリ不使用。
-- **phase 2**: GPU timestamp の WS 注入で実測タイムライン化（UI 側は配線済み、`render_pipeline` プラグイン `index.ts` の relay 追加 + Pictor 側 `VkQueryPool` timestamp が残）。
+- **phase 2**: GPU timestamp の WS 注入で実測タイムライン化 — ✅ 実装済み（2026-05-22, `feat/gpu-timestamp`）。詳細は §6.1。
 
 ## 5. 実装順序と phase 境界
 
@@ -100,10 +100,21 @@ render_pipeline プラグインに 3 つ目のモード **Timeline** を追加�
 
 Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegistry` / `build_post_process_config()` / `PipelineProfileDef`）を作った。Phase 2 は固定構造そのものを解体する。3 項目。
 
-### 6.1 項目3 — GPU timestamp relay（最優先・低リスク）
-- **現状**: `GpuTimerManager`（`profiler/gpu_timer.*`）は完全な CPU シミュレーション（`vkCmdWriteTimestamp` / `VkQueryPool` が一切無く、コメントのみ。`value` 常に 0）。Ergo render_pipeline の timing UI（`app.js` の `injectTiming` / `applyTimingMessage`）は配線済み、`index.ts` の relay と Pictor の実装が残。
-- **設計**: `GpuTimerManager` を実 Vulkan 実装へ置換（`VkQueryPool` 作成 / `vkCmdWriteTimestamp` / `vkGetQueryPoolResults` / `timestampPeriod` 取得）。インタフェースと `flight_count` バッファリング枠は現状のまま中身差し替え。計測点は KS 側（`FrameComposer` に per-pass timestamp hook 追加、または `PostProcessPipeline::record` に直挿し）。timing を WS push する小経路を KS 側に新設（`ScreenshotBridge` の HTTP を拡張）。Ergo `index.ts` の `onUpgrade` に `{op:"timing"}` の `broadcast` を 1 行。pass ID は scanner の `PASS_DAG`（scene_hdr / decal_compose / postprocess / hud_load）に合わせる。
+### 6.1 項目3 — GPU timestamp relay（実装済み 2026-05-22, `feat/gpu-timestamp`）
+- **旧現状**: `GpuTimerManager`（`profiler/gpu_timer.*`）は完全な CPU シミュレーション（`vkCmdWriteTimestamp` / `VkQueryPool` が一切無く、コメントのみ。`value` 常に 0）。Ergo render_pipeline の timing UI（`app.js` の `injectTiming` / `applyTimingMessage`）は配線済み、`index.ts` の relay と Pictor の実装が残っていた。
+- **設計**: `GpuTimerManager` を実 Vulkan 実装へ置換（`VkQueryPool` 作成 / `vkCmdWriteTimestamp` / `vkGetQueryPoolResults` / `timestampPeriod` 取得）。インタフェースと `flight_count` バッファリング枠は現状のまま中身差し替え。計測点は KS 側。timing を WS push する小経路を KS 側に新設。Ergo `index.ts` の `onUpgrade` に `{op:"timing"}` の `broadcast` を 1 行。pass ID は scanner の `PASS_DAG`（scene_hdr / decal_compose / postprocess / hud_load）に合わせる。
 - 規模: 中、リスク: 低〜中（観測のみ、描画構造を壊さない）。
+
+#### 実装内訳
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| `GpuTimerManager` 実 Vulkan 化 | `profiler/gpu_timer.{h,cpp}`。`initialize_vulkan()` が `flight_count` 枚の `VkQueryPool`（TIMESTAMP）を生成、`VkPhysicalDeviceProperties::limits.timestampPeriod` を取得。`begin_region`/`end_region`/`write_timestamp` に `VkCommandBuffer` 付きオーバーロード追加（`vkCmdWriteTimestamp`）。`reset_pool()` が `vkCmdResetQueryPool`。`collect_results()` が flight 遅延で `vkGetQueryPoolResults`（WAIT なし＝非ブロッキング、NOT_READY は据え置き）。`resolved_regions_` に確定結果を保持し `begin_frame` の clear に耐える。timestamp 非対応 GPU はシミュレーション経路へフォールバックしブート継続 | ✅ |
+| 計測点（KS） | `GameRenderer` が `pictor::GpuTimerManager` を `KuzuRenderContext::gpu_timer` に所有。FrameComposer の `pre_pass_hook(0)`（frame begin）で `collect_results`→`begin_frame`→`reset_pool`→`begin_region("scene_hdr")`、`pre_pass_hook(1)`（HUD パス前）で scene_hdr 終了 + `decal_compose`/`postprocess` を実合成コマンドの前後で計測 + `hud_load` 開始、`HudLayer::record` 末尾で `hud_load`（route B は `scene_hdr`）終了。`FrameComposer` は無改変 | ✅ |
+| timing WS push（KS） | `diagnostics/timing_relay.{h,cpp}`。`rive_player_ws_client`（既存 WS クライアント）を再利用し `ws://127.0.0.1:5170/render_pipeline/ws` へ `{op:"timing", frame, passes:[{id,us}]}` を `post_present` hook で push。未接続でも自動再接続、結果未回収（全 0）フレームは送らない | ✅ |
+| Ergo relay | `render_pipeline/index.ts` の `onUpgrade` が `{op:"timing"}` を全 UI クライアントへ `broadcast` | ✅ |
+
+**phase 2 に残した範囲**: route B（post-process 無効・単一 swapchain パス）は `decal_compose`/`postprocess` パスが構造的に存在しないため `scene_hdr` 1 本のみ計測（HUD 含む全体）。サブパス単位（post-process チェーン内の extract/blur/grade）の細分計測は項目1（任意 post-process pass 挿入）の解体と同時に行う。
 
 ### 6.2 項目2 — mesh 駆動の頂点入力レイアウト
 - **現状**: `ShaderRegistry::build_pipelines` が頂点入力空（`gl_VertexIndex` 前提）。カスタムシェーダがメッシュ頂点バッファを読めない。KS の `SkinnedRenderer::create_pipeline_` は `TexturedSkinnedVertex` をベタ書き。
@@ -118,3 +129,9 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 
 ### 6.4 Phase 2 実装順序
 **3 → 2 → 1**（観測 → 局所改修 → 大規模解体）。項目3 を先に行うと項目1 の解体の影響（pass 数増減によるフレーム時間）をタイムラインで可視化しながら進められる。項目2 が項目1 の pipeline ビルダ統合の前提整理になる。
+
+| 順 | 項目 | 状態 | リポジトリ |
+|---|---|---|---|
+| 1 | 6.1 GPU timestamp relay | ✅ 実装済み（`feat/gpu-timestamp`） | Pictor + KS + Ergo |
+| 2 | 6.2 mesh 駆動の頂点入力レイアウト | 未着手 | Pictor + KS |
+| 3 | 6.3 任意 post-process pass 挿入 | 未着手 | Pictor + KS |
