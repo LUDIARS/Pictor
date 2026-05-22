@@ -47,6 +47,21 @@ KS の C++ 移植レビューで挙がった Pictor 側の不足:
 - **phase 1**: 上記の差し込み経路（固定 vert+frag のカスタムシェーダを Visus から選択 → 描画に反映）。
 - **phase 2**: シェーダ permutation / uniform バインドの作り込み、ShaderGraph 相当。
 
+### phase 1 実装状況（2026-05-22, `feat/visus-custom-shader`）
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| シェーダステージ配列 | `VisusShaderStages`（vert/frag/comp 各 `ResourceRef`）を `VisusDesc::shader_stages` に追加 | ✅ |
+| シリアライズ round-trip | `visus_serializer.cpp` の `geometry.shader_stages` ブロック | ✅ |
+| `ObjectDescriptor` 拡張 | `ShaderHandle customShader` を追加 + `INVALID_SHADER` 定数 | ✅ |
+| ShaderRegistry | `include/pictor/shader/shader_registry.h` + `src/shader/shader_registry.cpp`。`register_shader` / `build_pipelines`（`PostProcessPipeline` の graphics pipeline 生成が雛形）/ `pipeline(handle)` | ✅ |
+| instantiate_visus 伝播 | CUSTOM kind かつ `desc.shader != INVALID_SHADER` のとき `customShader` 設定 + `ShaderKey::with_custom_shader` で `shaderKey` 上位ビットへ畳み込み | ✅ |
+| 描画配線 | `shaderKey` 経由で `RenderBatch` → `DrawCommand::shader_key` まで自動伝播。ホストの記録ループは `ShaderKey::is_custom()` で判定し `ShaderRegistry::pipeline()` を引いて PBR pipeline の代わりにバインドする | ✅（データ経路完了。実 `vkCmdBindPipeline` はホスト責務） |
+
+`ShaderKey` ヘルパー（`core/types.h`）: `shaderKey` の bit 63 を CUSTOM フラグ、bit 32-62 を `ShaderHandle` に割当て、SoA stream を増やさずカスタムシェーダ識別を運ぶ。バッチビルダの sort key（`shader_keys >> 48`）は CUSTOM object を自然にグループ化する。
+
+**phase 2 に残した範囲**: compute stage の pipeline 生成（`shader_stages.comp` はシリアライズのみ通過）、mesh 駆動の頂点入力レイアウト確定（phase 1 の pipeline は頂点入力空＝`gl_VertexIndex` 前提）、任意 uniform / descriptor バインド、シェーダ permutation。
+
 ## 3. 方針2 — post-process を含むレンダリングパスのツール設定
 
 ### 現状

@@ -120,6 +120,9 @@ add_library(pictor STATIC
     src/material/base_material_builder.cpp
     src/material/material_serializer.cpp
 
+    # Shader (custom shader registry — Visus CUSTOM kind)
+    src/shader/shader_registry.cpp
+
     # Visus (render-object definition layer)
     src/visus/visus_registry.cpp
     src/visus/visus_serializer.cpp
