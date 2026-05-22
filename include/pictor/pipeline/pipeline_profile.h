@@ -6,6 +6,7 @@
 #include "pictor/gpu/gpu_driven_pipeline.h"
 #include "pictor/gi/gi_lighting_system.h"
 #include "pictor/postprocess/postprocess_effect.h"
+#include "pictor/pipeline/attachment_def.h"
 #include <string>
 #include <vector>
 
@@ -80,6 +81,13 @@ struct RenderPassDef {
     uint16_t                filter_mask      = 0xFFFF;
     bool                    gpu_driven_pass  = false;
     std::vector<std::string> required_streams; // prefetch hints
+
+    /// Per-attachment load / store ops, in `render_targets` order (Phase 3,
+    /// schema v2). If empty the runtime infers defaults via
+    /// `default_attachment_ops(render_targets, attachments)` —
+    /// CLEAR/STORE for color, CLEAR/DONT_CARE for depth, PRESENT_SRC_KHR
+    /// for swapchain. See `spec/pipeline-system-b-config.md` §3.2.
+    std::vector<AttachmentOpsDef> attachment_ops;
 };
 
 /// Profiler configuration (§8.2)
@@ -94,6 +102,12 @@ struct ProfilerConfig {
 struct PipelineProfileDef {
     std::string                profile_name;
     RenderingPath              rendering_path       = RenderingPath::FORWARD_PLUS;
+
+    /// Named attachments used by `render_passes[].render_targets` /
+    /// `input_textures`. Phase 3 (schema v2). If empty the runtime
+    /// substitutes `default_attachments()` (HDR color / depth / swapchain).
+    std::vector<AttachmentDef> attachments;
+
     std::vector<RenderPassDef> render_passes;
     ShadowConfig               shadow_config;
     std::vector<PostProcessDef> post_process_stack;
