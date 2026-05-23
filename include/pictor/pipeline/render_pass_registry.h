@@ -59,6 +59,16 @@ public:
     /// `attachments.index_of()`. Missing names → fatal log + skip.
     bool initialize_vulkan(VkDevice device, const AttachmentRegistry& attachments);
 
+    /// Replace a pass's VkRenderPass with a caller-owned external handle.
+    /// 既に build_one_ で確保済みだった内部 VkRenderPass は解放してから
+    /// external に差替える。 KS の Phase 4 で `PostProcessPipeline` 内部の
+    /// scene_render_pass を CompiledGraph に reuse させるために使う。
+    ///
+    /// 必ず `initialize_vulkan()` の **後** に呼ぶこと (内部 handle の
+    /// destroy が必要なため)。 戻り値 false: name 未登録 / index 不整合。
+    /// 以後 `shutdown_vulkan()` では destroy されない (caller 所有)。
+    bool set_external_render_pass(std::string_view name, VkRenderPass rp);
+
     void shutdown_vulkan();
 
     VkRenderPass get(uint16_t index) const {
@@ -76,6 +86,7 @@ private:
 
     VkDevice                  device_ = VK_NULL_HANDLE;
     std::vector<VkRenderPass> passes_render_passes_;
+    std::vector<uint8_t>      passes_is_external_;  // 1 = caller-owned, do not destroy
 #endif
 };
 
