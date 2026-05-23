@@ -67,11 +67,19 @@ struct CompiledPass {
     /// ポインタ)。 hot path では読まない。
     const char*                    debug_name = nullptr;
 
-    static constexpr uint8_t FLAG_IS_SWAPCHAIN = 1u << 0;
-    static constexpr uint8_t FLAG_IS_COMPUTE   = 1u << 1;
+    static constexpr uint8_t FLAG_IS_SWAPCHAIN    = 1u << 0;
+    static constexpr uint8_t FLAG_IS_COMPUTE      = 1u << 1;
+    /// host_recorded: execute_compiled は Begin/End render pass / pipeline bind を
+    /// 一切発行せず、 PassRecordFn 内で host が完全に command 記録を行う。
+    /// PostProcessPipeline のように内部で複数 sub-render-pass を持つ chain を
+    /// 単一 CompiledGraph entry として表現するための逃げ口。 KS の
+    /// `kuzu.profile.json` PostProcess pass で使う。 compute pass と類似
+    /// (Begin/End 不要)、 ただし graphics queue で動く点が違うので別 flag。
+    static constexpr uint8_t FLAG_IS_HOST_RECORDED = 1u << 2;
 
-    bool is_swapchain() const { return (flags & FLAG_IS_SWAPCHAIN) != 0; }
-    bool is_compute()   const { return (flags & FLAG_IS_COMPUTE) != 0; }
+    bool is_swapchain()     const { return (flags & FLAG_IS_SWAPCHAIN) != 0; }
+    bool is_compute()       const { return (flags & FLAG_IS_COMPUTE) != 0; }
+    bool is_host_recorded() const { return (flags & FLAG_IS_HOST_RECORDED) != 0; }
 };
 static_assert(sizeof(CompiledPass) <= 256,
               "CompiledPass should stay cache-friendly (≤256B target)");
