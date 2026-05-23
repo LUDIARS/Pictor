@@ -37,14 +37,22 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     if (!provider) return false;
     provider_ = provider;
 
+    create_default_rp_on_init_ = cfg.create_default_render_pass;
+
     if (!create_instance(cfg))              return false;
     if (!create_surface())                  return false;
     if (!pick_physical_device())            return false;
     if (!create_logical_device())           return false;
     if (!create_swapchain())                return false;
     if (!create_image_views())              return false;
-    if (!create_render_pass())              return false;
-    if (!create_framebuffers())             return false;
+    // Phase 4 step 4: host が profile-driven (RenderPassRegistry +
+    // FramebufferRegistry) で自前 RP/FB を作るなら、 ここをスキップする。
+    // default_render_pass() / framebuffers() は VK_NULL_HANDLE / 空 vector を
+    // 返すので、 旧 easy-mode consumer はリンク時に NULL チェック必要。
+    if (create_default_rp_on_init_) {
+        if (!create_render_pass())              return false;
+        if (!create_framebuffers())             return false;
+    }
     if (!create_command_pool_and_buffers()) return false;
     if (!create_sync_objects())             return false;
 
@@ -87,8 +95,10 @@ bool VulkanContext::recreate_swapchain() {
 
     if (!create_swapchain())    return false;
     if (!create_image_views())  return false;
-    if (!create_render_pass())  return false;
-    if (!create_framebuffers()) return false;
+    if (create_default_rp_on_init_) {
+        if (!create_render_pass())  return false;
+        if (!create_framebuffers()) return false;
+    }
 
     return true;
 }
