@@ -164,6 +164,10 @@ CompiledGraph PipelineCompiler::compile(const PipelineProfileDef&  profile,
         const bool is_swap = pass_has_swapchain_target(pd, atts);
         if (is_swap) cp.flags |= CompiledPass::FLAG_IS_SWAPCHAIN;
         if (pd.pass_type == PassType::COMPUTE) cp.flags |= CompiledPass::FLAG_IS_COMPUTE;
+        // host_recorded フラグは pass def から伝播。 execute_compiled は
+        // Begin/End render pass / pipeline bind を一切発行せず host record に
+        // 完全委譲する (Phase 4 step 3 / PostProcessPipeline 等の chain pass)。
+        if (pd.host_recorded) cp.flags |= CompiledPass::FLAG_IS_HOST_RECORDED;
 
         const uint32_t slot_count = is_swap ? swapchain_image_count : flight_count;
         const uint32_t copy_count = std::min<uint32_t>(slot_count, static_cast<uint32_t>(cp.framebuffers.size()));

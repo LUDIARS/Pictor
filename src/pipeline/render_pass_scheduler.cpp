@@ -132,6 +132,14 @@ void RenderPassScheduler::execute_compiled(VkCommandBuffer cmd,
             continue;
         }
 
+        if (cp.is_host_recorded()) {
+            // host_recorded: PostProcess chain 等、 内部で複数 sub-render-pass
+            // を持つ pass。 execute_compiled は Begin/End / BindPipeline を
+            // 一切発行せず、 host の record callback に command 記録を委ねる。
+            if (record) record(cmd, cp, flight_index, image_index);
+            continue;
+        }
+
         if (cp.render_pass == VK_NULL_HANDLE || fb == VK_NULL_HANDLE) {
             // Missing GPU resources — host record can still observe the
             // pass (e.g. for tagging) but BeginRenderPass would assert.

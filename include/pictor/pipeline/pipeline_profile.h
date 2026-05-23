@@ -88,6 +88,16 @@ struct RenderPassDef {
     /// CLEAR/STORE for color, CLEAR/DONT_CARE for depth, PRESENT_SRC_KHR
     /// for swapchain. See `spec/pipeline-system-b-config.md` §3.2.
     std::vector<AttachmentOpsDef> attachment_ops;
+
+    /// host_recorded: `RenderPassScheduler::execute_compiled` は本 pass の
+    /// Begin/End render pass / pipeline bind を一切発行せず、 PassRecordFn
+    /// 内で host が完全に command 記録する。 `PostProcessPipeline::composite`
+    /// のように内部で複数 sub-render-pass を持つチェーンを単一 CompiledGraph
+    /// entry として表現したいとき使う (Phase 4 step 3)。 当該 pass の
+    /// `render_targets` / `attachment_ops` は framebuffer / VkRenderPass 生成
+    /// にも使われないので空でよい (CompiledPass.render_pass / framebuffers は
+    /// VK_NULL_HANDLE)。
+    bool                    host_recorded    = false;
 };
 
 /// Profiler configuration (§8.2)

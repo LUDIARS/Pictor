@@ -62,6 +62,15 @@ AttachmentOpsDef infer_op(const std::string& target, const AttachmentRegistry& a
 bool RenderPassRegistry::build_one_(uint16_t index, const AttachmentRegistry& atts) {
     const RenderPassDef& pd = passes_[index];
 
+    // host_recorded passes は host が内部で sub-render-pass を自前管理する
+    // (PostProcessPipeline chain 等)。 RenderPassRegistry は VkRenderPass を
+    // 生成しない (空 handle のまま)。 execute_compiled の host_recorded 分岐
+    // で Begin/End は完全に skip される。
+    if (pd.host_recorded) {
+        passes_render_passes_[index] = VK_NULL_HANDLE;
+        return true;
+    }
+
     // Compute view (attachment_ops, in render_targets order).
     std::vector<AttachmentOpsDef> resolved;
     resolved.reserve(pd.render_targets.size());
