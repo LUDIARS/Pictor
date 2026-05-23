@@ -99,6 +99,68 @@ void RenderPassScheduler::execute(const BatchBuilder& batch_builder,
     }
 }
 
+#ifdef PICTOR_HAS_VULKAN
+
+void RenderPassScheduler::execute_compiled(VkCommandBuffer cmd,
+                                            uint32_t        flight_index,
+                                            uint32_t        image_index,
+                                            const PassRecordFn& record)
+{
+    // Hot path: flat seq-iterate the compiled graph. Per-pass `VkHandle`
+    // values are pre-resolved; the host record callback is the *only* place
+    // we leave the scheduler per pass. Phase 3 §3.5 hot-path invariant.
+    for (const CompiledPass& cp : compiled_.passes) {
+        const uint32_t slot = cp.is_swapchain() ? image_index : flight_index;
+        const VkFramebuffer fb = (slot < cp.framebuffer_count)
+                                     ? cp.framebuffers[slot]
+                                     : VK_NULL_HANDLE;
+
+        // Bind pre-built input descriptors when present (Phase 4 will give
+        // each pass its own layout; right now an empty set is harmless).
+        const VkDescriptorSet input_set = cp.input_sets[
+                std::min<uint32_t>(flight_index,
+                                   static_cast<uint32_t>(cp.input_sets.size() - 1))];
+        if (input_set != VK_NULL_HANDLE) {
+            // Phase 4: parameterize set index / pipeline layout.
+            // Phase 3 stays no-op-friendly for hosts that haven't wired
+            // input_textures yet.
+        }
+
+        if (cp.is_compute()) {
+            // Compute: no render pass, host issues vkCmdDispatch in `record`.
+            if (record) record(cmd, cp, flight_index, image_index);
+            continue;
+        }
+
+        if (cp.render_pass == VK_NULL_HANDLE || fb == VK_NULL_HANDLE) {
+            // Missing GPU resources — host record can still observe the
+            // pass (e.g. for tagging) but BeginRenderPass would assert.
+            if (record) record(cmd, cp, flight_index, image_index);
+            continue;
+        }
+
+        VkRenderPassBeginInfo bi{};
+        bi.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        bi.renderPass        = cp.render_pass;
+        bi.framebuffer       = fb;
+        bi.renderArea        = cp.render_area;
+        bi.clearValueCount   = cp.clear_count;
+        bi.pClearValues      = cp.clear_count ? cp.clear_values.data() : nullptr;
+
+        vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
+
+        if (cp.pipeline != VK_NULL_HANDLE) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cp.pipeline);
+        }
+
+        if (record) record(cmd, cp, flight_index, image_index);
+
+        vkCmdEndRenderPass(cmd);
+    }
+}
+
+#endif // PICTOR_HAS_VULKAN
+
 std::vector<RenderBatch> RenderPassScheduler::remap_batches_for_pass(
     const std::vector<RenderBatch>& batches,
     PassType pass_type) const
