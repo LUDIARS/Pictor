@@ -85,6 +85,27 @@ public:
                               VkFormat                     format,
                               VkExtent2D                   extent);
 
+    /// Replace an attachment with caller-owned VkImage/VkImageView handles.
+    ///
+    /// Use when the host already owns the GPU resources (e.g. KS の
+    /// `PostProcessLayer` が `PostProcessPipeline` 内部で先に作った
+    /// `scene_hdr_color`) と Phase 4 で AttachmentRegistry に参照させたい
+    /// 場合。 `name` で attachment を引き、 内部で作成済みだった
+    /// VkImage/View/Memory を破棄して caller-owned handles を割り当てる。
+    ///
+    /// `images.size() == views.size() == flight_count_` を期待 (per-flight)。
+    /// 以後 `image()` / `view()` は提供された handle を返し、 `shutdown_vulkan()`
+    /// では destroy しない (caller の所有権)。 `resize()` も触らない
+    /// (host が swapchain recreate 後に同 API で再 inject する)。
+    ///
+    /// 戻り値 false: 該当 name が未登録、 もしくは登録済みだが SWAPCHAIN_COLOR
+    /// (こちらは set_swapchain_images を使うこと)。
+    bool set_external_attachment(std::string_view             name,
+                                 std::span<const VkImage>     images,
+                                 std::span<const VkImageView> views,
+                                 VkFormat                     format,
+                                 VkExtent2D                   extent);
+
     /// Free all Vulkan resources owned by the registry.
     void shutdown_vulkan();
 
@@ -108,14 +129,16 @@ private:
 
 #ifdef PICTOR_HAS_VULKAN
     struct Resource {
-        // Non-swapchain: per-flight image+view+memory
-        // Swapchain    : per-image image+view (memory not owned)
+        // Non-swapchain non-external: per-flight image+view+memory (owned)
+        // Swapchain                 : per-image image+view (memory not owned)
+        // External                  : per-flight image+view (memory not owned)
         std::vector<VkImage>        images;        // flight_count or swapchain_image_count
         std::vector<VkImageView>    views;
-        std::vector<VkDeviceMemory> memories;      // empty for swapchain (not owned)
+        std::vector<VkDeviceMemory> memories;      // empty for swapchain/external (not owned)
         VkFormat                    vk_format = VK_FORMAT_UNDEFINED;
         VkExtent2D                  extent    = {0, 0};
         bool                        is_swapchain = false;
+        bool                        is_external  = false;  // caller-owned, do not destroy
     };
 
     bool create_one_(uint16_t index, VkExtent2D extent);
