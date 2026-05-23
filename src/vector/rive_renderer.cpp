@@ -26,6 +26,9 @@
 #include "rive/renderer.hpp"
 #include "rive/scene.hpp"
 #include "rive/animation/state_machine_instance.hpp"
+#include "rive/animation/state_machine_input_instance.hpp"  // SMIBool / SMINumber / SMITrigger
+#include "rive/animation/linear_animation.hpp"               // durationSeconds()
+#include "rive/animation/linear_animation_instance.hpp"      // dynamic_cast 判定用
 #include "rive/renderer/render_context.hpp"
 #include "rive/renderer/rive_renderer.hpp"
 #include "rive/renderer/vulkan/render_context_vulkan_impl.hpp"
@@ -540,5 +543,232 @@ bool RiveRenderer::render(VkCommandBuffer cmd,
 #endif
 }
 #endif // PICTOR_HAS_VULKAN
+
+// ===========================================================================
+// Introspection API (restored from feat/rive-fixes-cp `99d7125`).
+//
+// PR #53 (pipeline external config) brought back the declarations in
+// rive_renderer.h but the cpp side was overwritten during merge conflict
+// resolution by main's RIVE_DBG refactor, leaving these symbols undefined.
+// KS の rive_s3_array.cpp / rive_player_main.cpp が依存する。
+// ===========================================================================
+
+bool RiveRenderer::artboard_size(float& width, float& height) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->artboard) { width = 0.0f; height = 0.0f; return false; }
+    const rive::AABB b = impl_->artboard->bounds();
+    width  = b.width();
+    height = b.height();
+    return true;
+#else
+    width = 0.0f; height = 0.0f;
+    return false;
+#endif
+}
+
+int RiveRenderer::file_artboard_count() const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->file) return 0;
+    return static_cast<int>(impl_->file->artboardCount());
+#else
+    return 0;
+#endif
+}
+
+std::string RiveRenderer::file_artboard_name(int index) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->file || index < 0) return {};
+    if (index >= static_cast<int>(impl_->file->artboardCount())) return {};
+    return impl_->file->artboardNameAt(static_cast<size_t>(index));
+#else
+    (void)index;
+    return {};
+#endif
+}
+
+int RiveRenderer::current_state_machine_count() const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->artboard) return 0;
+    return static_cast<int>(impl_->artboard->stateMachineCount());
+#else
+    return 0;
+#endif
+}
+
+std::string RiveRenderer::current_state_machine_name(int index) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->artboard || index < 0) return {};
+    if (index >= static_cast<int>(impl_->artboard->stateMachineCount())) return {};
+    return impl_->artboard->stateMachineNameAt(static_cast<size_t>(index));
+#else
+    (void)index;
+    return {};
+#endif
+}
+
+int RiveRenderer::current_animation_count() const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->artboard) return 0;
+    return static_cast<int>(impl_->artboard->animationCount());
+#else
+    return 0;
+#endif
+}
+
+std::string RiveRenderer::current_animation_name(int index) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->artboard || index < 0) return {};
+    if (index >= static_cast<int>(impl_->artboard->animationCount())) return {};
+    return impl_->artboard->animationNameAt(static_cast<size_t>(index));
+#else
+    (void)index;
+    return {};
+#endif
+}
+
+float RiveRenderer::current_animation_duration(int index) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->artboard || index < 0) return 0.0f;
+    rive::LinearAnimation* a = impl_->artboard->animation(static_cast<size_t>(index));
+    if (!a) return 0.0f;
+    return a->durationSeconds();
+#else
+    (void)index;
+    return 0.0f;
+#endif
+}
+
+std::string RiveRenderer::current_scene_kind() const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene) return "none";
+    if (dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get())) {
+        return "state_machine";
+    }
+    if (dynamic_cast<rive::LinearAnimationInstance*>(impl_->scene.get())) {
+        return "animation";
+    }
+    return "none";
+#else
+    return "none";
+#endif
+}
+
+// ─── State Machine input 操作 ───────────────────────────────
+
+namespace rive_introspect_detail {
+#ifdef PICTOR_HAS_RIVE
+template <class T>
+static T* sm_find_input(rive::StateMachineInstance* sm, const std::string& name) {
+    if (!sm) return nullptr;
+    const size_t n = sm->inputCount();
+    for (size_t i = 0; i < n; ++i) {
+        rive::SMIInput* p = sm->input(i);
+        if (p && p->name() == name) return dynamic_cast<T*>(p);
+    }
+    return nullptr;
+}
+#endif
+} // namespace rive_introspect_detail
+
+int RiveRenderer::sm_input_count() const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene) return 0;
+    auto* sm = dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get());
+    if (!sm) return 0;
+    return static_cast<int>(sm->inputCount());
+#else
+    return 0;
+#endif
+}
+
+std::string RiveRenderer::sm_input_name(int index) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene || index < 0) return {};
+    auto* sm = dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get());
+    if (!sm) return {};
+    if (index >= static_cast<int>(sm->inputCount())) return {};
+    rive::SMIInput* p = sm->input(static_cast<size_t>(index));
+    return p ? std::string(p->name()) : std::string{};
+#else
+    (void)index;
+    return {};
+#endif
+}
+
+std::string RiveRenderer::sm_input_kind(int index) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene || index < 0) return "unknown";
+    auto* sm = dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get());
+    if (!sm) return "unknown";
+    if (index >= static_cast<int>(sm->inputCount())) return "unknown";
+    rive::SMIInput* p = sm->input(static_cast<size_t>(index));
+    if (!p) return "unknown";
+    if (dynamic_cast<rive::SMIBool*>(p))    return "bool";
+    if (dynamic_cast<rive::SMINumber*>(p))  return "number";
+    if (dynamic_cast<rive::SMITrigger*>(p)) return "trigger";
+    return "unknown";
+#else
+    (void)index;
+    return "unknown";
+#endif
+}
+
+double RiveRenderer::sm_input_get(int index) const {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene || index < 0) return 0.0;
+    auto* sm = dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get());
+    if (!sm) return 0.0;
+    if (index >= static_cast<int>(sm->inputCount())) return 0.0;
+    rive::SMIInput* p = sm->input(static_cast<size_t>(index));
+    if (auto* b = dynamic_cast<rive::SMIBool*>(p))    return b->value() ? 1.0 : 0.0;
+    if (auto* n = dynamic_cast<rive::SMINumber*>(p))  return static_cast<double>(n->value());
+    return 0.0;
+#else
+    (void)index;
+    return 0.0;
+#endif
+}
+
+bool RiveRenderer::sm_input_set_bool(const std::string& name, bool value) {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene) return false;
+    auto* sm = dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get());
+    rive::SMIBool* b = rive_introspect_detail::sm_find_input<rive::SMIBool>(sm, name);
+    if (!b) return false;
+    b->value(value);
+    return true;
+#else
+    (void)name; (void)value;
+    return false;
+#endif
+}
+
+bool RiveRenderer::sm_input_set_number(const std::string& name, double value) {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene) return false;
+    auto* sm = dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get());
+    rive::SMINumber* n = rive_introspect_detail::sm_find_input<rive::SMINumber>(sm, name);
+    if (!n) return false;
+    n->value(static_cast<float>(value));
+    return true;
+#else
+    (void)name; (void)value;
+    return false;
+#endif
+}
+
+bool RiveRenderer::sm_input_fire_trigger(const std::string& name) {
+#ifdef PICTOR_HAS_RIVE
+    if (!impl_ || !impl_->scene) return false;
+    auto* sm = dynamic_cast<rive::StateMachineInstance*>(impl_->scene.get());
+    rive::SMITrigger* t = rive_introspect_detail::sm_find_input<rive::SMITrigger>(sm, name);
+    if (!t) return false;
+    t->fire();
+    return true;
+#else
+    (void)name;
+    return false;
+#endif
+}
 
 } // namespace pictor
