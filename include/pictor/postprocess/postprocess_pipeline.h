@@ -104,6 +104,12 @@ public:
     VkImageView   scene_color_view() const;
     /// シーンの深度ビュー (D32_SFLOAT)。 DecalSystem 等が read する。
     VkImageView   scene_depth_view() const;
+    /// シーンカラー HDR の VkImage (RGBA16F)。 KS の Phase 4 wiring が
+    /// `AttachmentRegistry::set_external_attachment` で external attachment
+    /// として再 expose する用。
+    VkImage       scene_color_image() const;
+    /// シーン深度の VkImage (D32_SFLOAT)。 同上。
+    VkImage       scene_depth_image() const;
 
     /// Record the post-process chain into `output_views[output_index]`.
     /// The output image is left in COLOR_ATTACHMENT_OPTIMAL so the host can

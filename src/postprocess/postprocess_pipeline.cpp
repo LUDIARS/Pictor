@@ -50,6 +50,16 @@ VkImageView PostProcessPipeline::scene_depth_view() const {
     return targets_[static_cast<size_t>(scene_index_)].depth_view;
 }
 
+VkImage PostProcessPipeline::scene_color_image() const {
+    if (scene_index_ < 0) return VK_NULL_HANDLE;
+    return targets_[static_cast<size_t>(scene_index_)].image;
+}
+
+VkImage PostProcessPipeline::scene_depth_image() const {
+    if (scene_index_ < 0) return VK_NULL_HANDLE;
+    return targets_[static_cast<size_t>(scene_index_)].depth_image;
+}
+
 uint32_t PostProcessPipeline::find_memory_type_(uint32_t filter,
                                                 VkMemoryPropertyFlags props) const {
     VkPhysicalDeviceMemoryProperties mp{};
