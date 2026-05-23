@@ -23,6 +23,20 @@ bool FramebufferRegistry::build_one_(uint16_t pass_index,
     const RenderPassDef& pd = rps.pass(pass_index);
     PassEntry& e = entries_[pass_index];
 
+    // host_recorded passes: host (アプリ) が内部で Begin/End / Pipeline bind を
+    // 自前管理するため、 framework 側で framebuffer を作る必要は無い。
+    // RenderPassRegistry も同様に VkRenderPass を生成しない (空 handle のまま)
+    // ので、 ここで build を試みると「has no VkRenderPass」 で必ず失敗する。
+    // KS の PostProcess / DecalCompose のように、 内部で複数 sub-render-pass を
+    // 持つチェーンを CompiledGraph entry として 1 つで表現するための逃げ口
+    // (Phase 4 step 3 / Pictor PR #66 と対)。
+    if (pd.host_recorded) {
+        e.is_swapchain = false;
+        e.extent       = {0, 0};
+        e.framebuffers.clear();
+        return true;
+    }
+
     // Look up attachment indices once.
     std::vector<uint16_t> att_indices;
     att_indices.reserve(pd.render_targets.size());
