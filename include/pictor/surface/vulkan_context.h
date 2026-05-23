@@ -17,6 +17,16 @@ struct VulkanContextConfig {
     const char* app_name    = "Pictor";
     uint32_t    app_version = 1;
     bool        validation  = false;  // VK_LAYER_KHRONOS_validation
+    /// 既定: true — VulkanContext が組み込みの swapchain default render pass
+    /// + framebuffers を自動生成する (simple_renderer / ui_overlay_pipeline /
+    /// bitmap_text_renderer 等の easy-mode consumer 向け)。
+    ///
+    /// false にすると create_render_pass / framebuffers を skip し、 host が
+    /// RenderPassRegistry + FramebufferRegistry 経由で profile-driven に作る
+    /// 前提になる (KS Phase 4 step 4 など `default_render_pass()` を使わない
+    /// パス専用)。 default_render_pass() / framebuffers() は VK_NULL_HANDLE を
+    /// 返すので、 これらに依存するコンポーネントは同居できない。
+    bool        create_default_render_pass = true;
 };
 
 /// Manages the Vulkan instance, physical/logical device, queue,
@@ -127,6 +137,10 @@ private:
 
     VkRenderPass             render_pass_        = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> framebuffers_;
+    /// initialize 時の cfg を保存する (recreate_swapchain で再利用)。
+    /// `create_default_render_pass=false` で起動した host は recreate でも
+    /// default RP を作らない方が一貫する。
+    bool                     create_default_rp_on_init_ = true;
 
     VkCommandPool            command_pool_       = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> command_buffers_;
