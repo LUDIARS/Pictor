@@ -155,21 +155,44 @@ bool RenderPassRegistry::build_one_(uint16_t index, const AttachmentRegistry& at
 bool RenderPassRegistry::initialize_vulkan(VkDevice device, const AttachmentRegistry& atts) {
     device_ = device;
     passes_render_passes_.assign(passes_.size(), VK_NULL_HANDLE);
+    passes_is_external_.assign(passes_.size(), 0);
     for (uint16_t i = 0; i < static_cast<uint16_t>(passes_.size()); ++i) {
         if (!build_one_(i, atts)) return false;
     }
     return true;
 }
 
+bool RenderPassRegistry::set_external_render_pass(std::string_view name, VkRenderPass rp) {
+    uint16_t idx = index_of(name);
+    if (idx == INVALID_INDEX) return false;
+    if (idx >= passes_render_passes_.size()) return false;  // initialize_vulkan 未呼出
+    // 既に内部 build 済の VkRenderPass があれば解放 (external なら skip)。
+    const bool was_external = (idx < passes_is_external_.size()) && passes_is_external_[idx];
+    if (!was_external && passes_render_passes_[idx] && device_) {
+        vkDestroyRenderPass(device_, passes_render_passes_[idx], nullptr);
+    }
+    passes_render_passes_[idx] = rp;
+    if (passes_is_external_.size() <= idx) {
+        passes_is_external_.resize(static_cast<size_t>(idx) + 1u, 0);
+    }
+    passes_is_external_[idx] = 1;
+    return true;
+}
+
 void RenderPassRegistry::shutdown_vulkan() {
     if (!device_) {
         passes_render_passes_.clear();
+        passes_is_external_.clear();
         return;
     }
-    for (VkRenderPass rp : passes_render_passes_) {
-        if (rp) vkDestroyRenderPass(device_, rp, nullptr);
+    for (size_t i = 0; i < passes_render_passes_.size(); ++i) {
+        const bool external = (i < passes_is_external_.size()) && passes_is_external_[i];
+        if (!external && passes_render_passes_[i]) {
+            vkDestroyRenderPass(device_, passes_render_passes_[i], nullptr);
+        }
     }
     passes_render_passes_.clear();
+    passes_is_external_.clear();
     device_ = VK_NULL_HANDLE;
 }
 
