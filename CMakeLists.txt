@@ -141,6 +141,7 @@ add_library(pictor STATIC
     src/pipeline/attachment_registry.cpp
     src/pipeline/render_pass_registry.cpp
     src/pipeline/framebuffer_registry.cpp
+    src/pipeline/pipeline_compiler.cpp
 
     # Profiler
     src/profiler/cpu_timer.cpp

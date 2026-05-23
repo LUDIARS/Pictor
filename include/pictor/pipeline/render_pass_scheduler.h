@@ -2,6 +2,7 @@
 
 #include "pictor/core/types.h"
 #include "pictor/pipeline/pipeline_profile.h"
+#include "pictor/pipeline/compiled_graph.h"
 #include "pictor/batch/batch_builder.h"
 #include "pictor/culling/culling_system.h"
 #include "pictor/gpu/gpu_driven_pipeline.h"
@@ -54,10 +55,54 @@ public:
     /// Statistics
     uint32_t pass_count() const { return static_cast<uint32_t>(pass_order_.size()); }
 
+    // ---- Phase 3: CompiledGraph hot path (`spec/pipeline-system-b-config.md` §3.5) ----
+
+    /// Install a pre-compiled graph (produced by `PipelineCompiler::compile()`).
+    /// Ownership transferred — scheduler will not call `graph.shutdown()`,
+    /// host is responsible for that on device tear-down. Set to an empty
+    /// graph to disengage and fall back to the old `execute()` path.
+    void set_compiled_graph(CompiledGraph graph) { compiled_ = std::move(graph); }
+
+    /// True if a non-empty CompiledGraph is installed.
+    bool has_compiled_graph() const { return !compiled_.passes.empty(); }
+
+    /// Read-only access to the installed graph (for diagnostics / KS-side
+    /// custom recording).
+    const CompiledGraph& compiled_graph() const { return compiled_; }
+
+#ifdef PICTOR_HAS_VULKAN
+    /// Per-pass record callback signature used by `execute_compiled()`.
+    ///
+    /// Called inside `vkCmdBeginRenderPass` / `vkCmdEndRenderPass` (or
+    /// instead of them for compute passes). The scheduler hands the host
+    /// the CompiledPass + the current frame's command buffer and frame
+    /// indices, leaving the actual `vkCmdDraw*` work to the host (which
+    /// owns the pipelines / vertex buffers / RenderBatch source-of-truth).
+    using PassRecordFn = std::function<void(VkCommandBuffer cmd,
+                                            const CompiledPass& cp,
+                                            uint32_t flight_index,
+                                            uint32_t image_index)>;
+
+    /// Hot-path: iterate the compiled graph, BeginRenderPass / record /
+    /// EndRenderPass. `record` is invoked once per pass *inside* the render
+    /// pass scope (compute passes skip Begin/End and just call `record`).
+    ///
+    /// 不変条件 (§3.5):
+    ///   - hot path に `std::string` / `unordered_map` ゼロ
+    ///   - per-pass の VkHandle は CompiledPass 直値
+    ///   - 全 pass 共通の framebuffer 選択ロジックは 1 分岐
+    ///     (`cp.is_swapchain() ? image_index : flight_index`)
+    void execute_compiled(VkCommandBuffer cmd,
+                           uint32_t        flight_index,
+                           uint32_t        image_index,
+                           const PassRecordFn& record);
+#endif // PICTOR_HAS_VULKAN
+
 private:
     std::vector<RenderPassDef>       pass_order_;
     std::vector<ICustomRenderPass*>  custom_passes_;
     const MaterialRegistry*          material_registry_ = nullptr;
+    CompiledGraph                    compiled_;
 
     /// Remap batch keys using pass-specific material variants.
     /// Returns a new batch list with shader/material keys replaced by
