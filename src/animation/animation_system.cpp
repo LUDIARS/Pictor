@@ -388,6 +388,11 @@ const AnimationInstance* AnimationSystem::get_instance(AnimationStateHandle hand
     return (it != instances_.end()) ? it->second.get() : nullptr;
 }
 
+AnimationInstance* AnimationSystem::get_instance_mutable(AnimationStateHandle handle) {
+    auto it = instances_.find(handle);
+    return (it != instances_.end()) ? it->second.get() : nullptr;
+}
+
 // ============================================================
 // 2D / Rive / Lottie / Vector Factories
 // ============================================================
