@@ -67,7 +67,7 @@ void MontagePlayer::play(AnimationStateHandle inst, MontageHandle m,
     // (locomotion ブレンド等) と同一 instance で共存しうるので、 layer 0 を
     // 決め打ちせず実 index を使う。 同時に remap テーブルを最後尾 layer へ差し込む。
     uint32_t layer_index = 0;
-    if (auto* inst_data = const_cast<AnimationInstance*>(sys_.get_instance(inst))) {
+    if (auto* inst_data = sys_.get_instance_mutable(inst)) {
         if (!inst_data->layers.empty()) {
             layer_index = static_cast<uint32_t>(inst_data->layers.size() - 1);
             const auto* remap = get_bone_remap(d.clip, skel);

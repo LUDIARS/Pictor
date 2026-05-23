@@ -202,6 +202,15 @@ public:
     const AnimationClip* get_clip(AnimationClipHandle handle) const;
     const AnimationInstance* get_instance(AnimationStateHandle handle) const;
 
+    /// Mutable accessor — `play()` 直後の最後尾 layer に
+    /// `AnimationPlayback::channel_remap` を差し込む等、 host が layer
+    /// メタデータを直接書き換える必要があるケース向け。 host が同じ instance を
+    /// 同時並行で書き換えないこと (single-thread per state を期待)。
+    /// 互換: 既存の `get_instance()` を `const_cast<AnimationInstance*>(get_instance(h))`
+    /// で代用していたコード (MontagePlayer, KS LocomotionBlend) は本 API に
+    /// 段階的に移行する。
+    AnimationInstance* get_instance_mutable(AnimationStateHandle handle);
+
     uint32_t active_instance_count() const { return active_instance_count_; }
     const AnimationSystemConfig& config() const { return config_; }
 
