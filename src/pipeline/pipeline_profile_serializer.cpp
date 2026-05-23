@@ -647,6 +647,10 @@ bool parse_render_pass(Parser& pr, RenderPassDef& out) {
             return true;
         } else if (key == "gpu_driven_pass") {
             return p.parse_bool(out.gpu_driven_pass);
+        } else if (key == "host_recorded") {
+            // Phase 4 step 3: host_recorded — execute_compiled が Begin/End
+            // render pass / pipeline bind を発行せず host record に委譲する。
+            return p.parse_bool(out.host_recorded);
         } else if (key == "required_streams") {
             return p.parse_string_array(out.required_streams);
         } else if (key == "attachment_ops") {
@@ -1119,6 +1123,9 @@ std::string to_pipeline_profile_json(const PipelineProfileDef& def) {
             pad(out, 3); out += "\"sort_mode\":        "; quote(out, sort_mode_to_str(rp.sort_mode)); out += ",\n";
             pad(out, 3); out += "\"filter_mask\":      "; emit_uint(out, rp.filter_mask); out += ",\n";
             pad(out, 3); out += "\"gpu_driven_pass\":  "; emit_bool(out, rp.gpu_driven_pass); out += ",\n";
+            if (rp.host_recorded) {
+                pad(out, 3); out += "\"host_recorded\":    "; emit_bool(out, rp.host_recorded); out += ",\n";
+            }
             pad(out, 3); out += "\"required_streams\": "; emit_string_array(out, rp.required_streams);
             if (!rp.attachment_ops.empty()) {
                 out += ",\n";
