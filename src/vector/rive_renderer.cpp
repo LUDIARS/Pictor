@@ -121,6 +121,10 @@ bool RiveRenderer::is_initialized() const {
 
 // ─── initialize / shutdown ───────────────────────────────────
 
+bool RiveRenderer::initialize(VulkanContext& vk_ctx) {
+    return initialize(vk_ctx, Options{});
+}
+
 bool RiveRenderer::initialize(VulkanContext& vk_ctx, const Options& opts) {
     (void)vk_ctx; (void)opts;
 #if !defined(PICTOR_HAS_RIVE)

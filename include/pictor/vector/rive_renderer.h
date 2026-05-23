@@ -84,7 +84,13 @@ public:
     /// Create the Rive RenderContext bound to the given Vulkan context.
     /// Returns false if Rive is not compiled in (PICTOR_HAS_RIVE undefined)
     /// or if Rive initialisation fails.
-    bool initialize(VulkanContext& vk_ctx, const Options& opts = {});
+    ///
+    /// gcc (Pictor の test 環境では gcc 13) は inline default argument `= {}` を
+    /// `const Options&` に解決できない (`<brace-enclosed initializer list>` の
+    /// 変換失敗エラー) ため、 オーバーロード 2 段にして default は明示的に
+    /// `Options{}` を渡す。 MSVC は両形式 OK。
+    bool initialize(VulkanContext& vk_ctx);
+    bool initialize(VulkanContext& vk_ctx, const Options& opts);
 
     void shutdown();
 

@@ -231,8 +231,9 @@ bool AttachmentRegistry::create_one_(uint16_t index, VkExtent2D swap_extent) {
 }
 
 void AttachmentRegistry::destroy_one_(Resource& r) {
-    if (r.is_swapchain) {
-        // Not owned — VulkanContext owns swapchain images/views.
+    if (r.is_swapchain || r.is_external) {
+        // Not owned — caller (VulkanContext for swapchain, host for external)
+        // owns the images/views.
         r.images.clear();
         r.views.clear();
         r.memories.clear();
@@ -278,21 +279,26 @@ bool AttachmentRegistry::resize(VkExtent2D new_extent) {
         return true;
     }
 
-    // Destroy all non-swapchain images and recreate at new extent.
+    // Destroy all owned (non-swapchain, non-external) images and recreate at new extent.
     for (size_t i = 0; i < resources_.size(); ++i) {
-        if (!resources_[i].is_swapchain) {
+        if (!resources_[i].is_swapchain && !resources_[i].is_external) {
             destroy_one_(resources_[i]);
         }
     }
     current_extent_ = new_extent;
     for (uint16_t i = 0; i < static_cast<uint16_t>(defs_.size()); ++i) {
-        if (!resources_[i].is_swapchain) {
-            if (!create_one_(i, new_extent)) return false;
-        } else {
+        if (resources_[i].is_swapchain) {
             // Swapchain entries: clear handles, host re-injects.
             resources_[i].images.clear();
             resources_[i].views.clear();
             resources_[i].extent = new_extent;
+        } else if (resources_[i].is_external) {
+            // External entries: keep handles untouched. Host re-injects via
+            // set_external_attachment after swapchain recreate if the
+            // underlying GPU image needs a new size.
+            resources_[i].extent = new_extent;
+        } else {
+            if (!create_one_(i, new_extent)) return false;
         }
     }
     return true;
@@ -311,6 +317,35 @@ void AttachmentRegistry::set_swapchain_images(std::span<const VkImage>     image
         resources_[i].vk_format = format;
         resources_[i].extent    = extent;
     }
+}
+
+bool AttachmentRegistry::set_external_attachment(std::string_view             name,
+                                                 std::span<const VkImage>     images,
+                                                 std::span<const VkImageView> views,
+                                                 VkFormat                     format,
+                                                 VkExtent2D                   extent)
+{
+    uint16_t idx = index_of(name);
+    if (idx == INVALID_INDEX) return false;
+    if (idx >= resources_.size())  return false;  // initialize_vulkan 未呼出
+
+    auto& r = resources_[idx];
+    if (r.is_swapchain) return false;  // swapchain は set_swapchain_images を使う
+
+    // 既に owned で確保済みなら先に解放 (is_external=false の状態で destroy)。
+    if (!r.is_external) {
+        destroy_one_(r);
+    } else {
+        r.images.clear();
+        r.views.clear();
+        r.memories.clear();
+    }
+    r.is_external = true;
+    r.images.assign(images.begin(), images.end());
+    r.views.assign(views.begin(), views.end());
+    r.vk_format = format;
+    r.extent    = extent;
+    return true;
 }
 
 void AttachmentRegistry::shutdown_vulkan() {
