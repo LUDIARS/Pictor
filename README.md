@@ -8,6 +8,9 @@ Pictorは、描画オブジェクトの一元管理と最適な描画パイプ�
 
 ## セットアップ
 
+> 用途別のビルド設定は [`spec/setup/`](spec/setup/) にまとめてある:
+> [ビルド手順](spec/setup/build.md) / [ビルドオプション](spec/setup/build-options.md) / [consumer への組み込み](spec/setup/integration.md)。
+
 ### 必要要件
 
 | 項目 | 要件 |
