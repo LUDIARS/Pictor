@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pictor Level Editor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Pictor Level Editor</div>
+    <nav class="toolbar" aria-label="Level editor commands">
+      <button id="newSceneBtn" title="New scene" aria-label="New scene">New</button>
+      <label class="button" title="Import level JSON">
+        Import
+        <input id="importInput" type="file" accept="application/json,.json" hidden>
+      </label>
+      <button id="exportBtn" title="Export level JSON" aria-label="Export level JSON">Export</button>
+      <button id="duplicateBtn" title="Duplicate selected node" aria-label="Duplicate selected node">Duplicate</button>
+      <button id="deleteBtn" title="Delete selected node" aria-label="Delete selected node">Delete</button>
+    </nav>
+    <div id="status" class="status">ready</div>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar left">
+      <section class="panel">
+        <div class="panelHeader">
+          <h2>Hierarchy</h2>
+          <button id="addGroupBtn" class="iconButton" title="Add empty node" aria-label="Add empty node">+</button>
+        </div>
+        <div id="hierarchy" class="tree" role="tree"></div>
+      </section>
+
+      <section class="panel assets">
+        <div class="panelHeader">
+          <h2>Assets</h2>
+          <span id="assetCount" class="pill">0</span>
+        </div>
+        <div id="assetList" class="assetList"></div>
+      </section>
+    </aside>
+
+    <section class="viewportShell">
+      <div class="viewportTop">
+        <div class="segmented" role="tablist" aria-label="Transform mode">
+          <button class="active" data-tool="select">Select</button>
+          <button data-tool="move">Move</button>
+          <button data-tool="rotate">Rotate</button>
+          <button data-tool="scale">Scale</button>
+        </div>
+        <div class="viewportMeta">
+          <span id="nodeMeta">0 nodes</span>
+          <span id="drawMeta">0 draws</span>
+        </div>
+      </div>
+      <canvas id="viewport"></canvas>
+    </section>
+
+    <aside class="sidebar right">
+      <section class="panel inspector">
+        <div class="panelHeader">
+          <h2>Inspector</h2>
+          <span id="selectedType" class="pill">none</span>
+        </div>
+        <div id="inspector"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panelHeader">
+          <h2>Level JSON</h2>
+          <button id="copyBtn" class="smallButton">Copy</button>
+        </div>
+        <pre id="jsonPreview"></pre>
+      </section>
+    </aside>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
