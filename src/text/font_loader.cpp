@@ -222,7 +222,7 @@ std::vector<FontLoader::TableRecord> FontLoader::read_table_directory(
         // offsetTable[0] at byte 12
         if (size < 16) return records;
         uint32_t first_font_offset = read_u32(data + 12);
-        if (first_font_offset + 12 > size) return records;
+        if (static_cast<size_t>(first_font_offset) + 12 > size) return records;
         font_data = data + first_font_offset;
     }
 
@@ -267,7 +267,9 @@ bool FontLoader::parse_font_tables(FontTableEntry& entry) {
     const uint8_t* name_data = nullptr; uint32_t name_len = 0;
 
     for (const auto& rec : tables) {
-        if (rec.offset + rec.length > size) continue;
+        // size_t arithmetic: offset/length are file-controlled uint32s whose
+        // 32-bit sum could wrap and pass this check while pointing past the buffer.
+        if (static_cast<size_t>(rec.offset) + rec.length > size) continue;
         const uint8_t* tdata = data + rec.offset;
 
         if      (rec.tag == make_tag('h','e','a','d')) { head_data = tdata; head_len = rec.length; }

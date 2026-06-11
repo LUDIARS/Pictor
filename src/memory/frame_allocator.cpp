@@ -60,7 +60,7 @@ FrameAllocator::FrameAllocator(size_t capacity)
     }
 }
 
-FrameAllocator::~FrameAllocator() {
+void FrameAllocator::release_() noexcept {
     if (buffer_ && owns_memory_) {
 #ifdef PICTOR_LARGE_PAGES
 #ifdef _WIN32
@@ -78,6 +78,10 @@ FrameAllocator::~FrameAllocator() {
     }
 }
 
+FrameAllocator::~FrameAllocator() {
+    release_();
+}
+
 FrameAllocator::FrameAllocator(FrameAllocator&& other) noexcept
     : buffer_(other.buffer_)
     , capacity_(other.capacity_)
@@ -93,13 +97,10 @@ FrameAllocator::FrameAllocator(FrameAllocator&& other) noexcept
 
 FrameAllocator& FrameAllocator::operator=(FrameAllocator&& other) noexcept {
     if (this != &other) {
-        if (buffer_ && owns_memory_) {
-#ifdef _MSC_VER
-            _aligned_free(buffer_);
-#else
-            std::free(buffer_);
-#endif
-        }
+        // Use the same large-pages-aware deallocator as the destructor; the
+        // previous unconditional _aligned_free/std::free corrupted the heap on
+        // PICTOR_LARGE_PAGES builds (freeing an mmap/VirtualAlloc region).
+        release_();
         buffer_ = other.buffer_;
         capacity_ = other.capacity_;
         offset_.store(other.offset_.load(std::memory_order_relaxed), std::memory_order_relaxed);

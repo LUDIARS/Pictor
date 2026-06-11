@@ -10,10 +10,14 @@ BatchBuilder::BatchBuilder(SceneRegistry& registry)
 void BatchBuilder::build(FrameAllocator& allocator) {
     batches_.clear();
 
-    // Build batches for each pool type (§6.1)
+    // Build batches for each pool type (§6.1).
+    // Static batches are only re-sorted when the static pool changes, but the
+    // cached result is merged into every frame so static geometry keeps drawing.
     if (dirty_[static_cast<int>(PoolType::STATIC)]) {
         build_static(allocator);
     }
+    batches_.insert(batches_.end(), static_batches_.begin(), static_batches_.end());
+
     build_dynamic(allocator);  // Always rebuild dynamic batches
     build_gpu_driven();
 
@@ -79,7 +83,8 @@ void BatchBuilder::sort_pool(ObjectPool& pool, FrameAllocator& allocator,
 }
 
 void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t count,
-                                               const ObjectPool& pool) {
+                                               const ObjectPool& pool,
+                                               std::vector<RenderBatch>& out) {
     if (count == 0) return;
 
     // Skip culled objects (sort key == UINT64_MAX)
@@ -114,7 +119,7 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
         if (should_merge) {
             current_batch.count++;
         } else {
-            batches_.push_back(current_batch);
+            out.push_back(current_batch);
             current_batch.sortKey = pairs[i].key;
             current_batch.startIndex = static_cast<uint32_t>(i);
             current_batch.count = 1;
@@ -128,12 +133,14 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
 }
 
 void BatchBuilder::build_static(FrameAllocator& allocator) {
-    // §6.1: Static Pool — Multi Draw Indirect with index indirection
+    // §6.1: Static Pool — Multi Draw Indirect with index indirection.
+    // Rebuild the cache from scratch; build() merges it into batches_ each frame.
+    static_batches_.clear();
     ObjectPool& pool = registry_.static_pool();
     SortPair* pairs;
     size_t count;
     sort_pool(pool, allocator, pairs, count);
-    create_batches_from_sorted(pairs, count, pool);
+    create_batches_from_sorted(pairs, count, pool, static_batches_);
 }
 
 void BatchBuilder::build_dynamic(FrameAllocator& allocator) {
@@ -142,7 +149,7 @@ void BatchBuilder::build_dynamic(FrameAllocator& allocator) {
     SortPair* pairs;
     size_t count;
     sort_pool(pool, allocator, pairs, count);
-    create_batches_from_sorted(pairs, count, pool);
+    create_batches_from_sorted(pairs, count, pool, batches_);
 
     // Store sorted indices for indirect data access
     if (count > 0 && pairs) {

@@ -17,8 +17,9 @@ UpdateScheduler::UpdateScheduler(SceneRegistry& registry, const UpdateConfig& co
 {
     uint32_t threads = config.worker_threads;
     if (threads == 0) {
-        threads = std::max(1u,
-            static_cast<uint32_t>(std::thread::hardware_concurrency()) - 1);
+        // Guard against hardware_concurrency()==0 wrapping to UINT32_MAX.
+        unsigned hw = std::thread::hardware_concurrency();
+        threads = hw > 1 ? hw - 1 : 1;
     }
     default_dispatcher_ = std::make_unique<ThreadPoolDispatcher>(threads);
     dispatcher_ = default_dispatcher_.get();

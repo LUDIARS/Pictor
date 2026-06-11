@@ -43,6 +43,11 @@ public:
     size_t capacity() const { return capacity_; }
 
 private:
+    // Frees buffer_ with the deallocator matching how it was allocated
+    // (large-pages vs aligned malloc). Single source of truth shared by the
+    // destructor and move assignment so the two cannot diverge.
+    void release_() noexcept;
+
     uint8_t*          buffer_   = nullptr;
     size_t            capacity_ = 0;
     std::atomic<size_t> offset_{0};
