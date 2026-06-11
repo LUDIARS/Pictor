@@ -66,12 +66,17 @@ private:
     void sort_pool(ObjectPool& pool, FrameAllocator& allocator,
                    SortPair*& out_pairs, size_t& out_count);
 
-    /// Create batches from sorted pairs
+    /// Create batches from sorted pairs, appending them to `out`.
     void create_batches_from_sorted(const SortPair* pairs, size_t count,
-                                    const ObjectPool& pool);
+                                    const ObjectPool& pool,
+                                    std::vector<RenderBatch>& out);
 
     SceneRegistry&         registry_;
     std::vector<RenderBatch> batches_;
+    // Static batches are rebuilt only when the static pool is dirty, but must
+    // survive into every frame's `batches_`; caching them here prevents static
+    // objects from disappearing on the first non-dirty frame.
+    std::vector<RenderBatch> static_batches_;
     IBatchPolicy*          policy_   = nullptr;
     uint32_t*              sorted_indices_ = nullptr;
     size_t                 sorted_index_count_ = 0;

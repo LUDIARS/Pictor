@@ -89,28 +89,30 @@ bool extract_glyph_edges(const uint8_t* data, size_t data_size,
         uint32_t len = rd_u32(data + r + 12);
         if (tag == mk_tag('g','l','y','f'))                              glyf_off = off;
         else if (tag == mk_tag('l','o','c','a'))                         loca_off = off;
-        else if (tag == mk_tag('m','a','x','p') && off + 6 <= data_size) num_glyphs = rd_u16(data + off + 4);
-        else if (tag == mk_tag('h','e','a','d') && off + 54 <= data_size) loc_fmt = rd_i16(data + off + 50);
+        else if (tag == mk_tag('m','a','x','p') && static_cast<size_t>(off) + 6 <= data_size) num_glyphs = rd_u16(data + off + 4);
+        else if (tag == mk_tag('h','e','a','d') && static_cast<size_t>(off) + 54 <= data_size) loc_fmt = rd_i16(data + off + 50);
     }
     if (glyf_off == 0 || loca_off == 0 || glyph_index >= num_glyphs)
         return false;
 
-    // Resolve glyph offset via 'loca'
+    // Resolve glyph offset via 'loca'. All offsets are file-controlled uint32s,
+    // so every bounds check is done in size_t to avoid 32-bit wraparound that
+    // would let an out-of-range offset slip past the comparison.
     uint32_t g_off, g_end;
     if (loc_fmt == 0) {
-        uint32_t li = loca_off + glyph_index * 2;
+        size_t li = static_cast<size_t>(loca_off) + static_cast<size_t>(glyph_index) * 2;
         if (li + 4 > data_size) return false;
         g_off = static_cast<uint32_t>(rd_u16(data + li)) * 2;
         g_end = static_cast<uint32_t>(rd_u16(data + li + 2)) * 2;
     } else {
-        uint32_t li = loca_off + glyph_index * 4;
+        size_t li = static_cast<size_t>(loca_off) + static_cast<size_t>(glyph_index) * 4;
         if (li + 8 > data_size) return false;
         g_off = rd_u32(data + li);
         g_end = rd_u32(data + li + 4);
     }
     if (g_off == g_end) return false; // empty glyph (space etc.)
 
-    uint32_t abs = glyf_off + g_off;
+    size_t abs = static_cast<size_t>(glyf_off) + static_cast<size_t>(g_off);
     if (abs + 10 > data_size) return false;
 
     const uint8_t* g = data + abs;
@@ -125,7 +127,17 @@ bool extract_glyph_edges(const uint8_t* data, size_t data_size,
         ends[c] = rd_u16(g + p);
         p += 2;
     }
-    uint16_t total_pts = ends.back() + 1;
+    // Endpoint indices must be monotonically non-decreasing; otherwise a later
+    // cend = ends[c] can exceed total_pts-1 and index fl/xs/ys out of bounds.
+    for (int16_t c = 1; c < n_contours; ++c) {
+        if (ends[c] < ends[c - 1]) return false;
+    }
+    // Compute total_pts in 32-bit: a last endpoint of 0xFFFF would wrap a
+    // uint16_t sum to 0, under-allocating fl/xs/ys and causing a heap OOB read
+    // during the contour walk. >65535 points is impossible in 'glyf' and would
+    // also break the uint16_t loop counters below, so reject it.
+    uint32_t total_pts = static_cast<uint32_t>(ends.back()) + 1u;
+    if (total_pts > 0xFFFFu) return false;
 
     // Skip instructions
     if (abs + p + 2 > data_size) return false;
