@@ -6,8 +6,11 @@ namespace pictor {
 ThreadPoolDispatcher::ThreadPoolDispatcher(uint32_t thread_count) {
     if (thread_count == 0) {
         // Auto-detect: CPU logical cores - 1 (§5.2)
-        thread_count = std::max(1u,
-            static_cast<uint32_t>(std::thread::hardware_concurrency()) - 1);
+        // hardware_concurrency() may return 0 (undetectable); guard the
+        // subtraction so it does not wrap to UINT32_MAX and spawn billions
+        // of threads.
+        unsigned hw = std::thread::hardware_concurrency();
+        thread_count = hw > 1 ? hw - 1 : 1;
     }
     thread_count_ = thread_count;
 
@@ -41,7 +44,9 @@ void ThreadPoolDispatcher::dispatch(uint32_t count, uint32_t chunk_size, JobFunc
             uint32_t end = std::min(start + aligned_chunk, count);
             task_queue_.push({fn, start, end});
         }
-        pending_tasks_.store(job_count, std::memory_order_release);
+        // Accumulate rather than overwrite: a second dispatch issued while
+        // earlier tasks are still pending must not lose their count.
+        pending_tasks_.fetch_add(job_count, std::memory_order_release);
     }
     cv_task_.notify_all();
 }
@@ -74,6 +79,11 @@ void ThreadPoolDispatcher::worker_thread() {
         task.fn(task.start, task.end);
 
         if (pending_tasks_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            // Serialize the notify with the waiter's predicate check: without
+            // holding mutex_ here, the notify can land between wait_all()'s
+            // predicate evaluation and its wait(), a lost wakeup that hangs
+            // the render thread permanently.
+            std::lock_guard<std::mutex> lock(mutex_);
             cv_done_.notify_all();
         }
     }

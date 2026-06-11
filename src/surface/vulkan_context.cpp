@@ -105,7 +105,6 @@ bool VulkanContext::recreate_swapchain() {
 
 uint32_t VulkanContext::acquire_next_image() {
     vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
-    vkResetFences(device_, 1, &in_flight_fence_);
 
     uint32_t index = 0;
     VkResult result = vkAcquireNextImageKHR(
@@ -113,9 +112,17 @@ uint32_t VulkanContext::acquire_next_image() {
         image_available_sem_, VK_NULL_HANDLE, &index);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        // No queue submit will follow this frame, so the fence must stay
+        // signaled — resetting it here (as the old code did before acquire)
+        // left it unsignaled with nothing to signal it, deadlocking the next
+        // frame's vkWaitForFences during a resize.
         recreate_swapchain();
         return UINT32_MAX;
     }
+
+    // Image acquired; a submit signaling in_flight_fence_ will follow, so it is
+    // safe to reset the fence now (must happen before that submit).
+    vkResetFences(device_, 1, &in_flight_fence_);
     return index;
 }
 
