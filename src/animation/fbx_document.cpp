@@ -12,6 +12,8 @@
 
 #include "pictor/animation/fbx_document.h"
 
+#include "pictor/core/parse_limits.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -199,8 +201,11 @@ static void build_fixed_tables(HuffTable& lit, HuffTable& dist) {
 }
 
 static bool inflate_block_data(BitReader& br, const HuffTable& lit, const HuffTable& dist,
-                               std::vector<uint8_t>& out, std::string* error) {
+                               std::vector<uint8_t>& out, size_t max_out, std::string* error) {
     while (true) {
+        // 出力上限ガード (zip bomb / DoS): 1 シンボルあたり最大 258 バイトなので
+        // ループ先頭で一度確認すれば overshoot は high bound に収まる。
+        if (out.size() > max_out) return set_err(error,"deflate: output exceeds limit");
         int sym = lit.decode(br);
         if (sym < 0) return set_err(error,"deflate: bad literal/length symbol");
         if (sym < 256) {
@@ -276,9 +281,10 @@ static bool decode_dynamic_tables(BitReader& br, HuffTable& lit, HuffTable& dist
 
 static bool inflate_stream(const uint8_t* in, size_t in_size,
                            std::vector<uint8_t>& out, size_t expected_out_size,
-                           std::string* error) {
+                           size_t max_out, std::string* error) {
     BitReader br(in, in_size);
-    if (expected_out_size > 0) out.reserve(expected_out_size);
+    // reserve は上限でクランプ (期待値が攻撃由来で巨大でも過大確保しない)。
+    if (expected_out_size > 0) out.reserve(std::min(expected_out_size, max_out));
 
     bool last = false;
     while (!last) {
@@ -297,16 +303,17 @@ static bool inflate_stream(const uint8_t* in, size_t in_size,
                 return set_err(error,"deflate: stored len/nlen mismatch");
             }
             if (br.byte_pos + len > br.size) return set_err(error,"deflate: stored body EOF");
+            if (out.size() + len > max_out) return set_err(error,"deflate: output exceeds limit");
             out.insert(out.end(), in + br.byte_pos, in + br.byte_pos + len);
             br.byte_pos += len;
         } else if (btype == 1) {
             HuffTable lit, dist;
             build_fixed_tables(lit, dist);
-            if (!inflate_block_data(br, lit, dist, out, error)) return false;
+            if (!inflate_block_data(br, lit, dist, out, max_out, error)) return false;
         } else if (btype == 2) {
             HuffTable lit, dist;
             if (!decode_dynamic_tables(br, lit, dist, error)) return false;
-            if (!inflate_block_data(br, lit, dist, out, error)) return false;
+            if (!inflate_block_data(br, lit, dist, out, max_out, error)) return false;
         } else {
             return set_err(error,"deflate: reserved BTYPE 11");
         }
@@ -333,7 +340,12 @@ bool fbx_zlib_decompress(const uint8_t* in, size_t in_size,
     if (flg & 0x20) return set_err(error,"zlib: preset dictionary not supported");
     // payload は header の 2 バイト後から、末尾 4 バイトの ADLER32 まで
     // (ADLER32 検証は省略 — FBX では破損検知は file-level で行うため)
-    return inflate_stream(in + 2, in_size - 2 - 4, out, expected_out_size, error);
+    // 出力上限: 期待値が分かっていればそれ、無ければ絶対上限。 いずれも
+    // parse_limits::kMaxInflateBytes を超えない (zip bomb 抑止)。
+    const size_t max_out = std::min(
+        expected_out_size ? expected_out_size : parse_limits::kMaxInflateBytes,
+        parse_limits::kMaxInflateBytes);
+    return inflate_stream(in + 2, in_size - 2 - 4, out, expected_out_size, max_out, error);
 }
 
 // ── FBXProperty アクセサ ──────────────────────────────────────
@@ -600,6 +612,11 @@ bool read_property(BinReader& br, FBXProperty& p, std::string* error) {
                 default: break;
             }
             size_t expected = static_cast<size_t>(length) * elem_size;
+            // 過大確保 / zip bomb 抑止: ファイル由来の length をそのまま信用せず
+            // 絶対上限で弾く (raw/zlib いずれの経路でも resize/reserve 前に検査)。
+            if (expected > parse_limits::kMaxInflateBytes) {
+                return set_err(error,"binary: ARR length exceeds limit");
+            }
 
             std::vector<uint8_t> raw_storage;
             const uint8_t* raw = nullptr;
@@ -655,7 +672,10 @@ bool read_property(BinReader& br, FBXProperty& p, std::string* error) {
     }
 }
 
-bool read_node(BinReader& br, FBXNode& out, uint32_t version, std::string* error) {
+bool read_node(BinReader& br, FBXNode& out, uint32_t version, int depth, std::string* error) {
+    if (depth > parse_limits::kMaxNestingDepth) {
+        return set_err(error,"binary: node nesting too deep");
+    }
     bool is_v75 = version >= 7500;
     uint64_t end_offset = 0, num_props = 0, prop_list_len = 0;
     if (is_v75) {
@@ -681,6 +701,11 @@ bool read_node(BinReader& br, FBXNode& out, uint32_t version, std::string* error
     out.name.assign(reinterpret_cast<const char*>(br.data + br.pos), name_len);
     br.pos += name_len;
 
+    // 過大確保 / bad_alloc 抑止: 各プロパティは最低 1 バイト (型コード) を要するため、
+    // 残りバイト数を超える num_props は不正。 実体読み出し前に弾く。
+    if (num_props > static_cast<uint64_t>(br.size - br.pos)) {
+        return set_err(error,"binary: num_props exceeds input");
+    }
     out.properties.resize(num_props);
     for (uint64_t i = 0; i < num_props; ++i) {
         if (!read_property(br, out.properties[i], error)) return false;
@@ -689,7 +714,7 @@ bool read_node(BinReader& br, FBXNode& out, uint32_t version, std::string* error
     // 子ノードがある場合、ここまでの位置 != end_offset
     while (br.pos < end_offset) {
         FBXNode child;
-        if (!read_node(br, child, version, error)) return false;
+        if (!read_node(br, child, version, depth + 1, error)) return false;
         if (child.empty()) break;       // sentinel に到達
         out.children.push_back(std::move(child));
     }
@@ -725,7 +750,7 @@ bool FBXDocument::parse_binary(const uint8_t* data, size_t size, std::string* er
 
     while (br.pos < size) {
         FBXNode child;
-        if (!read_node(br, child, version, error)) return false;
+        if (!read_node(br, child, version, 0, error)) return false;
         if (child.empty()) break;
         root.children.push_back(std::move(child));
     }
@@ -904,7 +929,10 @@ bool parse_property_value(AsciiReader& r, FBXProperty& p, std::string* error) {
     return set_err(error,std::string("ascii: unexpected char '") + c + "' at line " + std::to_string(r.line));
 }
 
-bool parse_node_ascii(AsciiReader& r, FBXNode& out, std::string* error) {
+bool parse_node_ascii(AsciiReader& r, FBXNode& out, int depth, std::string* error) {
+    if (depth > parse_limits::kMaxNestingDepth) {
+        return set_err(error,"ascii: node nesting too deep");
+    }
     r.skip_ws();
     if (r.eof()) { out = FBXNode{}; return true; }
     if (!r.read_identifier(out.name)) {
@@ -942,7 +970,7 @@ bool parse_node_ascii(AsciiReader& r, FBXNode& out, std::string* error) {
             if (r.peek() == '}') { r.get(); break; }
             if (r.eof()) return set_err(error,"ascii: unterminated block");
             FBXNode child;
-            if (!parse_node_ascii(r, child, error)) return false;
+            if (!parse_node_ascii(r, child, depth + 1, error)) return false;
             if (child.name.empty() && child.properties.empty() && child.children.empty()) continue;
             out.children.push_back(std::move(child));
         }
@@ -962,7 +990,7 @@ bool FBXDocument::parse_ascii(const uint8_t* data, size_t size, std::string* err
         r.skip_ws();
         if (r.eof()) break;
         FBXNode node;
-        if (!parse_node_ascii(r, node, error)) return false;
+        if (!parse_node_ascii(r, node, 0, error)) return false;
         if (node.name == "FBXVersion" && !node.properties.empty()) {
             version = static_cast<uint32_t>(node.properties[0].as_int());
         }

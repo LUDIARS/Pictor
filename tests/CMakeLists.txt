@@ -19,6 +19,7 @@ set(PICTOR_TESTS
     unit_postprocess_chain_test
     unit_attachment_def_test
     unit_pipeline_registries_test
+    unit_parser_dos_test
     pixel_text_test
     fps_baseline_test
 )
