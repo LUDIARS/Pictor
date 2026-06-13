@@ -63,6 +63,13 @@ public:
 
     /// 実 Vulkan 計測が有効か。
     bool is_vulkan_ready() const { return vulkan_ready_; }
+
+    /// 実 Vulkan 計測リソース (query pool) を明示的に解放する。 冪等。
+    ///
+    /// owner は **VkDevice を破棄する前** に必ず呼ぶこと。 デストラクタ任せに
+    /// すると、 owner の破棄順次第で device 破棄後に destroy_pools_ が走り、
+    /// `vkDestroyQueryPool: Invalid device` で異常終了する。
+    void shutdown();
 #endif
 
     /// Begin a new frame's timing

@@ -76,6 +76,11 @@ bool GpuTimerManager::initialize_vulkan(VulkanContext& vk) {
     return true;
 }
 
+void GpuTimerManager::shutdown() {
+    // device 破棄前に owner が明示的に呼ぶ解放経路 (デストラクタと同処理、冪等)。
+    destroy_pools_();
+}
+
 void GpuTimerManager::destroy_pools_() {
     if (device_ != VK_NULL_HANDLE) {
         for (VkQueryPool p : query_pools_) {
