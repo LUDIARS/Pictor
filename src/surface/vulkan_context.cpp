@@ -2,6 +2,8 @@
 
 #ifdef PICTOR_HAS_VULKAN
 
+#include "pictor/surface/vk_result.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -104,12 +106,12 @@ bool VulkanContext::recreate_swapchain() {
 }
 
 uint32_t VulkanContext::acquire_next_image() {
-    vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
+    VK_CHECK(vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX));
 
     uint32_t index = 0;
-    VkResult result = vkAcquireNextImageKHR(
+    VkResult result = VK_CHECK(vkAcquireNextImageKHR(
         device_, swapchain_, UINT64_MAX,
-        image_available_sem_, VK_NULL_HANDLE, &index);
+        image_available_sem_, VK_NULL_HANDLE, &index));
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         // No queue submit will follow this frame, so the fence must stay
@@ -120,9 +122,16 @@ uint32_t VulkanContext::acquire_next_image() {
         return UINT32_MAX;
     }
 
+    // DEVICE_LOST / SURFACE_LOST など: このフレームは描画しない。 submit が無いので
+    // fence は signaled のまま温存し (OUT_OF_DATE と同様)、 次フレームの待機が
+    // デッドロックしないようにする (Q-M3)。 SUBOPTIMAL は image 有効なので継続。
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        return UINT32_MAX;
+    }
+
     // Image acquired; a submit signaling in_flight_fence_ will follow, so it is
     // safe to reset the fence now (must happen before that submit).
-    vkResetFences(device_, 1, &in_flight_fence_);
+    VK_CHECK(vkResetFences(device_, 1, &in_flight_fence_));
     return index;
 }
 
@@ -135,7 +144,7 @@ bool VulkanContext::present(uint32_t image_index) {
     info.pSwapchains        = &swapchain_;
     info.pImageIndices      = &image_index;
 
-    VkResult result = vkQueuePresentKHR(present_queue_, &info);
+    VkResult result = VK_CHECK(vkQueuePresentKHR(present_queue_, &info));
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         recreate_swapchain();
     }
@@ -270,6 +279,24 @@ bool VulkanContext::create_surface() {
         info.pView = handle.cocoa.ns_view;
         if (vkCreateMacOSSurfaceMVK(instance_, &info, nullptr, &surface_) != VK_SUCCESS) {
             fprintf(stderr, "[Pictor] Failed to create macOS surface\n");
+            return false;
+        }
+        return true;
+    }
+#endif
+
+#ifdef VK_USE_PLATFORM_METAL_EXT
+    case NativeWindowHandle::Type::iOS: {
+        // iOS (MoltenVK): CAMetalLayer* を VK_EXT_metal_surface で橋渡し。
+        // IOSSurfaceProvider は Type::iOS / metal_layer を返すのに受け側 case が
+        // 欠落しており、iOS は必ず "Unsupported platform surface type 7" で初期化
+        // 失敗していた (review/2026-06-11 Q-2)。 非 ObjC TU では CAMetalLayer は
+        // void なので void* からそのまま渡せる。
+        VkMetalSurfaceCreateInfoEXT info{};
+        info.sType  = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+        info.pLayer = static_cast<const CAMetalLayer*>(handle.ios.metal_layer);
+        if (vkCreateMetalSurfaceEXT(instance_, &info, nullptr, &surface_) != VK_SUCCESS) {
+            fprintf(stderr, "[Pictor] Failed to create iOS (Metal) surface\n");
             return false;
         }
         return true;
@@ -473,17 +500,27 @@ bool VulkanContext::create_logical_device() {
 
 bool VulkanContext::create_swapchain() {
     VkSurfaceCapabilitiesKHR caps;
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, surface_, &caps);
+    if (VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+            physical_device_, surface_, &caps)) != VK_SUCCESS) {
+        return false;
+    }
 
     uint32_t fmt_count = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &fmt_count, nullptr);
+    VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &fmt_count, nullptr));
     std::vector<VkSurfaceFormatKHR> formats(fmt_count);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &fmt_count, formats.data());
+    VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &fmt_count, formats.data()));
 
     uint32_t pm_count = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &pm_count, nullptr);
+    VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &pm_count, nullptr));
     std::vector<VkPresentModeKHR> present_modes(pm_count);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &pm_count, present_modes.data());
+    VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &pm_count, present_modes.data()));
+
+    // surface format / present mode が 0 件だと formats[0] が UB (Q-M5)。
+    if (fmt_count == 0 || pm_count == 0) {
+        fprintf(stderr, "[Pictor] Surface reports no formats (%u) or present modes (%u)\n",
+                fmt_count, pm_count);
+        return false;
+    }
 
     // Choose format
     swapchain_format_ = formats[0].format;

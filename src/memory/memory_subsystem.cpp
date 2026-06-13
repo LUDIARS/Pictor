@@ -2,12 +2,22 @@
 
 namespace pictor {
 
+namespace {
+// MemoryConfig.flight_count を GPU allocator の ring 多重化数へ伝播させる
+// (両者が divergence しないよう単一ソースに揃える)。
+GpuMemoryAllocator::Config with_flight(const MemoryConfig& c) {
+    GpuMemoryAllocator::Config g = c.gpu_config;
+    g.flight_count = c.flight_count;
+    return g;
+}
+} // namespace
+
 MemorySubsystem::MemorySubsystem() : MemorySubsystem(MemoryConfig{}) {}
 
 MemorySubsystem::MemorySubsystem(const MemoryConfig& config)
     : flight_allocator_(config.frame_allocator_size, config.flight_count)
     , pool_allocator_(config.pool_chunk_size)
-    , gpu_allocator_(config.gpu_config)
+    , gpu_allocator_(with_flight(config))
     , config_(config)
 {
 }
