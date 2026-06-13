@@ -1,4 +1,5 @@
 ﻿#include "pictor/animation/bvh_importer.h"
+#include "pictor/core/parse_limits.h"
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -106,7 +107,8 @@ bool BVHImporter::parse_hierarchy(const char*& cursor, const char* end,
 
 bool BVHImporter::parse_joint(const char*& cursor, const char* end,
                                std::vector<JointInfo>& joints,
-                               int32_t parent_index) const {
+                               int32_t parent_index, int depth) const {
+    if (depth > parse_limits::kMaxNestingDepth) return false; // 無制限再帰ガード
     JointInfo joint;
     joint.name = read_token(cursor, end);
     joint.parent_index = parent_index;
@@ -143,11 +145,14 @@ bool BVHImporter::parse_joint(const char*& cursor, const char* end,
             }
         } else if (token == "CHANNELS") {
             int num_channels = read_int(cursor, end);
+            // 各チャンネル名トークンは最低 1 バイトを要するため、残りバイト数を
+            // 超える数 (および負値) は不正。 過大確保 / 空読みループを防ぐ。
+            if (num_channels < 0 || num_channels > static_cast<int>(end - cursor)) return false;
             for (int i = 0; i < num_channels; ++i) {
                 joints[current_index].channel_order.push_back(read_token(cursor, end));
             }
         } else if (token == "JOINT") {
-            if (!parse_joint(cursor, end, joints, current_index)) return false;
+            if (!parse_joint(cursor, end, joints, current_index, depth + 1)) return false;
         } else if (token == "End") {
             // End Site
             token = read_token(cursor, end); // "Site"
@@ -188,7 +193,10 @@ bool BVHImporter::parse_motion(const char*& cursor, const char* end,
     // "Frames:" line
     std::string token = read_token(cursor, end);
     if (token != "Frames:") return false;
-    frame_count = static_cast<uint32_t>(read_int(cursor, end));
+    // `Frames: -1` の uint32 巻き戻りによる過大確保を防ぐ (負値拒否)。
+    int raw_frame_count = read_int(cursor, end);
+    if (raw_frame_count < 0) return false;
+    frame_count = static_cast<uint32_t>(raw_frame_count);
 
     // "Frame Time:" line
     token = read_token(cursor, end);
@@ -201,6 +209,12 @@ bool BVHImporter::parse_motion(const char*& cursor, const char* end,
     for (const auto& j : joints) {
         total_channels += static_cast<uint32_t>(j.channel_order.size());
     }
+
+    // 過大確保 / CPU DoS 抑止: frame_count・(frame×channel) の総 float 数は、
+    // 各値が最低 1 バイトのトークンなので残りバイト数を超えない。
+    const uint64_t remaining = static_cast<uint64_t>(end - cursor);
+    if (frame_count > remaining) return false;
+    if (static_cast<uint64_t>(frame_count) * total_channels > remaining) return false;
 
     // Read frame data
     frame_data.resize(frame_count);
