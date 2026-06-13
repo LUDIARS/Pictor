@@ -9,6 +9,19 @@
 
 namespace pictor {
 
+/// CPU timing sections (§13.3)。
+/// per-frame の `std::string` push_back / 線形比較を撤廃するため enum 化し、
+/// 固定長 `std::array<CpuTimer, Count>` で添字アクセスする (review/2026-06-11 D-3)。
+enum class CpuSection : uint8_t {
+    AnimationUpdate = 0,
+    DataUpdate,
+    Culling,
+    Sort,
+    BatchBuild,
+    CommandEncode,
+    Count
+};
+
 /// Frame statistics (§13.2, §13.4, §13.5)
 struct FrameStats {
     // FPS / Frame Time (§13.2)
@@ -70,9 +83,9 @@ public:
     void begin_frame();
     void end_frame();
 
-    /// Begin/end a named CPU timing section
-    void begin_cpu_section(const std::string& name);
-    void end_cpu_section(const std::string& name);
+    /// Begin/end a CPU timing section (enum 添字、 hot path で alloc しない)
+    void begin_cpu_section(CpuSection section);
+    void end_cpu_section(CpuSection section);
 
     /// Record GPU timestamps
     void begin_gpu_section(const std::string& name);
@@ -118,12 +131,10 @@ private:
     FrameStats   current_stats_;
     FrameStats   last_stats_;
 
-    // CPU timing
-    struct CpuSection {
-        std::string name;
-        CpuTimer    timer;
-    };
-    std::vector<CpuSection> cpu_sections_;
+    // CPU timing — 固定長配列で添字アクセス (per-frame alloc / string 比較なし)。
+    static constexpr size_t kCpuSectionCount = static_cast<size_t>(CpuSection::Count);
+    std::array<CpuTimer, kCpuSectionCount> cpu_section_timers_;
+    std::array<bool, kCpuSectionCount>     cpu_section_used_{};
 
     // GPU timing
     GpuTimerManager gpu_timer_;

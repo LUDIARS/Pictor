@@ -11,7 +11,6 @@
 #include "pictor/gpu/gpu_driven_pipeline.h"
 #include "pictor/pipeline/pipeline_profile.h"
 #include "pictor/pipeline/render_pass_scheduler.h"
-#include "pictor/pipeline/command_encoder.h"
 #include "pictor/profiler/profiler.h"
 #include "pictor/profiler/overlay_renderer.h"
 #include "pictor/profiler/stats_overlay.h"
@@ -268,7 +267,6 @@ private:
     std::unique_ptr<GPUDrivenPipeline>      gpu_pipeline_;
     std::unique_ptr<PipelineProfileManager> profile_manager_;
     std::unique_ptr<RenderPassScheduler>    pass_scheduler_;
-    std::unique_ptr<CommandEncoder>         command_encoder_;
     std::unique_ptr<Profiler>               profiler_;
     std::unique_ptr<OverlayRenderer>        overlay_;
     std::unique_ptr<StatsOverlay>           stats_overlay_;
