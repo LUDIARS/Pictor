@@ -13,85 +13,26 @@ void PictorRenderer::initialize() { initialize(RendererConfig{}); }
 void PictorRenderer::initialize(const RendererConfig& config) {
     config_ = config;
 
-    // §12: Initialize backend, memory, profiler, default profile
+    // §12: サブシステムの構築 (所有 + 依存順序) は manager に委譲 (D-1)。
+    subsystems_.initialize(config);
+    sync_subsystem_aliases_();
 
-    // 1. Memory Subsystem
-    memory_ = std::make_unique<MemorySubsystem>(config.memory_config);
+    // モバイル lifecycle コントローラ。 レンダラ操作は Hooks 経由に限定する (D-1)。
+    MobileLifecycleController::Hooks hooks;
+    hooks.current_frame         = [this] { return frame_number_; };
+    hooks.flush_frame_allocator = [this] {
+        if (memory_) { memory_->begin_frame(); memory_->end_frame(); }
+    };
+    hooks.active_profile        = [this] { return current_profile_name(); };
+    hooks.switch_profile        = [this](const std::string& name) { set_profile(name); };
+    mobile_ = std::make_unique<MobileLifecycleController>(
+        std::move(hooks), config.mobile_downgrade);
 
-    // 2. Scene Registry
-    scene_ = std::make_unique<SceneRegistry>(*memory_);
+    // GI / bake 委譲ファサード (subsystems_ 越しに live 参照)。
+    gi_facade_ = std::make_unique<GIFacade>(subsystems_, frame_number_);
 
-    // 3. Update Scheduler
-    update_scheduler_ = std::make_unique<UpdateScheduler>(*scene_, config.update_config);
-
-    // 4. Batch Builder
-    batch_builder_ = std::make_unique<BatchBuilder>(*scene_);
-
-    // 5. Culling System
-    culling_ = std::make_unique<CullingSystem>(*scene_);
-
-    // 6. GPU Buffer Manager
-    gpu_buffer_manager_ = std::make_unique<GPUBufferManager>(memory_->gpu_allocator());
-
-    // 7. Pipeline Profile Manager
-    profile_manager_ = std::make_unique<PipelineProfileManager>();
-    profile_manager_->register_defaults();
-
-    // 8. Apply initial profile
-    if (!config.initial_profile.empty()) {
-        profile_manager_->set_profile(config.initial_profile);
-    }
-    const auto& profile = profile_manager_->current_profile();
-
-    // 9. GPU Driven Pipeline (if enabled)
-    if (profile.gpu_driven_enabled) {
-        gpu_pipeline_ = std::make_unique<GPUDrivenPipeline>(
-            *gpu_buffer_manager_, *scene_, profile.gpu_driven_config);
-    }
-
-    // 10. GI Lighting System (shadow maps + AO + probes)
-    if (profile.gi_config.shadow_enabled || profile.gi_config.ssao_enabled ||
-        profile.gi_config.gi_probes_enabled) {
-        gi_system_ = std::make_unique<GILightingSystem>(
-            *gpu_buffer_manager_, *scene_, profile.gi_config);
-        gi_system_->initialize(
-            profile.gpu_driven_config.max_triangle_count,
-            config.screen_width, config.screen_height);
-
-        // Bake system (depends on GI system)
-        bake_system_ = std::make_unique<GIBakeSystem>(
-            *gpu_buffer_manager_, *scene_, *gi_system_);
-    }
-
-    // 11. Render Pass Scheduler
-    pass_scheduler_ = std::make_unique<RenderPassScheduler>(profile);
-
-    // 12. Profiler
-    profiler_ = std::make_unique<Profiler>();
-    profiler_->set_enabled(config.profiler_enabled);
-    profiler_->set_overlay_mode(config.overlay_mode);
-
-    // 13. Overlay Renderer
-    overlay_ = std::make_unique<OverlayRenderer>();
-    overlay_->initialize(config.screen_width, config.screen_height);
-
-    // 14. Stats Overlay
-    stats_overlay_ = std::make_unique<StatsOverlay>();
-    stats_overlay_->initialize(config.screen_width, config.screen_height);
-
-    // 15. Data Exporter
-    data_exporter_ = std::make_unique<DataExporter>();
-
-    // 16. Animation System (before DataHandler, which depends on it)
-    animation_system_ = std::make_unique<AnimationSystem>(AnimationSystemConfig{});
-
-    // 17. Data Handler
-    data_handler_ = std::make_unique<DataHandler>(
-        memory_->gpu_allocator(), *gpu_buffer_manager_, *animation_system_);
-
-    // 18. Post-Process は host-driven の `PostProcessPipeline` を使う。
-    //     ホストがシーンを HDR ターゲットへ描き、 自前で初期化/record する
-    //     (PrivateGame WorldRenderer 参照)。 managed レンダラは関与しない。
+    // Post-Process は host-driven の `PostProcessPipeline` を使う
+    // (PrivateGame WorldRenderer 参照)。 PictorRenderer は関与しない。
 
     initialized_ = true;
 }
@@ -100,32 +41,38 @@ void PictorRenderer::shutdown() {
     if (!initialized_) return;
 
     // §12: Release all resources, GPU sync
-    animation_system_.reset();
-    data_handler_.reset();
-    data_exporter_.reset();
-    stats_overlay_.reset();
-    overlay_.reset();
-    profiler_.reset();
-    pass_scheduler_.reset();
-    bake_system_.reset();
-    gi_system_.reset();
-    gpu_pipeline_.reset();
-    profile_manager_.reset();
-    gpu_buffer_manager_.reset();
-    culling_.reset();
-    batch_builder_.reset();
-    update_scheduler_.reset();
-    scene_.reset();
-    memory_.reset();
+    gi_facade_.reset();
+    mobile_.reset();
+    subsystems_.shutdown();
+    sync_subsystem_aliases_(); // alias をすべて null 化
 
     initialized_ = false;
 }
 
+void PictorRenderer::sync_subsystem_aliases_() {
+    memory_             = subsystems_.memory();
+    scene_              = subsystems_.scene();
+    update_scheduler_   = subsystems_.update_scheduler();
+    batch_builder_      = subsystems_.batch_builder();
+    culling_            = subsystems_.culling();
+    gpu_buffer_manager_ = subsystems_.gpu_buffer_manager();
+    gpu_pipeline_       = subsystems_.gpu_pipeline();
+    profile_manager_    = subsystems_.profile_manager();
+    pass_scheduler_     = subsystems_.pass_scheduler();
+    profiler_           = subsystems_.profiler();
+    overlay_            = subsystems_.overlay();
+    stats_overlay_      = subsystems_.stats_overlay();
+    data_exporter_      = subsystems_.data_exporter();
+    data_handler_       = subsystems_.data_handler();
+    gi_system_          = subsystems_.gi_system();
+    bake_system_        = subsystems_.bake_system();
+    animation_system_   = subsystems_.animation_system();
+}
+
 bool PictorRenderer::is_frame_work_suppressed_() const {
-    // Any non-ACTIVE lifecycle state suppresses GPU submission.
-    // The scene graph and handles are preserved — only per-frame
-    // work is skipped so resume is cheap.
-    return lifecycle_.lifecycle != LifecycleState::ACTIVE;
+    // ACTIVE 以外の lifecycle 状態では GPU submit を抑制する (scene/handle/GPU
+    // resource は温存)。 詳細は MobileLifecycleController。
+    return mobile_ && mobile_->frame_work_suppressed();
 }
 
 void PictorRenderer::begin_frame(float delta_time) {
@@ -202,7 +149,7 @@ void PictorRenderer::render(const Camera& camera) {
 
     // §11.3 Step 5-6: Encode + Submit
     profiler_->begin_cpu_section(CpuSection::CommandEncode);
-    pass_scheduler_->execute(*batch_builder_, *culling_, gpu_pipeline_.get());
+    pass_scheduler_->execute(*batch_builder_, *culling_, gpu_pipeline_);
     profiler_->end_cpu_section(CpuSection::CommandEncode);
 
     // draw call / triangle 統計はかつて CommandEncoder から記録していたが、
@@ -331,153 +278,40 @@ const std::string& PictorRenderer::current_profile_name() const {
     return profile_manager_->current_profile_name();
 }
 
-// ---- Mobile Lifecycle ----
+// ---- Mobile Lifecycle (MobileLifecycleController へ委譲、 D-1) ----
 
-void PictorRenderer::transition_lifecycle_(LifecycleState next) {
-    if (lifecycle_.lifecycle == next) return;
-    LifecycleState prev = lifecycle_.lifecycle;
-    lifecycle_.lifecycle = next;
-    lifecycle_.last_change_frame = frame_number_;
-    if (lifecycle_observer_) {
-        lifecycle_observer_->on_lifecycle_change(prev, next);
-    }
-    // When resuming, flush the frame allocator so stale pointers
-    // from the last pre-pause frame can't leak into the first
-    // active frame. end_frame() was skipped while suppressed.
-    if (prev != LifecycleState::ACTIVE && next == LifecycleState::ACTIVE && memory_) {
-        memory_->begin_frame();  // resets the frame allocator head
-        memory_->end_frame();
-    }
-}
-
-void PictorRenderer::transition_thermal_(ThermalState next) {
-    if (lifecycle_.thermal == next) return;
-    ThermalState prev = lifecycle_.thermal;
-    lifecycle_.thermal = next;
-    lifecycle_.last_change_frame = frame_number_;
-    if (lifecycle_observer_) {
-        lifecycle_observer_->on_thermal_change(prev, next);
-    }
-    // Auto-downgrade: if opt-in, swap profile on crossing thresholds.
-    const auto& pol = config_.mobile_downgrade;
-    if (!pol.enabled) return;
-
-    const bool hot_enough   = static_cast<uint8_t>(next) >= static_cast<uint8_t>(pol.downgrade_at);
-    const bool cool_enough  = static_cast<uint8_t>(next) <= static_cast<uint8_t>(pol.restore_below);
-    if (hot_enough && pre_downgrade_profile_.empty()) {
-        pre_downgrade_profile_ = current_profile_name();
-        if (!pol.low_profile_name.empty()) {
-            set_profile(pol.low_profile_name);
-        }
-    } else if (cool_enough && !pre_downgrade_profile_.empty()) {
-        const std::string restore = pol.high_profile_name.empty()
-            ? pre_downgrade_profile_
-            : pol.high_profile_name;
-        set_profile(restore);
-        pre_downgrade_profile_.clear();
-    }
-}
-
-void PictorRenderer::on_pause() {
-    if (!initialized_) return;
-    if (lifecycle_.lifecycle == LifecycleState::SURFACE_LOST) return; // stricter wins
-    transition_lifecycle_(LifecycleState::PAUSED);
-}
-
-void PictorRenderer::on_resume() {
-    if (!initialized_) return;
-    if (lifecycle_.lifecycle == LifecycleState::SURFACE_LOST) return; // wait for regain
-    transition_lifecycle_(LifecycleState::ACTIVE);
-}
-
-void PictorRenderer::on_suspend() {
-    if (!initialized_) return;
-    transition_lifecycle_(LifecycleState::SUSPENDED);
-}
-
-void PictorRenderer::on_surface_lost() {
-    if (!initialized_) return;
-    transition_lifecycle_(LifecycleState::SURFACE_LOST);
-}
-
-void PictorRenderer::on_surface_regained() {
-    if (!initialized_) return;
-    if (lifecycle_.lifecycle != LifecycleState::SURFACE_LOST) return;
-    transition_lifecycle_(LifecycleState::ACTIVE);
-}
+void PictorRenderer::on_pause()            { if (mobile_) mobile_->on_pause(); }
+void PictorRenderer::on_resume()           { if (mobile_) mobile_->on_resume(); }
+void PictorRenderer::on_suspend()          { if (mobile_) mobile_->on_suspend(); }
+void PictorRenderer::on_surface_lost()     { if (mobile_) mobile_->on_surface_lost(); }
+void PictorRenderer::on_surface_regained() { if (mobile_) mobile_->on_surface_regained(); }
 
 void PictorRenderer::on_low_memory(MemoryPressure level) {
-    if (!initialized_) return;
-    if (lifecycle_.memory == level) return;
-    lifecycle_.memory = level;
-    lifecycle_.last_change_frame = frame_number_;
-    if (lifecycle_observer_) {
-        lifecycle_observer_->on_memory_pressure(level);
-    }
+    if (mobile_) mobile_->on_low_memory(level);
 }
 
 void PictorRenderer::on_thermal_state(ThermalState state) {
-    if (!initialized_) return;
-    transition_thermal_(state);
+    if (mobile_) mobile_->on_thermal_state(state);
 }
 
 MobileLifecycleSnapshot PictorRenderer::lifecycle_snapshot() const {
-    return lifecycle_;
+    return mobile_ ? mobile_->snapshot() : MobileLifecycleSnapshot{};
 }
 
 void PictorRenderer::set_lifecycle_observer(IMobileLifecycleObserver* observer) {
-    lifecycle_observer_ = observer;
+    if (mobile_) mobile_->set_observer(observer);
 }
 
 void PictorRenderer::set_mobile_downgrade_policy(const MobileAutoDowngradePolicy& policy) {
     config_.mobile_downgrade = policy;
+    if (mobile_) mobile_->set_policy(policy);
 }
 
 void PictorRenderer::apply_profile(const PipelineProfileDef& profile) {
-    // §8.4: Profile switch procedure
-    // 1. Validate new profile (done by ProfileManager)
-
-    // 2. Frame Allocator size change — requires memory reallocation
-    //    (simplified: would recreate MemorySubsystem in production)
-
-    // 3. UpdateScheduler config change
-    update_scheduler_->set_config(profile.update_config);
-
-    // 4. Invalidate all batches
-    batch_builder_->invalidate_all();
-
-    // 5. RenderPassScheduler reconfigure
-    pass_scheduler_->reconfigure(profile);
-
-    // 6. GPU resource reallocation
-    if (profile.gpu_driven_enabled && !gpu_pipeline_) {
-        gpu_pipeline_ = std::make_unique<GPUDrivenPipeline>(
-            *gpu_buffer_manager_, *scene_, profile.gpu_driven_config);
-    } else if (!profile.gpu_driven_enabled) {
-        gpu_pipeline_.reset();
-    } else if (gpu_pipeline_) {
-        gpu_pipeline_->set_config(profile.gpu_driven_config);
-    }
-
-    // 7. GI system reconfigure
-    if (profile.gi_config.shadow_enabled || profile.gi_config.ssao_enabled ||
-        profile.gi_config.gi_probes_enabled) {
-        if (!gi_system_) {
-            gi_system_ = std::make_unique<GILightingSystem>(
-                *gpu_buffer_manager_, *scene_, profile.gi_config);
-            gi_system_->initialize(
-                profile.gpu_driven_config.max_triangle_count,
-                config_.screen_width, config_.screen_height);
-        } else {
-            gi_system_->set_config(profile.gi_config);
-        }
-    } else {
-        gi_system_.reset();
-    }
-
-    // 8. Profiler config
-    profiler_->set_enabled(profile.profiler_config.enabled);
-    profiler_->set_overlay_mode(profile.profiler_config.overlay_mode);
+    // §8.4: 下流サブシステムの再構成は manager に委譲 (D-1)。
+    subsystems_.apply_profile(profile);
+    // gpu_pipeline_ / gi_system_ が再生成・破棄され得るため alias を取り直す。
+    sync_subsystem_aliases_();
 }
 
 // ---- Profiler ----
@@ -582,64 +416,46 @@ void PictorRenderer::unregister_model(ModelHandle handle) {
     data_handler_->unregister_model(handle);
 }
 
-// ---- GI Lighting ----
+// ---- GI Lighting / Bake (GIFacade へ委譲、 D-1) ----
 
 void PictorRenderer::set_directional_light(const DirectionalLight& light) {
-    if (gi_system_) gi_system_->set_directional_light(light);
+    if (gi_facade_) gi_facade_->set_directional_light(light);
 }
 
 void PictorRenderer::upload_gi_probe_data(const float* sh_data, uint32_t probe_count) {
-    if (gi_system_) gi_system_->upload_probe_data(sh_data, probe_count);
+    if (gi_facade_) gi_facade_->upload_gi_probe_data(sh_data, probe_count);
 }
 
 void PictorRenderer::set_gi_config(const GIConfig& config) {
-    if (gi_system_) gi_system_->set_config(config);
+    if (gi_facade_) gi_facade_->set_gi_config(config);
 }
 
-// ---- GI Bake ----
-
 GIBakeResult PictorRenderer::bake_static_gi() {
-    if (!bake_system_) return GIBakeResult{};
-    auto result = bake_system_->bake();
-    result.bake_timestamp = frame_number_;
-    return result;
+    return gi_facade_ ? gi_facade_->bake_static_gi() : GIBakeResult{};
 }
 
 GIBakeResult PictorRenderer::bake_static_gi(BakeProgressCallback progress) {
-    if (!bake_system_) return GIBakeResult{};
-    auto result = bake_system_->bake(std::move(progress));
-    result.bake_timestamp = frame_number_;
-    return result;
+    return gi_facade_ ? gi_facade_->bake_static_gi(std::move(progress)) : GIBakeResult{};
 }
 
 void PictorRenderer::apply_bake(const GIBakeResult& result) {
-    if (!bake_system_) return;
-    bake_system_->apply(result);
-
-    // Notify GI system how many static objects have baked data
-    if (gi_system_) {
-        gi_system_->set_baked_static_count(
-            static_cast<uint32_t>(result.object_ids.size()));
-    }
+    if (gi_facade_) gi_facade_->apply_bake(result);
 }
 
 void PictorRenderer::invalidate_bake() {
-    if (bake_system_) bake_system_->invalidate();
-    if (gi_system_) gi_system_->set_baked_static_count(0);
+    if (gi_facade_) gi_facade_->invalidate_bake();
 }
 
 bool PictorRenderer::save_bake(const std::string& path, const GIBakeResult& result) {
-    if (!bake_system_) return false;
-    return bake_system_->save(path, result);
+    return gi_facade_ ? gi_facade_->save_bake(path, result) : false;
 }
 
 GIBakeResult PictorRenderer::load_bake(const std::string& path) {
-    if (!bake_system_) return GIBakeResult{};
-    return bake_system_->load(path);
+    return gi_facade_ ? gi_facade_->load_bake(path) : GIBakeResult{};
 }
 
 void PictorRenderer::set_bake_data_provider(IBakeDataProvider* provider) {
-    if (bake_system_) bake_system_->set_bake_data_provider(provider);
+    if (gi_facade_) gi_facade_->set_bake_data_provider(provider);
 }
 
 // ---- Data Export ----
