@@ -136,7 +136,6 @@ add_library(pictor STATIC
     src/pipeline/pipeline_profile_serializer.cpp
     src/pipeline/pipeline_profile_loader.cpp
     src/pipeline/render_pass_scheduler.cpp
-    src/pipeline/command_encoder.cpp
     src/pipeline/attachment_def.cpp
     src/pipeline/attachment_registry.cpp
     src/pipeline/render_pass_registry.cpp
