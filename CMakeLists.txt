@@ -198,6 +198,9 @@ add_library(pictor STATIC
 
     # Public API
     src/core/pictor_renderer.cpp
+    src/core/renderer_subsystem_manager.cpp
+    src/core/mobile_lifecycle_controller.cpp
+    src/core/gi_facade.cpp
 )
 
 # サーフェスプロバイダ — プラットフォーム別に条件付きで追加。

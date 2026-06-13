@@ -20,6 +20,9 @@
 #include "pictor/gi/gi_lighting_system.h"
 #include "pictor/gi/gi_bake.h"
 #include "pictor/animation/animation_system.h"
+#include "pictor/core/renderer_subsystem_manager.h"
+#include "pictor/core/mobile_lifecycle_controller.h"
+#include "pictor/core/gi_facade.h"
 #include <memory>
 
 namespace pictor {
@@ -205,7 +208,7 @@ public:
 
     /// Access GI system configuration
     void set_gi_config(const GIConfig& config);
-    GILightingSystem* gi_system() { return gi_system_.get(); }
+    GILightingSystem* gi_system() { return gi_system_; }
 
     // ---- GI Bake (static objects) ----
 
@@ -229,7 +232,7 @@ public:
     void set_bake_data_provider(IBakeDataProvider* provider);
 
     /// Access bake system
-    GIBakeSystem* bake_system() { return bake_system_.get(); }
+    GIBakeSystem* bake_system() { return bake_system_; }
 
     // ---- Post-Process ----
     // host-driven の `pictor::PostProcessPipeline` を使う。 ホストがシーンを
@@ -252,44 +255,47 @@ public:
     PipelineProfileManager& profile_manager() { return *profile_manager_; }
 
 private:
-    /// Profile switch procedure (§8.4)
+    /// Profile switch procedure (§8.4)。 subsystems_.apply_profile に委譲した後、
+    /// 動的に生成/破棄される alias (gpu_pipeline_ / gi_system_ / bake_system_) を再同期。
     void apply_profile(const PipelineProfileDef& profile);
+
+    /// subsystems_ が所有する実体から非所有 alias を取り直す。
+    void sync_subsystem_aliases_();
+
+    bool is_frame_work_suppressed_() const;
 
     bool initialized_ = false;
 
-    // Subsystems (owned)
-    std::unique_ptr<MemorySubsystem>        memory_;
-    std::unique_ptr<SceneRegistry>          scene_;
-    std::unique_ptr<UpdateScheduler>        update_scheduler_;
-    std::unique_ptr<BatchBuilder>           batch_builder_;
-    std::unique_ptr<CullingSystem>          culling_;
-    std::unique_ptr<GPUBufferManager>       gpu_buffer_manager_;
-    std::unique_ptr<GPUDrivenPipeline>      gpu_pipeline_;
-    std::unique_ptr<PipelineProfileManager> profile_manager_;
-    std::unique_ptr<RenderPassScheduler>    pass_scheduler_;
-    std::unique_ptr<Profiler>               profiler_;
-    std::unique_ptr<OverlayRenderer>        overlay_;
-    std::unique_ptr<StatsOverlay>           stats_overlay_;
-    std::unique_ptr<DataExporter>           data_exporter_;
-    std::unique_ptr<DataHandler>            data_handler_;
-    std::unique_ptr<GILightingSystem>       gi_system_;
-    std::unique_ptr<GIBakeSystem>           bake_system_;
-    std::unique_ptr<AnimationSystem>        animation_system_;
+    // サブシステムの所有・構築順序・プロファイル再構成は manager に集約 (D-1)。
+    RendererSubsystemManager subsystems_;
+
+    // 非所有 alias (subsystems_ が所有)。 本体 hot path / API 実装の簡潔さのために
+    // 保持し、 initialize() / apply_profile() 後に sync_subsystem_aliases_() で更新。
+    MemorySubsystem*        memory_             = nullptr;
+    SceneRegistry*          scene_              = nullptr;
+    UpdateScheduler*        update_scheduler_   = nullptr;
+    BatchBuilder*           batch_builder_      = nullptr;
+    CullingSystem*          culling_            = nullptr;
+    GPUBufferManager*       gpu_buffer_manager_ = nullptr;
+    GPUDrivenPipeline*      gpu_pipeline_       = nullptr;
+    PipelineProfileManager* profile_manager_    = nullptr;
+    RenderPassScheduler*    pass_scheduler_     = nullptr;
+    Profiler*               profiler_           = nullptr;
+    OverlayRenderer*        overlay_            = nullptr;
+    StatsOverlay*           stats_overlay_      = nullptr;
+    DataExporter*           data_exporter_      = nullptr;
+    DataHandler*            data_handler_       = nullptr;
+    GILightingSystem*       gi_system_          = nullptr;
+    GIBakeSystem*           bake_system_        = nullptr;
+    AnimationSystem*        animation_system_   = nullptr;
+
+    // 切り出したコントローラ / ファサード (initialize で生成)。
+    std::unique_ptr<MobileLifecycleController> mobile_;
+    std::unique_ptr<GIFacade>                  gi_facade_;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;
     uint64_t       frame_number_   = 0;
-
-    // Mobile lifecycle state
-    MobileLifecycleSnapshot   lifecycle_{};
-    IMobileLifecycleObserver* lifecycle_observer_ = nullptr;
-    /// Profile that was active when we auto-downgraded. Empty
-    /// when no auto-downgrade is in effect.
-    std::string               pre_downgrade_profile_;
-
-    void transition_lifecycle_(LifecycleState next);
-    void transition_thermal_(ThermalState next);
-    bool is_frame_work_suppressed_() const;
 };
 
 } // namespace pictor
