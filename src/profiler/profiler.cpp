@@ -17,7 +17,7 @@ void Profiler::begin_frame() {
 
     frame_timer_.start();
     current_stats_ = {}; // reset for new frame
-    cpu_sections_.clear();
+    cpu_section_used_.fill(false);
 
     // Collect GPU results from previous frame (async readback, §13.3)
     gpu_timer_.collect_results();
@@ -33,15 +33,16 @@ void Profiler::end_frame() {
     // Update current stats
     current_stats_.frame_time_ms = frame_ms;
 
-    // Collect CPU section timings
-    for (const auto& section : cpu_sections_) {
-        double ms = section.timer.elapsed_ms();
-        if (section.name == "DataUpdate")     current_stats_.data_update_ms = ms;
-        else if (section.name == "Culling")   current_stats_.culling_ms = ms;
-        else if (section.name == "Sort")      current_stats_.sort_ms = ms;
-        else if (section.name == "BatchBuild") current_stats_.batch_build_ms = ms;
-        else if (section.name == "CommandEncode") current_stats_.command_encode_ms = ms;
-    }
+    // Collect CPU section timings (enum 添字、 未使用区間は 0)。
+    auto section_ms = [this](CpuSection s) -> double {
+        const auto i = static_cast<size_t>(s);
+        return cpu_section_used_[i] ? cpu_section_timers_[i].elapsed_ms() : 0.0;
+    };
+    current_stats_.data_update_ms    = section_ms(CpuSection::DataUpdate);
+    current_stats_.culling_ms        = section_ms(CpuSection::Culling);
+    current_stats_.sort_ms           = section_ms(CpuSection::Sort);
+    current_stats_.batch_build_ms    = section_ms(CpuSection::BatchBuild);
+    current_stats_.command_encode_ms = section_ms(CpuSection::CommandEncode);
 
     // Collect GPU timings
     current_stats_.shadow_gpu_ms        = gpu_timer_.get_region_ms("ShadowPass");
@@ -82,22 +83,16 @@ void Profiler::end_frame() {
     ++frame_count_;
 }
 
-void Profiler::begin_cpu_section(const std::string& name) {
+void Profiler::begin_cpu_section(CpuSection section) {
     if (!enabled_) return;
-    CpuSection section;
-    section.name = name;
-    section.timer.start();
-    cpu_sections_.push_back(section);
+    const auto i = static_cast<size_t>(section);
+    cpu_section_timers_[i].start();
+    cpu_section_used_[i] = true;
 }
 
-void Profiler::end_cpu_section(const std::string& name) {
+void Profiler::end_cpu_section(CpuSection section) {
     if (!enabled_) return;
-    for (auto& section : cpu_sections_) {
-        if (section.name == name) {
-            section.timer.stop();
-            break;
-        }
-    }
+    cpu_section_timers_[static_cast<size_t>(section)].stop();
 }
 
 void Profiler::begin_gpu_section(const std::string& name) {

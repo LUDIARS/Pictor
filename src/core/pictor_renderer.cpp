@@ -66,9 +66,6 @@ void PictorRenderer::initialize(const RendererConfig& config) {
     // 11. Render Pass Scheduler
     pass_scheduler_ = std::make_unique<RenderPassScheduler>(profile);
 
-    // 11. Command Encoder
-    command_encoder_ = std::make_unique<CommandEncoder>();
-
     // 12. Profiler
     profiler_ = std::make_unique<Profiler>();
     profiler_->set_enabled(config.profiler_enabled);
@@ -109,7 +106,6 @@ void PictorRenderer::shutdown() {
     stats_overlay_.reset();
     overlay_.reset();
     profiler_.reset();
-    command_encoder_.reset();
     pass_scheduler_.reset();
     bake_system_.reset();
     gi_system_.reset();
@@ -144,7 +140,6 @@ void PictorRenderer::begin_frame(float delta_time) {
     gpu_buffer_manager_->reset_frame_buffers();
 
     profiler_->begin_frame();
-    command_encoder_->reset();
 }
 
 void PictorRenderer::render(const Camera& camera) {
@@ -154,32 +149,32 @@ void PictorRenderer::render(const Camera& camera) {
     auto& frame_alloc = memory_->frame_allocator();
 
     // §11.3 Step 2a: Animation Update
-    profiler_->begin_cpu_section("AnimationUpdate");
+    profiler_->begin_cpu_section(CpuSection::AnimationUpdate);
     if (animation_system_) {
         animation_system_->update(delta_time_);
     }
-    profiler_->end_cpu_section("AnimationUpdate");
+    profiler_->end_cpu_section(CpuSection::AnimationUpdate);
 
     // §11.3 Step 2b: Data Update
-    profiler_->begin_cpu_section("DataUpdate");
+    profiler_->begin_cpu_section(CpuSection::DataUpdate);
     update_scheduler_->update(delta_time_);
-    profiler_->end_cpu_section("DataUpdate");
+    profiler_->end_cpu_section(CpuSection::DataUpdate);
 
     // §11.3 Step 3: Culling
-    profiler_->begin_cpu_section("Culling");
+    profiler_->begin_cpu_section(CpuSection::Culling);
     culling_->cull(camera.frustum, frame_alloc);
-    profiler_->end_cpu_section("Culling");
+    profiler_->end_cpu_section(CpuSection::Culling);
 
     // Record culling stats
     auto cull_stats = culling_->get_stats();
     profiler_->record_visible(cull_stats.visible_objects, cull_stats.culled_objects);
 
     // §11.3 Step 4: Sort + Step 5: Batch Build
-    profiler_->begin_cpu_section("Sort");
-    profiler_->begin_cpu_section("BatchBuild");
+    profiler_->begin_cpu_section(CpuSection::Sort);
+    profiler_->begin_cpu_section(CpuSection::BatchBuild);
     batch_builder_->build(frame_alloc);
-    profiler_->end_cpu_section("BatchBuild");
-    profiler_->end_cpu_section("Sort");
+    profiler_->end_cpu_section(CpuSection::BatchBuild);
+    profiler_->end_cpu_section(CpuSection::Sort);
 
     profiler_->record_batches(static_cast<uint32_t>(batch_builder_->batches().size()));
 
@@ -206,12 +201,15 @@ void PictorRenderer::render(const Camera& camera) {
     }
 
     // §11.3 Step 5-6: Encode + Submit
-    profiler_->begin_cpu_section("CommandEncode");
+    profiler_->begin_cpu_section(CpuSection::CommandEncode);
     pass_scheduler_->execute(*batch_builder_, *culling_, gpu_pipeline_.get());
-    profiler_->end_cpu_section("CommandEncode");
+    profiler_->end_cpu_section(CpuSection::CommandEncode);
 
-    profiler_->record_draw_calls(command_encoder_->draw_call_count());
-    profiler_->record_triangles(command_encoder_->triangle_count());
+    // draw call / triangle 統計はかつて CommandEncoder から記録していたが、
+    // CommandEncoder::encode() は実際には呼ばれておらず常に 0 を返していた
+    // (虚偽統計、 review/2026-06-11 D-2)。 実描画コマンドの発行は host-driven
+    // 経路 (execute_compiled / PostProcessPipeline) が担うため、 managed 経路は
+    // これらを集計しない (0 のまま = 「未計測」)。
 
     // Record memory stats
     auto mem_stats = memory_->get_stats();
