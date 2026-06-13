@@ -59,7 +59,7 @@ private:
     /// Parse a single joint/end-site block
     bool parse_joint(const char*& cursor, const char* end,
                      std::vector<JointInfo>& joints,
-                     int32_t parent_index) const;
+                     int32_t parent_index, int depth = 0) const;
 
     /// Parse MOTION section
     bool parse_motion(const char*& cursor, const char* end,

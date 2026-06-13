@@ -1,5 +1,7 @@
 #include "pictor/visus/visus_serializer.h"
 
+#include "pictor/core/parse_limits.h"
+
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -274,6 +276,7 @@ struct Parser {
     const char* p;
     const char* end;
     std::string err;
+    int nest_depth = 0;   // skip_value 相互再帰の深度 (DoS ガード)
 
     bool fail(const char* what) {
         if (err.empty()) err = what;
@@ -363,8 +366,15 @@ struct Parser {
         if (p >= end) return fail("unexpected end");
         switch (*p) {
             case '"': { std::string tmp; return parse_string(tmp); }
-            case '{': return skip_object();
-            case '[': return skip_array();
+            case '{':
+            case '[': {
+                // ネスト深度上限 (`[[[[...` スタックオーバーフロー DoS ガード)。
+                if (++nest_depth > parse_limits::kMaxNestingDepth)
+                    return fail("json nesting too deep");
+                bool ok = (*p == '{') ? skip_object() : skip_array();
+                --nest_depth;
+                return ok;
+            }
             case 't': case 'f': { bool tmp; return parse_bool(tmp); }
             case 'n':
                 if (p + 4 <= end && std::memcmp(p, "null", 4) == 0) { p += 4; return true; }

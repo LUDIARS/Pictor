@@ -2,6 +2,12 @@ import { WebGLModelViewer, defaultAssetCatalog } from "./webgl_model_viewer.js";
 
 const $ = (id) => document.getElementById(id);
 
+// インポートした .pictor-level.json 由来の文字列を innerHTML に埋め込む際の
+// HTML エスケープ (DOM XSS ガード: `<img src=x onerror=...>` 等の任意 JS 実行を防ぐ)。
+const escapeHtml = (s) =>
+  String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 const defaultTransform = () => ({
   position: [0, 0, 0],
   rotation: [0, 0, 0],
@@ -58,7 +64,7 @@ function renderHierarchy() {
       row.className = `treeNode${node.id === state.selectedId ? " selected" : ""}`;
       row.style.setProperty("--indent", `${depth * 14}px`);
       row.role = "treeitem";
-      row.innerHTML = `<span class="nodeIcon">${node.kind === "group" ? "◆" : "●"}</span><span class="nodeName"><span class="treeIndent"></span>${node.name}</span>`;
+      row.innerHTML = `<span class="nodeIcon">${node.kind === "group" ? "◆" : "●"}</span><span class="nodeName"><span class="treeIndent"></span>${escapeHtml(node.name)}</span>`;
       row.addEventListener("click", () => {
         state.selectedId = node.id;
         renderAll();
@@ -80,8 +86,8 @@ function renderAssets() {
     item.innerHTML = `
       <div class="swatch" style="background: rgba(${asset.color.slice(0, 3).map((v) => Math.round(v * 255)).join(",")},1)"></div>
       <div>
-        <div class="assetName">${asset.name}</div>
-        <div class="assetMeta">${asset.previewMesh} · ${asset.model}</div>
+        <div class="assetName">${escapeHtml(asset.name)}</div>
+        <div class="assetMeta">${escapeHtml(asset.previewMesh)} · ${escapeHtml(asset.model)}</div>
       </div>`;
     item.addEventListener("click", () => addAssetNode(asset));
     list.appendChild(item);

@@ -1,4 +1,5 @@
 ﻿#include "pictor/text/font_loader.h"
+#include "pictor/core/parse_limits.h"
 #include <fstream>
 #include <cstring>
 #include <algorithm>
@@ -462,6 +463,10 @@ bool FontLoader::parse_font_tables(FontTableEntry& entry) {
         if (best_offset > 0 && best_offset < cmap_len) {
             uint16_t format = read_u16(cmap_data + best_offset);
 
+            // cmap 展開の総量予算 (DoS: 巨大レンジ / 多数セグメントの全展開を防ぐ)。
+            // format 4 / 12 共通でこの予算を消費し、 尽きたら以降の展開を打ち切る。
+            uint32_t cmap_budget = parse_limits::kMaxCodepointExpansion;
+
             if (format == 4) {
                 // Format 4: Segment mapping to delta values
                 if (best_offset + 14 <= cmap_len) {
@@ -470,6 +475,7 @@ bool FontLoader::parse_font_tables(FontTableEntry& entry) {
                     uint32_t base = best_offset + 14;
 
                     for (uint16_t seg = 0; seg < seg_count; ++seg) {
+                        if (cmap_budget == 0) break;
                         uint32_t end_off   = base + seg * 2;
                         uint32_t start_off = base + (seg_count + 1) * 2 + seg * 2;
                         uint32_t delta_off = base + (seg_count + 1) * 2 + seg_count * 2 + seg * 2;
@@ -485,6 +491,8 @@ bool FontLoader::parse_font_tables(FontTableEntry& entry) {
                         if (start_code == 0xFFFF) break;
 
                         for (uint32_t c = start_code; c <= end_code; ++c) {
+                            if (cmap_budget == 0) break;
+                            --cmap_budget;
                             uint16_t glyph_index;
                             if (id_range == 0) {
                                 glyph_index = static_cast<uint16_t>(
@@ -510,15 +518,22 @@ bool FontLoader::parse_font_tables(FontTableEntry& entry) {
                 if (best_offset + 16 <= cmap_len) {
                     uint32_t num_groups = read_u32(cmap_data + best_offset + 12);
                     for (uint32_t g = 0; g < num_groups; ++g) {
+                        if (cmap_budget == 0) break;
                         uint32_t grp_off = best_offset + 16 + g * 12;
                         if (grp_off + 12 > cmap_len) break;
                         uint32_t start_code  = read_u32(cmap_data + grp_off);
                         uint32_t end_code    = read_u32(cmap_data + grp_off + 4);
                         uint32_t start_glyph = read_u32(cmap_data + grp_off + 8);
-                        for (uint32_t c = start_code; c <= end_code; ++c) {
-                            uint16_t gi = static_cast<uint16_t>(start_glyph + (c - start_code));
+                        if (end_code < start_code) continue;
+                        // 巨大レンジ (最大 ~40 億) の全展開を予算で打ち切る (DoS ガード)。
+                        uint64_t range = static_cast<uint64_t>(end_code) - start_code + 1;
+                        uint32_t take  = static_cast<uint32_t>(std::min<uint64_t>(range, cmap_budget));
+                        for (uint32_t i = 0; i < take; ++i) {
+                            uint32_t c = start_code + i;
+                            uint16_t gi = static_cast<uint16_t>(start_glyph + i);
                             if (gi != 0) parsed.cmap[c] = gi;
                         }
+                        cmap_budget -= take;
                     }
                 }
             }
