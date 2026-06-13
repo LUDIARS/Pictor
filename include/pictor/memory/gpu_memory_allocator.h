@@ -22,9 +22,14 @@ public:
     struct Config {
         size_t mesh_pool_size       = 256 * 1024 * 1024; // 256MB
         size_t ssbo_pool_size       = 128 * 1024 * 1024; // 128MB
-        size_t instance_buffer_size = 64  * 1024 * 1024; // 64MB
+        size_t instance_buffer_size = 64  * 1024 * 1024; // 64MB (per flight)
         size_t indirect_buffer_size = 16  * 1024 * 1024; // 16MB
-        size_t staging_buffer_size  = 64  * 1024 * 1024; // 64MB
+        size_t staging_buffer_size  = 64  * 1024 * 1024; // 64MB (per flight)
+        // ring プール (instance / staging) を多重化するフライト数。 各フライトは
+        // 上記サイズを丸ごと専有する (合計確保 = size × flight_count)。
+        // GPU が前フレームのコマンドバッファ経由で参照中の領域を begin_frame で
+        // 上書きしないための保護 (review/2026-06-11 H-3)。
+        uint32_t flight_count       = 3;
     };
 
     GpuMemoryAllocator();
@@ -78,10 +83,19 @@ private:
             size_t offset;
             size_t size;
         };
-        std::vector<FreeBlock> free_list;
+        std::vector<FreeBlock> free_list;   // 非 ring プール (mesh / ssbo) のみ使用。
+
+        // ring プール (instance / staging) 用。 capacity を flight_count 等分し、
+        // 各フライトの区画内を bump 確保する。 begin_frame では current_flight の
+        // 区画のみリセットし、 他フライトが GPU 参照中の領域は温存する (H-3)。
+        uint32_t flight_count   = 1;
+        uint32_t current_flight = 0;
+        size_t   region_size    = 0;   // = capacity / flight_count
+        size_t   head           = 0;   // 現フライト区画内の bump 位置 (絶対 offset)
     };
 
     GpuAllocation allocate_from_pool(Pool& pool, size_t size, size_t alignment);
+    GpuAllocation allocate_ring(Pool& pool, size_t size, size_t alignment);
 
     Pool mesh_pool_;
     Pool ssbo_pool_;
