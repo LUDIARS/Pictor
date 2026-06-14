@@ -40,6 +40,7 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     provider_ = provider;
 
     create_default_rp_on_init_ = cfg.create_default_render_pass;
+    frames_in_flight_          = std::max<uint32_t>(1, cfg.frames_in_flight);
 
     if (!create_instance(cfg))              return false;
     if (!create_surface())                  return false;
@@ -67,10 +68,14 @@ void VulkanContext::shutdown() {
 
     vkDeviceWaitIdle(device_);
 
-    // Sync objects
-    if (render_finished_sem_) vkDestroySemaphore(device_, render_finished_sem_, nullptr);
-    if (image_available_sem_) vkDestroySemaphore(device_, image_available_sem_, nullptr);
-    if (in_flight_fence_)     vkDestroyFence(device_, in_flight_fence_, nullptr);
+    // Sync objects (per-flight + per-image)。 images_in_flight_ は借用なので破棄しない。
+    for (VkSemaphore s : render_finished_sems_) if (s) vkDestroySemaphore(device_, s, nullptr);
+    for (VkSemaphore s : image_available_sems_) if (s) vkDestroySemaphore(device_, s, nullptr);
+    for (VkFence     f : in_flight_fences_)      if (f) vkDestroyFence(device_, f, nullptr);
+    render_finished_sems_.clear();
+    image_available_sems_.clear();
+    in_flight_fences_.clear();
+    images_in_flight_.clear();
 
     // Command pool (frees command buffers implicitly)
     if (command_pool_) vkDestroyCommandPool(device_, command_pool_, nullptr);
@@ -106,12 +111,15 @@ bool VulkanContext::recreate_swapchain() {
 }
 
 uint32_t VulkanContext::acquire_next_image() {
-    VK_CHECK(vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX));
+    // 現在の flight の fence を待つ — これが「CPU が GPU に対して何フレーム
+    // 先行できるか」を frames_in_flight_ 段に制限する (Q-3)。
+    VkFence flight_fence = in_flight_fences_[current_frame_];
+    VK_CHECK(vkWaitForFences(device_, 1, &flight_fence, VK_TRUE, UINT64_MAX));
 
     uint32_t index = 0;
     VkResult result = VK_CHECK(vkAcquireNextImageKHR(
         device_, swapchain_, UINT64_MAX,
-        image_available_sem_, VK_NULL_HANDLE, &index));
+        image_available_sems_[current_frame_], VK_NULL_HANDLE, &index));
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         // No queue submit will follow this frame, so the fence must stay
@@ -129,17 +137,29 @@ uint32_t VulkanContext::acquire_next_image() {
         return UINT32_MAX;
     }
 
-    // Image acquired; a submit signaling in_flight_fence_ will follow, so it is
+    // この image を最後に使った flight がまだ GPU 実行中なら待つ。 frames_in_flight_
+    // が swapchain image 数と一致しない場合に、 同一 image の command buffer /
+    // framebuffer を前 flight と同時使用してしまうのを防ぐ (images-in-flight 追跡)。
+    if (images_in_flight_[index] != VK_NULL_HANDLE &&
+        images_in_flight_[index] != flight_fence) {
+        VK_CHECK(vkWaitForFences(device_, 1, &images_in_flight_[index], VK_TRUE, UINT64_MAX));
+    }
+    images_in_flight_[index] = flight_fence;
+    last_acquired_image_     = index;
+
+    // Image acquired; a submit signaling flight_fence will follow, so it is
     // safe to reset the fence now (must happen before that submit).
-    VK_CHECK(vkResetFences(device_, 1, &in_flight_fence_));
+    VK_CHECK(vkResetFences(device_, 1, &flight_fence));
     return index;
 }
 
 bool VulkanContext::present(uint32_t image_index) {
+    // present は「その image を描き終えた」render-finished セマフォ (image 単位) を待つ。
+    VkSemaphore wait_sem    = render_finished_sems_[image_index];
     VkPresentInfoKHR info{};
     info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     info.waitSemaphoreCount = 1;
-    info.pWaitSemaphores    = &render_finished_sem_;
+    info.pWaitSemaphores    = &wait_sem;
     info.swapchainCount     = 1;
     info.pSwapchains        = &swapchain_;
     info.pImageIndices      = &image_index;
@@ -148,6 +168,10 @@ bool VulkanContext::present(uint32_t image_index) {
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         recreate_swapchain();
     }
+
+    // 次の flight へ進める (present を発行したフレームのみ — acquire が
+    // UINT32_MAX を返して submit/present を skip したフレームでは進めない)。
+    current_frame_ = (current_frame_ + 1u) % std::max<uint32_t>(1, frames_in_flight_);
     return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
 }
 
@@ -728,12 +752,37 @@ bool VulkanContext::create_sync_objects() {
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    if (vkCreateSemaphore(device_, &sem_info, nullptr, &image_available_sem_) != VK_SUCCESS ||
-        vkCreateSemaphore(device_, &sem_info, nullptr, &render_finished_sem_) != VK_SUCCESS ||
-        vkCreateFence(device_, &fence_info, nullptr, &in_flight_fence_) != VK_SUCCESS) {
-        fprintf(stderr, "[Pictor] Failed to create sync objects\n");
-        return false;
+    // flight 単位: image-available セマフォ + in-flight fence。
+    const uint32_t flights = std::max<uint32_t>(1, frames_in_flight_);
+    frames_in_flight_ = flights;
+    image_available_sems_.assign(flights, VK_NULL_HANDLE);
+    in_flight_fences_.assign(flights, VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < flights; ++i) {
+        if (vkCreateSemaphore(device_, &sem_info, nullptr, &image_available_sems_[i]) != VK_SUCCESS ||
+            vkCreateFence(device_, &fence_info, nullptr, &in_flight_fences_[i]) != VK_SUCCESS) {
+            fprintf(stderr, "[Pictor] Failed to create per-flight sync objects\n");
+            return false;
+        }
     }
+
+    // swapchain image 単位: render-finished セマフォ (present 待ち)。 present の
+    // 待機セマフォを flight 単位にすると、 再 signal 時に前回 present の wait と
+    // 衝突し得る (validation 警告)。 image 単位なら acquire→submit→present が
+    // 同一 image に紐づくので安全。 image 数は recreate_swapchain でも不変前提
+    // (command_buffers_ も同様の前提でリサイズしていない)。
+    const size_t image_count = swapchain_images_.size();
+    render_finished_sems_.assign(image_count, VK_NULL_HANDLE);
+    for (size_t i = 0; i < image_count; ++i) {
+        if (vkCreateSemaphore(device_, &sem_info, nullptr, &render_finished_sems_[i]) != VK_SUCCESS) {
+            fprintf(stderr, "[Pictor] Failed to create render-finished semaphore\n");
+            return false;
+        }
+    }
+    // image→flight fence マッピング (借用ハンドル、 所有しない)。
+    images_in_flight_.assign(image_count, VK_NULL_HANDLE);
+
+    current_frame_       = 0;
+    last_acquired_image_ = 0;
     return true;
 }
 

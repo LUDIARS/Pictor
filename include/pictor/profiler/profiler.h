@@ -87,9 +87,11 @@ public:
     void begin_cpu_section(CpuSection section);
     void end_cpu_section(CpuSection section);
 
-    /// Record GPU timestamps
-    void begin_gpu_section(const std::string& name);
-    void end_gpu_section(const std::string& name);
+    /// Record GPU timestamps。
+    /// `name` は文字列リテラル想定 (GpuTimerManager が `const char*` のまま保持し
+    /// per-frame の文字列確保をしない)。
+    void begin_gpu_section(const char* name);
+    void end_gpu_section(const char* name);
 
     /// Update draw stats
     void record_draw_calls(uint32_t count) { current_stats_.draw_call_count += count; }
