@@ -12,6 +12,15 @@ namespace pictor {
 
 class VulkanContext;
 
+/// 1 region につき 2 本打つ timestamp の begin/end 識別子。
+/// 以前は `name + "_begin"` / `name + "_end"` の **per-frame 文字列連結**
+/// (長い region 名で SSO 超過 → ヒープ確保) で区別していたが、 enum 化して
+/// per-frame アロケーションを撤廃した (review/2026-06-11 D-3)。
+enum class TimestampKind : uint8_t {
+    Begin = 0,
+    End,
+};
+
 /// GPU timestamp query manager (§13.3).
 ///
 /// 実 Vulkan の `VkQueryPool` で per-pass の GPU 実行時間を計測する。
@@ -75,20 +84,24 @@ public:
     /// Begin a new frame's timing
     void begin_frame(uint32_t frame_index);
 
-    /// Record a timestamp (returns query index)
-    uint32_t write_timestamp(const std::string& label);
+    /// Record a timestamp (returns query index)。
+    /// `region` / `kind` は debug 識別用で hot path では文字列を作らない
+    /// (`const char*` リテラルをそのまま保持)。
+    uint32_t write_timestamp(const char* region, TimestampKind kind);
 
-    /// Begin/end a named timer region
-    void begin_region(const std::string& name);
-    void end_region(const std::string& name);
+    /// Begin/end a named timer region。
+    /// `name` は呼び側が渡す **文字列リテラル** (静的寿命) を想定し、 内部では
+    /// `const char*` のまま保持する (per-frame コピー / alloc なし)。
+    void begin_region(const char* name);
+    void end_region(const char* name);
 
 #ifdef PICTOR_HAS_VULKAN
     /// `cmd` へ実 `vkCmdWriteTimestamp` を発行する計測経路。
     /// `begin_region` は領域開始時 (TOP_OF_PIPE)、 `end_region` は
     /// 領域終了時 (BOTTOM_OF_PIPE) に timestamp を書く。
-    uint32_t write_timestamp(const std::string& label, VkCommandBuffer cmd);
-    void begin_region(const std::string& name, VkCommandBuffer cmd);
-    void end_region(const std::string& name, VkCommandBuffer cmd);
+    uint32_t write_timestamp(const char* region, TimestampKind kind, VkCommandBuffer cmd);
+    void begin_region(const char* name, VkCommandBuffer cmd);
+    void end_region(const char* name, VkCommandBuffer cmd);
 
     /// begin_frame の直後・最初の timestamp を書く前に 1 度呼ぶ。
     /// 今フレームが書き込む query pool を `vkCmdResetQueryPool` する
@@ -100,11 +113,13 @@ public:
     void collect_results();
 
     /// Get elapsed time for a named region (ms)
-    double get_region_ms(const std::string& name) const;
+    double get_region_ms(const char* name) const;
 
-    /// Get all region timings
+    /// Get all region timings。
+    /// `name` は region 登録時に渡された `const char*` リテラルを指す
+    /// (静的寿命なのでコピー不要)。
     struct RegionTiming {
-        std::string name;
+        const char* name;
         double      gpu_ms;
     };
 
@@ -114,14 +129,15 @@ public:
 
 private:
     struct TimestampEntry {
-        std::string label;
-        uint32_t    query_index;
-        uint64_t    value = 0;
-        bool        has_result = false;
+        const char*  region = nullptr;       // 文字列リテラル (debug 識別用)
+        TimestampKind kind  = TimestampKind::Begin;
+        uint32_t     query_index = 0;
+        uint64_t     value = 0;
+        bool         has_result = false;
     };
 
     struct Region {
-        std::string name;
+        const char* name;
         uint32_t    begin_query;
         uint32_t    end_query;
         double      elapsed_ms = 0.0;

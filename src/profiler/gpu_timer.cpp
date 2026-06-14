@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 #ifdef PICTOR_HAS_VULKAN
 #include "pictor/surface/vulkan_context.h"
@@ -105,24 +106,24 @@ void GpuTimerManager::begin_frame(uint32_t frame_index) {
 #endif
 }
 
-uint32_t GpuTimerManager::write_timestamp(const std::string& label) {
+uint32_t GpuTimerManager::write_timestamp(const char* region, TimestampKind kind) {
     if (current_query_ >= config_.max_queries) {
         return UINT32_MAX;
     }
     uint32_t query_index = current_query_++;
-    timestamps_.push_back({label, query_index, 0, false});
+    timestamps_.push_back({region, kind, query_index, 0, false});
     return query_index;
 }
 
-void GpuTimerManager::begin_region(const std::string& name) {
-    uint32_t begin_query = write_timestamp(name + "_begin");
+void GpuTimerManager::begin_region(const char* name) {
+    uint32_t begin_query = write_timestamp(name, TimestampKind::Begin);
     regions_.push_back({name, begin_query, UINT32_MAX, 0.0});
 }
 
-void GpuTimerManager::end_region(const std::string& name) {
-    uint32_t end_query = write_timestamp(name + "_end");
+void GpuTimerManager::end_region(const char* name) {
+    uint32_t end_query = write_timestamp(name, TimestampKind::End);
     for (auto& region : regions_) {
-        if (region.name == name && region.end_query == UINT32_MAX) {
+        if (region.end_query == UINT32_MAX && std::strcmp(region.name, name) == 0) {
             region.end_query = end_query;
             break;
         }
@@ -140,9 +141,9 @@ void GpuTimerManager::reset_pool(VkCommandBuffer cmd) {
     reset_done_ = true;
 }
 
-uint32_t GpuTimerManager::write_timestamp(const std::string& label,
+uint32_t GpuTimerManager::write_timestamp(const char* region, TimestampKind kind,
                                           VkCommandBuffer cmd) {
-    uint32_t query_index = write_timestamp(label);
+    uint32_t query_index = write_timestamp(region, kind);
     if (!vulkan_ready_ || query_index == UINT32_MAX) return query_index;
     // 念のため: 最初の timestamp 前に reset を済ませる (呼び側が
     // reset_pool を忘れても安全側に倒す)。
@@ -152,9 +153,9 @@ uint32_t GpuTimerManager::write_timestamp(const std::string& label,
     return query_index;
 }
 
-void GpuTimerManager::begin_region(const std::string& name,
+void GpuTimerManager::begin_region(const char* name,
                                    VkCommandBuffer cmd) {
-    uint32_t begin_query = write_timestamp(name + "_begin");
+    uint32_t begin_query = write_timestamp(name, TimestampKind::Begin);
     regions_.push_back({name, begin_query, UINT32_MAX, 0.0});
     if (!vulkan_ready_ || begin_query == UINT32_MAX) return;
     reset_pool(cmd);
@@ -163,11 +164,11 @@ void GpuTimerManager::begin_region(const std::string& name,
                         query_pools_[current_flight_], begin_query);
 }
 
-void GpuTimerManager::end_region(const std::string& name,
+void GpuTimerManager::end_region(const char* name,
                                  VkCommandBuffer cmd) {
-    uint32_t end_query = write_timestamp(name + "_end");
+    uint32_t end_query = write_timestamp(name, TimestampKind::End);
     for (auto& region : regions_) {
-        if (region.name == name && region.end_query == UINT32_MAX) {
+        if (region.end_query == UINT32_MAX && std::strcmp(region.name, name) == 0) {
             region.end_query = end_query;
             break;
         }
@@ -253,9 +254,9 @@ void GpuTimerManager::collect_results() {
     resolved_regions_ = regions_;
 }
 
-double GpuTimerManager::get_region_ms(const std::string& name) const {
+double GpuTimerManager::get_region_ms(const char* name) const {
     for (const auto& region : resolved_regions_) {
-        if (region.name == name) return region.elapsed_ms;
+        if (std::strcmp(region.name, name) == 0) return region.elapsed_ms;
     }
     return 0.0;
 }
