@@ -95,12 +95,12 @@ void Profiler::end_cpu_section(CpuSection section) {
     cpu_section_timers_[static_cast<size_t>(section)].stop();
 }
 
-void Profiler::begin_gpu_section(const std::string& name) {
+void Profiler::begin_gpu_section(const char* name) {
     if (!enabled_) return;
     gpu_timer_.begin_region(name);
 }
 
-void Profiler::end_gpu_section(const std::string& name) {
+void Profiler::end_gpu_section(const char* name) {
     if (!enabled_) return;
     gpu_timer_.end_region(name);
 }
