@@ -27,6 +27,13 @@ struct VulkanContextConfig {
     /// パス専用)。 default_render_pass() / framebuffers() は VK_NULL_HANDLE を
     /// 返すので、 これらに依存するコンポーネントは同居できない。
     bool        create_default_render_pass = true;
+
+    /// CPU が GPU に先行できる同時フレーム数 (frames-in-flight、 Q-3)。
+    /// 1 = 完全直列 (旧挙動、 acquire ごとに前フレームの GPU 完了を待つ)。
+    /// 2 以上で CPU 側の記録と GPU 実行を重ねられる。 fence / image-available
+    /// セマフォを flight 単位に多重化する (render-finished は swapchain image
+    /// 単位)。
+    uint32_t    frames_in_flight = 2;
 };
 
 /// Manages the Vulkan instance, physical/logical device, queue,
@@ -82,10 +89,21 @@ public:
     VkCommandBuffer begin_single_time_commands();
     void            end_single_time_commands(VkCommandBuffer cmd);
 
-    // Per-frame sync objects
-    VkSemaphore image_available_semaphore() const { return image_available_sem_; }
-    VkSemaphore render_finished_semaphore() const { return render_finished_sem_; }
-    VkFence     in_flight_fence()           const { return in_flight_fence_; }
+    // Per-frame sync objects (frames-in-flight, Q-3)。
+    //   image_available / in_flight_fence は **現在の flight** のオブジェクトを返す。
+    //   render_finished は **直近に acquire した swapchain image** のセマフォを返す
+    //   (consumer は acquire_next_image() の後に submit を組むので image index は確定済)。
+    // これにより consumer 側のコード (acquire → submit(accessor) → present) は無変更で
+    // 多重 flight 化できる。
+    VkSemaphore image_available_semaphore() const { return image_available_sems_[current_frame_]; }
+    VkSemaphore render_finished_semaphore() const { return render_finished_sems_[last_acquired_image_]; }
+    VkFence     in_flight_fence()           const { return in_flight_fences_[current_frame_]; }
+
+    /// 同時フレーム数 (frames-in-flight)。 consumer が flight 単位の per-frame
+    /// リソース (uniform ring 等) を確保するときの段数に使える。
+    uint32_t    frames_in_flight() const { return frames_in_flight_; }
+    /// 現在の flight index (0..frames_in_flight()-1)。 present のたびに進む。
+    uint32_t    current_frame()    const { return current_frame_; }
 
     // Optional extension features that the device was created with. Pictor
     // probes these during device creation and enables whichever are
@@ -145,9 +163,17 @@ private:
     VkCommandPool            command_pool_       = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> command_buffers_;
 
-    VkSemaphore              image_available_sem_ = VK_NULL_HANDLE;
-    VkSemaphore              render_finished_sem_ = VK_NULL_HANDLE;
-    VkFence                  in_flight_fence_     = VK_NULL_HANDLE;
+    // frames-in-flight 同期 (Q-3)。 image_available / in_flight_fence は flight
+    // 単位、 render_finished は swapchain image 単位で多重化する。 images_in_flight_
+    // は「その image を最後に使った flight の fence」を借用保持し (所有しない)、
+    // acquire 時に command buffer / image の再利用衝突を防ぐ。
+    uint32_t                 frames_in_flight_    = 2;
+    uint32_t                 current_frame_       = 0;
+    uint32_t                 last_acquired_image_ = 0;
+    std::vector<VkSemaphore> image_available_sems_;  // [frames_in_flight_]
+    std::vector<VkSemaphore> render_finished_sems_;  // [swapchain image count]
+    std::vector<VkFence>     in_flight_fences_;       // [frames_in_flight_]
+    std::vector<VkFence>     images_in_flight_;       // [swapchain image count], 借用
 
     bool has_fragment_shader_interlock_             = false;
     bool has_rasterization_order_attachment_access_ = false;
