@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pictor — API リファレンス</title>
+<link rel="stylesheet" href="assets/pictor.css">
+</head>
+<body>
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html"><span class="logo">Pc</span> Pictor
+      <span class="tag">Data-Driven Rendering Pipeline</span></a>
+    <nav class="links">
+      <a href="index.html">概要</a>
+      <a href="graph.html">グラフ</a>
+      <a href="api.html" class="active">API</a>
+      <a href="review.html">レビュー</a>
+      <a href="https://github.com/ludiars/pictor">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero" style="padding-bottom:1.2rem">
+    <h1>API リファレンス</h1>
+    <p class="sub">公開 API（<code>include/pictor/</code>、<code>pictor.h</code> 集約）をドメイン別に整理。
+      各エントリは<strong>トグルで展開</strong>し、ヘッダ・目的・メソッドシグネチャ・パラメータを確認できる。</p>
+  </div>
+
+  <div class="toolbar">
+    <input type="search" id="search" placeholder="クラス・メソッド・型を検索（例: register_object, GIConfig, bake）">
+    <button class="btn" id="expand">すべて展開</button>
+    <button class="btn" id="collapse">すべて折りたたむ</button>
+  </div>
+  <div id="domnav" class="badges" style="margin-bottom:1.5rem"></div>
+
+  <div id="content"></div>
+  <p id="noresult" class="muted" style="display:none">該当する API がありません。</p>
+</main>
+
+<footer>
+  Pictor API · 出典: <code>include/pictor/*.h</code> ・ <code>docs/api/classes.md</code> ・ <code>docs/api/interfaces.md</code>。
+  シグネチャは公開ヘッダ準拠（簡略表記を含む）。正確な型は各ヘッダを参照。
+</footer>
+
+<script>
+// ── API model ─────────────────────────────────────────────────
+// method: [returnType, "name(params)", "description"]
+const DOMAINS = [
+ { id:"core", title:"Core / Renderer", items:[
+   { name:"PictorRenderer", header:"pictor/core/pictor_renderer.h",
+     purpose:"パイプライン全体を統括するエントリポイント。サブシステム初期化・フレーム駆動・プロファイル切替を行う。",
+     methods:[
+      ["void","initialize(const RendererConfig& config)","レンダラ初期化（サブシステム構築）"],
+      ["void","shutdown()","全リソース解放"],
+      ["ObjectId","register_object(const ObjectDescriptor& desc)","シーンへオブジェクト登録（flags で自動分類）"],
+      ["void","unregister_object(ObjectId id)","オブジェクト除去"],
+      ["void","update_transform(ObjectId id, const float4x4& transform)","Dynamic オブジェクトの transform 更新"],
+      ["void","begin_frame(float delta_time)","フレーム開始: fence 待機 + allocator reset"],
+      ["void","render(const Camera& camera)","シーン描画"],
+      ["void","end_frame()","GPU submit + present"],
+      ["bool","set_profile(const std::string& name)","レンダープロファイル切替（Lite/Standard/Ultra 等）"],
+      ["bool","load_profile_from_file(const std::string& path, std::string* error=nullptr)","JSON プロファイルを読込・適用"],
+      ["void","reload_active_profile()","アクティブプロファイルを再適用"],
+      ["void","set_directional_light(const DirectionalLight& light)","ディレクショナルライト設定"],
+      ["GIBakeResult","bake_static_gi(BakeProgressCallback progress=nullptr)","静的 GI ベイク実行"],
+      ["void","set_update_callback(IUpdateCallback*)","カスタム更新コールバック登録"],
+      ["void","set_culling_provider(ICullingProvider*)","カスタムカリング差替"],
+      ["void","set_batch_policy(IBatchPolicy*)","カスタムバッチ方針差替"],
+      ["void","register_custom_pass(ICustomRenderPass*)","カスタムレンダーパス登録"],
+      ["AnimationSystem&","animation()","アニメーションシステム取得"],
+      ["Profiler&","profiler()","プロファイラ取得"],
+      ["void","on_pause() / on_resume() / on_low_memory(MemoryPressure)","モバイルライフサイクル通知"],
+     ]},
+   { name:"RendererConfig", header:"pictor/core/pictor_renderer.h", kind:"struct",
+     purpose:"レンダラ初期化パラメータ。",
+     fields:[["std::string","initial_profile = \"Standard\"","初期プロファイル名"],
+       ["MemoryConfig","memory_config","メモリ設定"],
+       ["UpdateConfig","update_config","更新設定"],
+       ["uint32_t","screen_width / screen_height","画面解像度"],
+       ["bool","profiler_enabled = true","プロファイラ有効化"],
+       ["OverlayMode","overlay_mode","オーバーレイ表示モード"]]},
+   { name:"ObjectDescriptor", header:"pictor/core/types.h", kind:"struct",
+     purpose:"すべての描画対象を表す統一入力フォーマット。",
+     fields:[["MeshHandle","mesh","メッシュ ID"],["MaterialHandle","material","マテリアル ID"],
+       ["float4x4","transform","ワールド変換（64B, cache-line 整列）"],["AABB","bounds","バウンディングボックス（24B）"],
+       ["uint16_t","flags","分類・属性フラグ（STATIC/DYNAMIC/GPU_DRIVEN/…）"],
+       ["uint64_t","shaderKey","レンダーステート識別子（ソートキー）"],
+       ["uint32_t","materialKey","マテリアル・テクスチャ識別子"],["uint8_t","lodLevel","LOD レベル (0-255)"],
+       ["ShaderHandle","customShader","カスタムシェーダ override（INVALID_SHADER でなし）"]]},
+   { name:"Camera", header:"pictor/core/types.h", kind:"struct",
+     purpose:"ビュー/プロジェクションとカリング用 frustum。",
+     fields:[["float4x4","view","ビュー行列"],["float4x4","projection","プロジェクション行列"],
+       ["float3","position","カメラ位置"],["Frustum","frustum","6 平面 frustum"]]},
+   { name:"ObjectFlags / 列挙型", header:"pictor/core/types.h", kind:"enum",
+     purpose:"属性フラグと主要 enum。",
+     fields:[["flags","STATIC|DYNAMIC|GPU_DRIVEN|CAST_SHADOW|RECEIVE_SHADOW|TRANSPARENT|TWO_SIDED|INSTANCED|LAYER(8-9)","ObjectFlags ビット"],
+       ["RenderingPath","FORWARD / FORWARD_PLUS / DEFERRED / HYBRID","描画パス"],
+       ["PassType","DEPTH_ONLY/OPAQUE/TRANSPARENT/SHADOW/POST_PROCESS/COMPUTE/CUSTOM","パス種別"],
+       ["PoolType","STATIC / DYNAMIC / GPU_DRIVEN","プール種別"],
+       ["TextureFormat","RGBA8_UNORM/SRGB, RGBA16F, BC1/3/5/7, DEPTH_32F …","テクスチャ形式"]]},
+ ]},
+
+ { id:"data", title:"Data — アセット管理", items:[
+   { name:"DataHandler", header:"pictor/data/data_handler.h",
+     purpose:"テクスチャ・メッシュ・モデルの統合管理ファサード。",
+     methods:[
+      ["TextureHandle","register_texture(const TextureDescriptor& desc)","テクスチャ登録（即時/遅延アップロード）"],
+      ["bool","upload_texture_data(TextureHandle, const void* data, size_t size, uint32_t mip=0, uint32_t layer=0)","テクスチャデータ転送"],
+      ["MeshHandle","register_mesh(const MeshDataDescriptor& desc)","柔軟な頂点レイアウトでメッシュ登録"],
+      ["bool","upload_vertex_data(MeshHandle, const void* data, size_t size)","頂点データ転送"],
+      ["bool","update_vertex_region(MeshHandle, size_t offset, const void* data, size_t size)","部分更新"],
+      ["ModelHandle","register_model(const ModelDescriptor& desc)","3D モデル登録"],
+      ["TextureRegistry&","textures()","テクスチャレジストリ取得"],
+      ["VertexDataUploader&","meshes()","メッシュレジストリ取得"],
+     ]},
+   { name:"DataQueryAPI", header:"pictor/data/data_query_api.h",
+     purpose:"レベルエディタ・アセットブラウザ等の外部ツール向け読み取り専用クエリ。",
+     methods:[
+      ["DataSummary","get_summary()","集計（件数・GPU バイト）取得"],
+      ["std::vector<TextureInfo>","get_all_textures()","全テクスチャ情報"],
+      ["void","for_each_texture(std::function<void(const TextureInfo&)>)","テクスチャ反復"],
+      ["std::vector<TextureInfo>","get_textures_by_format(TextureFormat)","形式でフィルタ"],
+      ["MeshInfo","find_mesh(const std::string& name)","名前で検索"],
+      ["std::string","export_json()","ツール連携用 JSON エクスポート"],
+     ]},
+   { name:"TextureDescriptor / MeshDataDescriptor", header:"pictor/data/…", kind:"struct",
+     purpose:"登録時の記述子。",
+     fields:[["TextureDescriptor","name / width / height / format / type / initial_data","テクスチャ記述"],
+       ["MeshDataDescriptor","name / layout(VertexLayout) / vertex_data / vertex_count / index_data / index_32bit","メッシュ記述"],
+       ["VertexLayout","attributes[]{semantic,type,offset} + stride","柔軟な頂点レイアウト"]]},
+ ]},
+
+ { id:"material", title:"Material — PBR マテリアル", items:[
+   { name:"BaseMaterialBuilder", header:"pictor/material/base_material_builder.h",
+     purpose:"Fluent API で PBR マテリアルを構築し、パス別バリアントを自動生成（fluent: すべて self& を返す）。",
+     methods:[
+      ["BaseMaterialBuilder&","albedo(TextureHandle) / normal_map(...) / metallic_map(...) / roughness_map(...) / ao_map(...) / emissive_map(...)","テクスチャマップ設定"],
+      ["BaseMaterialBuilder&","base_color(r,g,b,a) / emissive_color(r,g,b)","色値設定"],
+      ["BaseMaterialBuilder&","metallic_value(float) / roughness_value(float) / alpha_cutoff(float)","スカラ値設定"],
+      ["BaseMaterialBuilder&","enable_two_sided(bool) / enable_alpha_test(bool) / enable_vertex_color(bool)","フィーチャートグル"],
+      ["BaseMaterialBuilder&","set_pass_features(PassType pass, uint32_t features)","パス別フィーチャー上書き"],
+      ["BuiltMaterial","build(MaterialHandle handle)","バリアント付きマテリアル生成"],
+     ]},
+   { name:"MaterialRegistry", header:"pictor/material/base_material_builder.h",
+     purpose:"BuiltMaterial の一元管理・O(1) ルックアップ。",
+     methods:[
+      ["bool","register_material(BuiltMaterial&& mat)","マテリアル登録"],
+      ["const BuiltMaterial*","get(MaterialHandle)","O(1) ルックアップ"],
+      ["const PassMaterialVariant*","variant_for(MaterialHandle, PassType)","パスバリアント取得"],
+      ["MaterialHandle","allocate_handle()","ハンドル払い出し"],
+     ]},
+   { name:"パス別バリアント", header:"pictor/material/material_property.h", kind:"enum",
+     purpose:"登録時にパスごとに不要なバインディング/フラグをストリップしパーミュテーション最小化。",
+     fields:[["Shadow / Depth-Only","ALPHA_TEST, TWO_SIDED のみ","深度系パス"],
+       ["GI","ALBEDO_MAP, EMISSIVE_MAP, ALPHA_TEST, TWO_SIDED, VERTEX_COLOR","GI パス"],
+       ["Opaque / Transparent","全フィーチャー","通常パス"]]},
+ ]},
+
+ { id:"gi", title:"GI — グローバルイルミネーション", items:[
+   { name:"GILightingSystem", header:"pictor/gi/gi_lighting_system.h",
+     purpose:"マテリアルシェーダから独立した GI プリパス（CSM シャドウ / SSAO / Light Probe）。",
+     methods:[
+      ["void","initialize(uint32_t max_objects, uint32_t width, uint32_t height)","GPU リソース確保"],
+      ["void","execute(const float4x4& view, const float4x4& projection)","GI パス実行"],
+      ["void","set_directional_light(const DirectionalLight& light)","太陽光設定"],
+      ["void","set_config(const GIConfig& config)","GI 全体再設定"],
+      ["void","set_shadow_enabled(bool) / set_ssao_enabled(bool) / set_gi_probes_enabled(bool)","フィーチャートグル"],
+      ["void","upload_probe_data(const float* sh_data, uint32_t probe_count)","Probe SH 係数アップロード"],
+     ]},
+   { name:"GIBakeSystem", header:"pictor/gi/gi_bake.h",
+     purpose:"静的オブジェクトのオフライン GI ベイク（Shadow/AO/Irradiance/Lightmap）。",
+     methods:[
+      ["void","set_config(const GIBakeConfig& config)","ベイク設定"],
+      ["GIBakeResult","bake(BakeProgressCallback progress=nullptr)","ベイク実行（プログレス可、false でキャンセル）"],
+      ["void","apply(const GIBakeResult& result)","結果を GPU へ適用"],
+      ["bool","save(const std::string& path, const GIBakeResult&)","ファイル保存"],
+      ["GIBakeResult","load(const std::string& path)","ファイル読込"],
+     ]},
+   { name:"GIConfig / ShadowMapConfig / SSAOConfig / GIProbeConfig", header:"pictor/gi/…", kind:"struct",
+     purpose:"GI 設定構造体（JSON プロファイルからも設定可能）。",
+     fields:[["ShadowMapConfig","cascade_count / resolution / depth_bias / filter_mode(NONE/PCF/PCSS) / pcss_*","シャドウ"],
+       ["SSAOConfig","sample_count / radius / bias / intensity / falloff_* / blur_enabled","SSAO"],
+       ["GIProbeConfig","grid_origin / grid_spacing / grid_x/y/z / gi_intensity","Probe グリッド"],
+       ["BakeTarget","SHADOW_MAP / AMBIENT_OCCLUSION / PROBE_IRRADIANCE / LIGHTMAP / ALL","ベイク対象"]]},
+   { name:"IBakeDataProvider", header:"pictor/gi/gi_bake.h", kind:"interface",
+     purpose:"ベイク入力の追加供給（追加ライト・emissive サーフェス）。",
+     methods:[["std::vector<PointLight>","get_bake_point_lights()","追加ライト"],
+       ["std::vector<ObjectId>","get_emissive_objects()","emissive オブジェクト"],
+       ["void","on_bake_begin() / on_bake_complete(const GIBakeResult&)","フック"]]},
+ ]},
+
+ { id:"surface", title:"Surface — ウィンドウ / Vulkan", items:[
+   { name:"ISurfaceProvider", header:"pictor/surface/surface_provider.h", kind:"interface",
+     purpose:"Pictor をウィンドウシステムから分離する抽象。ホストが実装、または GlfwSurfaceProvider を使用。",
+     methods:[
+      ["NativeWindowHandle","get_native_handle()","VkSurfaceKHR 生成用ハンドル（必須）"],
+      ["SwapchainConfig","get_swapchain_config()","希望スワップチェーン設定（必須）"],
+      ["void","on_swapchain_created(uint32_t w, uint32_t h)","作成/再作成通知"],
+      ["void","poll_events()","毎フレームのイベントポーリング"],
+      ["bool","should_close()","終了判定"],
+      ["uint32_t","get_required_instance_extensions(const char** out, uint32_t max)","必要な Vulkan 拡張"],
+     ]},
+   { name:"VulkanContext", header:"pictor/surface/vulkan_context.h",
+     purpose:"Vulkan インスタンス・デバイス・スワップチェーン管理（PICTOR_HAS_VULKAN 時）。",
+     methods:[
+      ["bool","initialize(ISurfaceProvider* provider, const VulkanContextConfig& cfg={})","コンテキスト生成"],
+      ["uint32_t","acquire_next_image()","スワップチェーンイメージ取得"],
+      ["bool","present(uint32_t image_index)","画面提示"],
+      ["bool","recreate_swapchain()","リサイズ対応"],
+      ["VkDevice","device() / instance() / physical_device() / graphics_queue()","Vulkan ハンドル取得"],
+     ]},
+   { name:"GlfwSurfaceProvider / NativeWindowHandle", header:"pictor/surface/glfw_surface_provider.h",
+     purpose:"デモ・ツール向け GLFW 実装。対応: Win32 / Xlib / XCB / Wayland / Cocoa / Android / iOS。",
+     methods:[["bool","create(const GlfwWindowConfig& config={})","GLFW ウィンドウ生成"],
+       ["GLFWwindow*","glfw_window()","GLFW ハンドル取得"],
+       ["—","NativeWindowHandle{type, union{win32/xlib/xcb/wayland/cocoa/android/ios}}","プラットフォーム別ハンドル"]]},
+ ]},
+
+ { id:"pipeline", title:"Pipeline / 拡張点", items:[
+   { name:"PipelineProfileManager", header:"pictor/pipeline/pipeline_profile.h",
+     purpose:"組込み（Lite/Standard/Ultra）・カスタムプロファイルの管理（系統A）。",
+     methods:[["void","register_profile(const PipelineProfileDef& def)","カスタム登録"],
+       ["bool","set_profile(const std::string& name)","アクティブ化"],
+       ["const PipelineProfileDef*","get_profile(const std::string& name)","名前で取得"],
+       ["std::vector<std::string>","profile_names()","一覧"],
+       ["static PipelineProfileDef","create_lite_profile() / create_standard_profile() / create_ultra_profile()","C++ ファクトリ"]]},
+   { name:"プロファイル JSON シリアライザ", header:"pictor/pipeline/pipeline_profile_serializer.h",
+     purpose:"PipelineProfileDef ⇄ JSON。preset シード版は差分のみ記述可。",
+     methods:[["std::string","to_pipeline_profile_json(const PipelineProfileDef&)","→ JSON"],
+       ["bool","from_pipeline_profile_json(const std::string& json, PipelineProfileDef& out, std::string* err=nullptr)","JSON →"],
+       ["bool","load_pipeline_profile_file(path, PipelineProfileDef& out, ...)","ファイル読込"],
+       ["bool","save_pipeline_profile_file(path, const PipelineProfileDef&, ...)","ファイル保存"]]},
+   { name:"RenderPassScheduler", header:"pictor/pipeline/render_pass_scheduler.h",
+     purpose:"プロファイル定義順にレンダーパスを実行。",
+     methods:[["void","reconfigure(const PipelineProfileDef& profile)","再設定"],
+       ["void","register_custom_pass(ICustomRenderPass* pass)","カスタムパス登録"],
+       ["void","execute(const BatchBuilder&, const CullingSystem&, GPUDrivenPipeline*)","全パス実行"],
+       ["const std::vector<RenderPassDef>&","pass_order()","実行順取得"]]},
+   { name:"ICustomRenderPass", header:"pictor/pipeline/…", kind:"interface",
+     purpose:"カスタムレンダーパス拡張点。pass_name が一致すれば execute() が実駆動。",
+     methods:[["const char*","name()","パス識別子"],["PassType","type()","パス種別"],
+       ["std::vector<std::string>","required_streams()","SoA ストリームヒント"],
+       ["void","execute(const std::vector<RenderBatch>& batches)","描画実装"]]},
+   { name:"IUpdateCallback / ICullingProvider / IBatchPolicy / IJobDispatcher", header:"pictor/update · culling · batch", kind:"interface",
+     purpose:"更新・カリング・バッチ・ジョブの差替インタフェース（Interface Segregation）。",
+     methods:[["IUpdateCallback","on_pre_update(PoolType,count) / on_post_update(...) / on_compute_dispatch(count)","更新フック"],
+       ["ICullingProvider","cull(const AABB*, uint8_t* vis, uint32_t count, const Frustum&)","カスタムカリング"],
+       ["IBatchPolicy","should_merge(uint64_t key_a, uint64_t key_b)","バッチ境界判定"],
+       ["IJobDispatcher","dispatch(count, chunk, JobFunction) / wait_all() / worker_count()","並列ジョブ"]]},
+   { name:"ShaderRegistry", header:"pictor/shader/shader_registry.h",
+     purpose:"カスタムシェーダ登録 + Vulkan pipeline 生成（Visus CUSTOM kind の seam）。",
+     methods:[["ShaderHandle","register_shader(const CustomShaderDef& def)","シェーダ登録（vert/frag/comp + VertexLayout）"],
+       ["void","build_pipelines(...)","VkPipeline 生成"],
+       ["VkPipeline","pipeline(ShaderHandle handle)","pipeline 取得（is_custom() で分岐）"]]},
+ ]},
+
+ { id:"scene", title:"Scene / Culling / Batch / Update", items:[
+   { name:"SceneRegistry", header:"pictor/scene/scene_registry.h",
+     purpose:"Static/Dynamic/GPU-Driven プールを横断するオブジェクト管理（SoA store）。",
+     methods:[["ObjectId","register_object(const ObjectDescriptor&)","登録（flags で自動分類）"],
+       ["void","unregister_object(ObjectId)","除去（swap-and-pop）"],
+       ["void","update_transform(ObjectId, const float4x4&)","Dynamic transform 更新"],
+       ["void","change_pool(ObjectId, PoolType)","プール間移動"],
+       ["ObjectPool&","static_pool() / dynamic_pool() / gpu_driven_pool()","プール取得"],
+       ["ObjectLocation","find_object(ObjectId)","逆引き"]]},
+   { name:"CullingSystem", header:"pictor/culling/culling_system.h",
+     purpose:"WorldPartition 広域 → FlatBVH 詳細 → GPU Hi-Z の多段カリング。",
+     methods:[["void","configure_partition(const WorldPartitionConfig&)","グリッド設定"],
+       ["void","build_static_bvh(PoolAllocator&)","静的 BVH（SAH）構築"],
+       ["void","refit_dynamic_bvh()","動的 BVH refit"],
+       ["void","cull(const Frustum&, FrameAllocator&)","全段カリング実行"],
+       ["Stats","get_stats()","total/visible/culled/cull_ratio"]]},
+   { name:"BatchBuilder", header:"pictor/batch/batch_builder.h",
+     purpose:"ソート済 SoA から RenderBatch を生成（間接インデックス参照）。",
+     methods:[["void","build(FrameAllocator& allocator)","全プールのバッチ構築"],
+       ["void","invalidate_all() / invalidate_pool(PoolType)","バッチ無効化"],
+       ["const std::vector<RenderBatch>&","batches()","生成バッチ"],
+       ["const uint32_t*","sorted_indices()","ソート済インデックス"]]},
+   { name:"UpdateScheduler", header:"pictor/update/update_scheduler.h",
+     purpose:"プール別に CPU並列 / Non-Temporal / GPU compute を自動選択。",
+     methods:[["void","update(float delta_time)","全プール更新"],
+       ["void","set_config(const UpdateConfig&)","設定（chunk_size / nt_store_*）"],
+       ["void","set_job_dispatcher(IJobDispatcher*)","カスタムジョブ系"]]},
+ ]},
+
+ { id:"memory", title:"Memory / GPU", items:[
+   { name:"MemorySubsystem", header:"pictor/memory/memory_subsystem.h",
+     purpose:"CPU frame(bump) / pool(SoA) / GPU の統合メモリ管理。",
+     methods:[["void","initialize(const MemoryConfig&)","アロケータ初期化"],
+       ["FrameAllocator&","frame_allocator()","フレーム bump アロケータ"],
+       ["PoolAllocator&","pool_allocator()","永続プールアロケータ"],
+       ["GpuMemoryAllocator&","gpu_allocator()","GPU VRAM アロケータ"]]},
+   { name:"GpuMemoryAllocator", header:"pictor/memory/gpu_memory_allocator.h",
+     purpose:"自前サブアロケータ（VMA 非依存）。4 プール = mesh / ssbo / instance / staging。",
+     methods:[["GpuAllocation","allocate_mesh(size, align=256)","メッシュプール"],
+       ["GpuAllocation","allocate_ssbo(size, align=256)","SSBO プール（indirect もここから）"],
+       ["GpuAllocation","allocate_instance(size, align=16)","インスタンスプール"],
+       ["GpuAllocation","allocate_staging(size, align=16)","ステージングプール"]]},
+   { name:"GPUDrivenPipeline / GPUBufferManager", header:"pictor/gpu/…",
+     purpose:"GPU 駆動 compute（update→cull→LOD→indirect compaction）とバッファ管理。",
+     methods:[["void","GPUDrivenPipeline::execute(const Frustum&, FrameAllocator&)","compute パス実行"],
+       ["GpuAllocation","GPUBufferManager::allocate_ssbo/ubo/vbo/ibo(size_t)","バッファ確保"],
+       ["void","upload_to_buffer(const GpuAllocation&, const void* data, size_t size, size_t offset=0)","アップロード"]]},
+ ]},
+
+ { id:"postprocess", title:"PostProcess", items:[
+   { name:"PostProcessPipeline", header:"pictor/postprocess/postprocess_pipeline.h",
+     purpose:"実 Vulkan host-driven post-process チェーン（Bloom/ToneMapping/Vignette/ColorGrading/DoF）。",
+     methods:[["void","set_config(const PostProcessConfig&)","エフェクトパラメータ設定"],
+       ["bool","initialize_vulkan(VulkanContext&, shader_dir, w, h, output_format, output_views, config, lut…)","組込みチェーンで初期化"],
+       ["bool","initialize_chain(…, const PostProcessChain&, …)","任意 pass チェーンで初期化"],
+       ["VkRenderPass","scene_render_pass()","ホストが 3D シーンを描く先"],
+       ["void","record(VkCommandBuffer cmd)","エフェクトチェーン記録"]]},
+   { name:"build_post_process_config（ブリッジ）", header:"pictor/postprocess/postprocess_config_bridge.h",
+     purpose:"系統A の post_process スタックを実描画用 PostProcessConfig へ畳み込む。",
+     methods:[["PostProcessConfig","build_post_process_config(const std::vector<PostProcessDef>& stack, const PostProcessConfig& base={})","スタック → config"],
+       ["PostProcessConfig","build_post_process_config(const PipelineProfileDef& profile, const PostProcessConfig& base={})","プロファイル → config"]]},
+   { name:"PostProcessChain / PostProcessPassDef", header:"pictor/postprocess/postprocess_chain.h", kind:"struct",
+     purpose:"汎用ポストプロセスチェーン（1 pass = fullscreen triangle + 入出力論理ターゲット + push 定数）。",
+     fields:[["PostProcessPassDef","vert/frag SPIR-V + input names[] + output name + push layout/data","汎用パス記述"],
+       ["予約名","__scene__ / __output__ / __lut__","scene HDR / swapchain / LUT"],
+       ["PostProcessChain","build_post_process_chain(config, extra) で構築","実行順 passes[]"]]},
+ ]},
+
+ { id:"profiler", title:"Profiler", items:[
+   { name:"Profiler", header:"pictor/profiler/profiler.h",
+     purpose:"低オーバーヘッドの per-frame CPU/GPU 計測・ドローコール統計・メモリ追跡。",
+     methods:[["void","set_enabled(bool) / set_overlay_mode(OverlayMode)","有効化・表示モード"],
+       ["void","begin_cpu_section(CpuSection) / end_cpu_section(CpuSection)","CPU 計測（enum index, 非 alloc）"],
+       ["void","begin_gpu_section(const char*) / end_gpu_section(const char*)","GPU 計測（実 VkQueryPool）"],
+       ["void","record_draw_calls(uint32_t) / record_triangles(uint64_t) / record_visible(uint32_t,uint32_t)","統計記録"],
+       ["const FrameStats&","get_current_stats() / get_previous_stats()","フレーム統計取得"]]},
+   { name:"DataExporter", header:"pictor/profiler/data_exporter.h",
+     purpose:"プロファイル結果を JSON / Chrome Tracing / CSV へエクスポート。",
+     methods:[["bool","export_json(path) / export_chrome_tracing(path) / export_csv(path)","ファイル出力"],
+       ["std::string","get_json_string() / get_csv_string()","文字列取得"]]},
+ ]},
+
+ { id:"text", title:"Text", items:[
+   { name:"FontLoader", header:"pictor/text/font_loader.h",
+     purpose:"TTF/OTF を自前パース（FreeType/stb 非依存、big-endian、cmap format 4/12）。",
+     methods:[["FontHandle","load_from_file(const std::string& path)","ファイルから読込"],
+       ["bool","get_glyph_metrics(FontHandle, uint32_t codepoint, float size, GlyphMetrics& out)","グリフメトリクス"],
+       ["int16_t","get_kerning(FontHandle, uint32_t left, uint32_t right)","カーニング"]]},
+   { name:"TextRasterizer", header:"pictor/text/text_rasterizer.h",
+     purpose:"経路A: グリフをマルチページ atlas へラスタライズ（shelf-pack）+ quad 頂点生成。高頻度 UI/HUD 向け。",
+     methods:[["bool","build_atlas(FontHandle, CharSet, const Config&)","atlas 焼込"],
+       ["const ImageBuffer*","get_page(uint32_t page_index)","GPU upload 元ページ"],
+       ["std::vector<TextVertex>","generate_vertices(const std::string&, const TextStyle&, float x, float y)","quad 頂点生成"]]},
+   { name:"TextImageRenderer / TextSvgRenderer", header:"pictor/text/…",
+     purpose:"経路B: RGBA ImageBuffer へラスタライズ（効果付き）。経路C: グリフ輪郭を SVG path として抽出。",
+     methods:[["ImageBuffer","TextImageRenderer::render_text(FontHandle, const std::string&, const TextStyle&)","画像化"],
+       ["TextExtent","TextImageRenderer::measure_text(...)","寸法計測"],
+       ["std::string","TextSvgRenderer::render_text_svg(FontHandle, const std::string&, const TextStyle&)","SVG 文字列化"]]},
+ ]},
+
+ { id:"animation", title:"Animation / Vector", items:[
+   { name:"AnimationSystem", header:"pictor/animation/animation_system.h",
+     purpose:"Skeleton/clip/IK/FK + 2D/Rive/Lottie を統括するアニメーション基盤。",
+     methods:[["void","initialize(const AnimationSystemConfig&)","初期化"],
+       ["SkeletonHandle","register_skeleton(const SkeletonDescriptor&)","スケルトン登録"],
+       ["AnimationClipHandle","register_clip(const AnimationClipDescriptor&)","クリップ登録"],
+       ["AnimationStateHandle","create_instance(ObjectId, SkeletonHandle)","インスタンス生成"],
+       ["void","play(AnimationStateHandle, AnimationClipHandle, float weight=1, float speed=1, AnimBlendMode=OVERRIDE)","再生"],
+       ["void","update(float delta_time)","全インスタンス更新"]]},
+   { name:"RiveRenderer", header:"pictor/vector/rive_renderer.h",
+     purpose:"Rive Renderer 統合ラッパー（PICTOR_ENABLE_RIVE 時）。",
+     methods:[["bool","initialize(VulkanContext&, const Options&)","初期化"],
+       ["bool","load_asset(const std::string& path)",".riv 読込"],
+       ["void","set_artboard(const std::string&) / set_state_machine(const std::string&)","アートボード/SM 選択"],
+       ["void","advance(float time_seconds)","アニメ更新"],
+       ["void","draw(VkImage target, uint32_t width, uint32_t height)","イメージへ描画"]]},
+   { name:"importer / 2D / Lottie", header:"pictor/animation/…",
+     purpose:"その他のアニメーション機能。",
+     methods:[["—","FBXImporter / BVHImporter","モデル・モーション読込"],
+       ["—","Animation2D","2D スプライト/フレームアニメ"],
+       ["—","LottieAnimation / VectorAnimation","Lottie JSON / 汎用ベクター"],
+       ["—","IKSolver","FABRIK / CCD 逆運動学"]]},
+ ]},
+
+ { id:"capi", title:"C API（ABI 安定エクスポート）", items:[
+   { name:"pictor_c_api（ライフサイクル / シーン）", header:"pictor/c_api.h",
+     purpose:"WASM / N-API / Capacitor 等の上位向け C ABI。opaque ハンドル経由。1 シーン = 1 PictorRenderer。",
+     methods:[["PictorRenderer*","pictor_create_renderer_webgl(const char* canvas_dom_id)","WebGL2(Emscripten) 生成"],
+       ["PictorRenderer*","pictor_create_renderer_vulkan(void* native_window, void* vk_instance)","Vulkan native 生成"],
+       ["void","pictor_destroy_renderer(PictorRenderer*) / pictor_set_size(r, w, h)","破棄・リサイズ"],
+       ["void","pictor_begin_scene(r, uint32_t clear_color) / pictor_end_scene(r)","シーン開始/終了"],
+       ["void","pictor_render_frame(r, double dt_seconds)","フレーム描画"]]},
+   { name:"pictor_c_api（オブジェクト / テクスチャ / 診断）", header:"pictor/c_api.h",
+     purpose:"submit/update/remove は O(1)。文字列は UTF-8 NUL 終端。",
+     methods:[["PictorObjectHandle","pictor_submit_object(r, const PictorObjectDescriptor*)","追加（失敗 0）"],
+       ["void","pictor_update_object(r, handle, const PictorObjectDescriptor*)","更新"],
+       ["void","pictor_remove_object(r, handle)","除去"],
+       ["uint64_t","pictor_create_texture_rgba8(r, const uint8_t* pixels, int w, int h)","RGBA8 テクスチャ"],
+       ["const char*","pictor_last_error()","最終エラー（Pictor 所有）"],
+       ["uint32_t","pictor_c_api_version()","ABI バージョン（現状 1）"]]},
+   { name:"PictorObjectDescriptor / Kind", header:"pictor/c_api.h", kind:"struct",
+     purpose:"2D プリミティブ記述子。",
+     fields:[["PictorObjectKind","CIRCLE=1 / LINE=2 / QUAD=3 / TEXT=4 / IMAGE=5","種別"],
+       ["uint32_t","color (0xRRGGBBAA)","色"],["float","x, y","位置"],
+       ["float","a,b,c,d","円:r / 線:x2,y2,width / 四角:w,h,rotate / テキスト:font size"],
+       ["const char*","text (nullable) / uint64_t texture_id","リソース参照"]]},
+ ]},
+
+ { id:"webgl", title:"WebGL2 Backend", items:[
+   { name:"WebGLRenderer", header:"pictor/webgl/webgl_renderer.h",
+     purpose:"Emscripten 向け WebGL2 代替バックエンド（Vulkan と並行・非抽象、PICTOR_BUILD_WEBGL 時）。",
+     methods:[["bool","initialize(const WebGLRendererConfig& ={})","コンテキスト・シェーダ初期化"],
+       ["ObjectId","register_object(const ObjectDescriptor&)","オブジェクト登録"],
+       ["void","update_transform(ObjectId, const float4x4&) / update_color(ObjectId, r,g,b,a)","更新"],
+       ["void","render(const float* view, const float* projection)","行列指定で描画"],
+       ["const WebGLFrameStats&","get_stats()","FPS / draw_calls / visible / culled"]]},
+ ]},
+];
+
+// ── render ────────────────────────────────────────────────────
+const content = document.getElementById("content");
+const domnav = document.getElementById("domnav");
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+DOMAINS.forEach(dom=>{
+  const a=document.createElement("a"); a.href="#"+dom.id; a.className="badge";
+  a.textContent=dom.title; a.style.cursor="pointer"; domnav.appendChild(a);
+
+  const sec=document.createElement("section"); sec.id=dom.id; sec.className="api-group";
+  sec.innerHTML=`<h2>${dom.title}</h2>`;
+  dom.items.forEach(it=>{
+    const d=document.createElement("details"); d.className="api";
+    const kind = it.kind? `<span class="pill info">${it.kind}</span>` : "";
+    let body = `<div class="body"><div class="small muted">ヘッダ: <code>${it.header}</code> ${kind}</div>`;
+    if(it.methods){
+      body += `<h4>メソッド</h4><table><tbody>`;
+      it.methods.forEach(m=>{
+        body += `<tr><td class="mono" style="white-space:nowrap;color:var(--fg-dim)">${esc(m[0])}</td>`+
+                `<td class="mono"><span class="sig">${esc(m[1])}</span></td>`+
+                `<td class="small">${m[2]}</td></tr>`;
+      });
+      body += `</tbody></table>`;
+    }
+    if(it.fields){
+      body += `<h4>フィールド / 値</h4><table><tbody>`;
+      it.fields.forEach(f=>{
+        body += `<tr><td class="mono" style="white-space:nowrap;color:var(--fg-dim)">${esc(f[0])}</td>`+
+                `<td class="mono"><span class="sig">${esc(f[1])}</span></td>`+
+                `<td class="small">${f[2]}</td></tr>`;
+      });
+      body += `</tbody></table>`;
+    }
+    body += `</div>`;
+    d.innerHTML = `<summary><span class="sig">${esc(it.name)}</span>`+
+      `<span class="blurb">${it.purpose}</span></summary>${body}`;
+    d.dataset.search = (it.name+" "+it.purpose+" "+it.header+" "+
+      JSON.stringify(it.methods||"")+" "+JSON.stringify(it.fields||"")).toLowerCase();
+    sec.appendChild(d);
+  });
+  content.appendChild(sec);
+});
+
+// search
+const search=document.getElementById("search");
+const noresult=document.getElementById("noresult");
+search.addEventListener("input", ()=>{
+  const q=search.value.trim().toLowerCase(); let any=false;
+  document.querySelectorAll("details.api").forEach(d=>{
+    const hit = !q || d.dataset.search.includes(q);
+    d.style.display = hit?"":"none"; if(hit) any=true;
+    d.open = q && hit;
+  });
+  document.querySelectorAll("section.api-group").forEach(s=>{
+    const visible=[...s.querySelectorAll("details.api")].some(d=>d.style.display!=="none");
+    s.style.display=visible?"":"none";
+  });
+  noresult.style.display = any?"none":"";
+});
+document.getElementById("expand").onclick=()=>document.querySelectorAll("details.api").forEach(d=>d.open=true);
+document.getElementById("collapse").onclick=()=>document.querySelectorAll("details.api").forEach(d=>d.open=false);
+</script>
+</body>
+</html>
