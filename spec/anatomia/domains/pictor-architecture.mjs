@@ -40,25 +40,23 @@
  * with the cross-cutting foundations (memory/surface/shader) + base types pinned
  * below the data stage.
  *
- * SCOPE OF ENFORCEMENT: the spine stops at the render passes. The descriptor /
- * orchestration layers ABOVE the passes — material → visus → pipeline (render pass
- * DAG: registry/compiler/scheduler/profile) — are documented here as the top of the
- * stack but are intentionally NOT in the enforced `layers` array. Reason: every one
- * of those subsystems hand-rolls its own file-local JSON parser helpers
- * (skip_ws / parse_string / consume / expect / fail / parse_number — also duplicated
- * in animation/, see the structuralDup review finding), and Anatomia's current
- * call-edge resolver fans a bare free-function call to OTHER files' same-named
- * definitions instead of preferring the same-file one. That produces phantom
- * "calling up into pipeline/visus/material" edges (98 of them at v1) that are pure
- * resolution artifacts, not real layering debt. Enforcing those tiers would bury any
- * genuine signal under the phantom flood. Re-add material/visus/pipeline to SPINE
- * once Anatomia resolves bare free-function calls with same-file locality.
+ * SCOPE OF ENFORCEMENT: the full spine, foundations → passes → descriptor /
+ * orchestration (material → visus → pipeline = render pass DAG: registry/compiler/
+ * scheduler/profile). The upper three tiers were briefly unenforced at v1 because
+ * every serializer hand-rolls a file-local anonymous-namespace `struct Parser`
+ * (skip_ws / parse_string / consume / …, also in animation/, see the structuralDup
+ * review finding) and Anatomia's resolver fanned those same-named methods across
+ * files, producing ~98 phantom "calling up into pipeline/visus/material" edges.
+ * Anatomia PR #49 fixed the resolver (same-name file-local types disambiguate by
+ * caller locality; an untyped-receiver method call no longer binds to a foreign
+ * layer's same-named function), dropping the phantoms 219→3, so the upper tiers are
+ * now enforced. The handful of real residual advisories (e.g. surface→pipeline
+ * `find_memory_type`, visus→pipeline `pad`) are genuine upward free-calls into
+ * helpers that live a layer too high — exactly the coupling this spine should flag.
  *
  * NOT in any tier (intentionally unconstrained by the spine):
  *  - core/ facade (pictor_renderer / renderer_subsystem_manager / gi_facade): the
  *    composition root, allowed to depend on everything (see pictor-composition-root).
- *  - material / visus / pipeline: above the passes, unenforced pending the resolver
- *    fix described above.
  *  - animation / text / vector / ui: feature/widget layers that sit beside the core
  *    pipeline and legitimately reach into several stages.
  *  - profiler: cross-cutting observability, wired in at many points.
@@ -75,7 +73,10 @@ const SPINE = [
   "/culling/",                   // WorldPartition → FlatBVH → GPU Hi-Z culling
   "/batch/",                     // BatchBuilder + radix sort → draw batch / indirect
   "/gpu/",                       // GPU-driven pipeline (compute update→cull→LOD→indirect) + buffers
-  "/(gi|decal|postprocess)/",    // render passes: shadow/AO/probe, projected decals, post FX (top of enforced spine)
+  "/(gi|decal|postprocess)/",    // render passes: shadow/AO/probe, projected decals, post FX
+  "/material/",                  // PBR / custom material builders
+  "/visus/",                     // ObjectDescriptor templates (above material)
+  "/pipeline/",                  // render pass DAG: registry/compiler/scheduler/profile orchestration (top)
 ];
 
 /** Every spine/feature subsystem that may NOT call back into the composition root. */
@@ -88,12 +89,11 @@ const domains = [
     name: "pictor-pipeline-spine",
     description:
       "Pictor frame-pipeline dependency spine (spec/subsystem/README.md フレームパイプライン順): " +
-      "core/types→memory/surface→shader→data→scene→update→culling→batch→gpu→gi/decal/postprocess. " +
-      "A lower stage must never call up into a higher one — foundations (types/memory/surface) and " +
-      "early pipeline stages must not depend on the stages built on top of them. The descriptor/" +
-      "orchestration layers above the passes (material/visus/pipeline), the core/ renderer facade, " +
-      "the feature layers (animation/text/vector/ui), profiler, c_api and webgl are intentionally " +
-      "outside the enforced spine (see the SPINE comment for why material/visus/pipeline are unenforced).",
+      "core/types→memory/surface→shader→data→scene→update→culling→batch→gpu→gi/decal/postprocess→" +
+      "material→visus→pipeline. A lower stage must never call up into a higher one — foundations " +
+      "(types/memory/surface) and early pipeline stages must not depend on the stages built on top " +
+      "of them. The core/ renderer facade, the feature layers (animation/text/vector/ui), profiler, " +
+      "c_api and webgl are intentionally outside the spine.",
     presetRules: [
       {
         preset: "layerDependencyDirection",
