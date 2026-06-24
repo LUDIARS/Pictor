@@ -179,6 +179,49 @@ void VulkanContext::device_wait_idle() {
     if (device_) vkDeviceWaitIdle(device_);
 }
 
+// ---------- device memory profile (UMA / ReBAR) ----------
+
+DeviceMemoryDesc VulkanContext::describe_device_memory() const {
+    DeviceMemoryDesc d;
+    if (physical_device_ == VK_NULL_HANDLE) return d;
+
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physical_device_, &props);
+    switch (props.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   d.kind = GpuKind::Discrete;   break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: d.kind = GpuKind::Integrated; break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    d.kind = GpuKind::Virtual;    break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:            d.kind = GpuKind::Cpu;        break;
+        default:                                     d.kind = GpuKind::Unknown;    break;
+    }
+
+    VkPhysicalDeviceMemoryProperties mem{};
+    vkGetPhysicalDeviceMemoryProperties(physical_device_, &mem);
+
+    d.heaps.reserve(mem.memoryHeapCount);
+    for (uint32_t i = 0; i < mem.memoryHeapCount; ++i) {
+        MemoryHeapDesc h;
+        h.size_bytes   = mem.memoryHeaps[i].size;
+        h.device_local = (mem.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+        d.heaps.push_back(h);
+    }
+    d.types.reserve(mem.memoryTypeCount);
+    for (uint32_t i = 0; i < mem.memoryTypeCount; ++i) {
+        const VkMemoryType& mt = mem.memoryTypes[i];
+        MemoryTypeDesc t;
+        t.heap_index    = mt.heapIndex;
+        t.device_local  = (mt.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)  != 0;
+        t.host_visible  = (mt.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)  != 0;
+        t.host_coherent = (mt.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+        d.types.push_back(t);
+    }
+    return d;
+}
+
+DeviceMemoryProfile VulkanContext::device_memory_profile() const {
+    return analyze_device_memory(describe_device_memory());
+}
+
 // ---------- private: instance ----------
 
 bool VulkanContext::create_instance(const VulkanContextConfig& cfg) {
