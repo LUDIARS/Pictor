@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "pictor/surface/surface_provider.h"
+#include "pictor/core/device_memory_profile.h"
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -120,6 +121,12 @@ public:
     //   cheaper than interlock on some drivers.
     bool has_fragment_shader_interlock()               const { return has_fragment_shader_interlock_; }
     bool has_rasterization_order_attachment_access()   const { return has_rasterization_order_attachment_access_; }
+
+    /// 物理デバイスのメモリ構成を Vk 非依存記述に変換する (UMA/ReBAR 判定の入力)。
+    DeviceMemoryDesc    describe_device_memory() const;
+    /// 物理デバイスから直接アップロード戦略を判定する
+    /// (= analyze_device_memory(describe_device_memory()))。
+    DeviceMemoryProfile device_memory_profile() const;
 #endif
 
 private:

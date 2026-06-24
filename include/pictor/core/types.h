@@ -6,29 +6,53 @@
 #include <vector>
 
 // ============================================================
-// Cache-Line Alignment Configuration
+// Cache-Line / Alignment Configuration (multi-arch)
 //
-// PICTOR_CACHE_LINE_SIZE controls the alignment of hot data structures
-// for Data-Oriented Design (DoD) cache optimization.
+// 2 つの別 concern を分離する (混同すると 128B ライン機で float4x4 が
+// 膨らんで static_assert が落ちる — 旧実装のバグ):
 //
-// Typical values:
-//   64  — x86/x64, Apple Silicon (default)
-//   32  — some ARM/embedded
-//   128 — some server CPUs (Intel Ice Lake L2)
+//   1. PICTOR_CACHE_LINE_SIZE  — その CPU の「真の」L1 ライン幅。偽共有
+//      (destructive interference) 回避と perf モニタの「要素ライン跨ぎ」
+//      計算に使う。アーキ別に既定値を選ぶ:
+//        - Apple Silicon (M 系) / 近年の A 系 (iOS)         = 128B
+//        - POWER (ppc64)                                    = 128B
+//        - x86-64 (PC: Intel/AMD) / ARM Cortex-A (Android)  = 64B
+//      ※ iOS こそ 128B 側。Android 主流 SoC (Cortex-A/Kryo) は 64B。
+//      `-DPICTOR_CACHE_LINE_SIZE=N` で上書き可 (ARM サーバ Neoverse 等)。
+//      0 で整列を無効化。
 //
-// Override via compiler define: -DPICTOR_CACHE_LINE_SIZE=32
-// Set to 0 to disable cache-line alignment entirely.
+//   2. PICTOR_SIMD_ALIGN       — SIMD / 充填構造体 (float4x4 等) の整列。
+//      ライン幅とは独立の固定 16B。ライン幅を 128 にしても float4x4 を
+//      128B へ膨らませず transform ストリーム密度 (64B/要素) を保つ。
+//
+//   PICTOR_FALSE_SHARING_ALIGN — スレッド別データを 1 ライン専有させて
+//      偽共有を断つための alignas(ライン幅)。
+//
+// ※ ライン幅はコンパイル時定数 (alignas は実行時に変えられない)。実機の
+//   ライン幅は core/cache_info.h の query_cache_line_info() で取得し、
+//   「ビルド想定 vs 実機」の不一致を perf モニタで可視化する。
 // ============================================================
 
 #ifndef PICTOR_CACHE_LINE_SIZE
-#define PICTOR_CACHE_LINE_SIZE 64
+  #if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    #define PICTOR_CACHE_LINE_SIZE 128
+  #elif defined(__powerpc64__) || defined(__ppc64__)
+    #define PICTOR_CACHE_LINE_SIZE 128
+  #else
+    #define PICTOR_CACHE_LINE_SIZE 64
+  #endif
 #endif
 
 #if PICTOR_CACHE_LINE_SIZE > 0
-#define PICTOR_CACHE_ALIGN alignas(PICTOR_CACHE_LINE_SIZE)
+  #define PICTOR_CACHE_ALIGN         alignas(PICTOR_CACHE_LINE_SIZE)
+  #define PICTOR_FALSE_SHARING_ALIGN alignas(PICTOR_CACHE_LINE_SIZE)
 #else
-#define PICTOR_CACHE_ALIGN
+  #define PICTOR_CACHE_ALIGN
+  #define PICTOR_FALSE_SHARING_ALIGN
 #endif
+
+// SIMD / 充填構造体の整列 (ライン幅から独立。16B 固定)。
+#define PICTOR_SIMD_ALIGN alignas(16)
 
 // Suppress MSVC C4324 "structure was padded due to alignment specifier"
 // This is expected and intentional for DoD cache optimization.
@@ -58,7 +82,10 @@ struct float4 {
     float x = 0.0f, y = 0.0f, z = 0.0f, w = 0.0f;
 };
 
-struct PICTOR_CACHE_ALIGN float4x4 {
+// float4x4 は「充填構造体」: ライン幅 (128B 機含む) に依らず常に 64B を保つ。
+// よって PICTOR_CACHE_ALIGN ではなく SIMD 整列 (16B) を使う。配列要素は
+// PoolAllocator の 64B 起点 + 64B ストライドで自然にライン整列する。
+struct PICTOR_SIMD_ALIGN float4x4 {
     float m[4][4] = {};
 
     static float4x4 identity() {

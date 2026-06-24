@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "pictor/core/types.h"
+#include "pictor/core/device_memory_profile.h"
 #include "pictor/memory/gpu_memory_allocator.h"
 #include "pictor/scene/scene_registry.h"
 #include <vector>
@@ -55,6 +56,18 @@ public:
 
     GpuAllocation allocate_instance_data(size_t size);
 
+    // ---- Upload policy (UMA / ReBAR — spec/subsystem/uma_memory.md) ----
+
+    /// host が検出した device メモリ特性を渡す (VulkanContext::device_memory_profile())。
+    /// 既定は Staging (安全側)。
+    void set_memory_profile(const DeviceMemoryProfile& profile) { memory_profile_ = profile; }
+    const DeviceMemoryProfile& memory_profile() const { return memory_profile_; }
+
+    /// CPU→GPU 転送で staging を経由すべきか。UMA/ReBAR (Direct) なら false =
+    /// host-visible device-local へ直接書ける。production の upload 経路は
+    /// この判定を見て staging コピーを省く (現状 uploader はスタブ)。
+    bool should_stage() const { return memory_profile_.upload_policy == UploadPolicy::Staging; }
+
     // ---- Staging (§5.6) ----
 
     /// Allocate staging buffer for CPU→GPU transfer
@@ -85,6 +98,7 @@ private:
     SSBOLayout          current_layout_;
     std::vector<DirtyRegion> dirty_regions_;
     uint32_t            dirty_chunk_count_ = 0;
+    DeviceMemoryProfile memory_profile_;   // 既定 Staging (安全側)
 };
 
 } // namespace pictor

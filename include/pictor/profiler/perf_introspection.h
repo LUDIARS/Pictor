@@ -64,7 +64,15 @@ struct DoDInvariant {
 };
 
 struct MemoryLayoutReport {
-    size_t cache_line_size = 0;
+    size_t cache_line_size = 0;             // ビルド時 PICTOR_CACHE_LINE_SIZE
+
+    // 実機キャッシュライン (core/cache_info.h)。alignas はビルド時固定なので、
+    // ここで「ビルド想定 vs 実機」を出して誤ビルド (例 64B 想定を Apple 128B 機で
+    // 実行) を可視化する。
+    size_t      runtime_cache_line_size = 0;  // 実機検出 (0 = 不明)
+    bool        cache_line_matches      = true; // 実機==ビルド想定 (不明は true)
+    std::string cpu_arch;                       // "x86-64" / "arm64-apple" / ...
+
     std::vector<PoolLayoutInfo> pools;
 
     // アロケータ断片化 (reallocate_array は旧配列を解放しないため死にバイトが溜まる)。
