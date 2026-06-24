@@ -4,6 +4,7 @@
 #include "pictor/scene/soa_stream.h"
 #include "pictor/memory/pool_allocator.h"
 #include <unordered_map>
+#include <vector>
 
 namespace pictor {
 
@@ -49,6 +50,22 @@ public:
 
     // Stream Group: ID mapping
     SoAStream<ObjectId>&       object_ids()       { return object_ids_; }
+
+    // ---- Introspection (read-only, for perf / cache tooling) ----
+
+    /// 1 本の SoA stream の軽量な物理ビュー (Vulkan 非依存・非所有)。
+    /// perf_query_api がレイアウト / キャッシュ効率を導出するための口。
+    struct StreamView {
+        const char* name         = "";
+        const char* group        = "";   // "A:culling" / "B:sort" / "C:transform" / "D:meta" / "id"
+        size_t      element_size = 0;
+        const void* base         = nullptr;
+        size_t      count        = 0;     // live elements
+        size_t      capacity     = 0;     // reserved elements
+    };
+
+    /// この pool の全 SoA stream を列挙する (レイアウト / キャッシュ introspection 用)。
+    std::vector<StreamView> stream_views() const;
 
     // ---- Properties ----
 
