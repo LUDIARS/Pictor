@@ -12,6 +12,7 @@ option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
 option(PICTOR_ENABLE_RIVE         "Enable Rive Renderer integration (requires prebuilt rive-runtime; see cmake/FindRive.cmake)" OFF)
+option(PICTOR_ENABLE_HW_COUNTERS  "Enable Intel PCM hardware counters (perf C 層, requires PICTOR_PCM_DIR)" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -151,6 +152,11 @@ add_library(pictor STATIC
     src/profiler/data_exporter.cpp
     src/profiler/bitmap_text_renderer.cpp
 
+    # Perf Introspection (per-object/batch 性能 & DoD キャッシュ可視化)
+    src/profiler/perf_query_api.cpp
+    src/profiler/batch_gpu_timer.cpp
+    src/profiler/hardware_counters.cpp
+
     # Surface Abstraction
     # (glfw / android / ios の各プロバイダはプラットフォーム別に
     #  add_library 直後の target_sources で条件付き追加する)
@@ -251,6 +257,28 @@ endif()
 
 if(PICTOR_USE_LARGE_PAGES)
     target_compile_definitions(pictor PRIVATE PICTOR_LARGE_PAGES=1)
+endif()
+
+# ─── Hardware perf counters (perf C 層, optional) ─────────────
+# Intel PCM をプロセス内から呼んで L2/L3 ミス・DRAM 帯域・IPC を読む。
+#   git clone https://github.com/intel/pcm
+#   cmake -DPICTOR_ENABLE_HW_COUNTERS=ON -DPICTOR_PCM_DIR=/path/to/pcm ...
+# 要求されたのに PCM が見つからない場合は黙って無効化せず FATAL_ERROR で落とす
+# (無言フォールバック禁止)。OFF のときは NullHardwareCounterProvider が理由付きで
+# available=false を返す。
+if(PICTOR_ENABLE_HW_COUNTERS)
+    target_compile_definitions(pictor PUBLIC PICTOR_ENABLE_HW_COUNTERS=1)
+    if(NOT DEFINED PICTOR_PCM_DIR)
+        message(FATAL_ERROR "PICTOR_ENABLE_HW_COUNTERS=ON には PICTOR_PCM_DIR (Intel PCM のパス) が必要")
+    endif()
+    target_include_directories(pictor PRIVATE ${PICTOR_PCM_DIR}/src ${PICTOR_PCM_DIR})
+    find_library(PCM_LIB
+        NAMES pcm PCM libpcm
+        HINTS ${PICTOR_PCM_DIR} ${PICTOR_PCM_DIR}/build/lib ${PICTOR_PCM_DIR}/lib)
+    if(NOT PCM_LIB)
+        message(FATAL_ERROR "PICTOR_ENABLE_HW_COUNTERS=ON だが PCM ライブラリが見つからない (PICTOR_PCM_DIR=${PICTOR_PCM_DIR})")
+    endif()
+    target_link_libraries(pictor PUBLIC ${PCM_LIB})
 endif()
 
 # ─── Rive Renderer (optional) ────────────────────────────────

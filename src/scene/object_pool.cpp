@@ -1,4 +1,5 @@
 ﻿#include "pictor/scene/object_pool.h"
+#include <type_traits>
 
 namespace pictor {
 
@@ -50,6 +51,43 @@ uint32_t ObjectPool::add(const ObjectDescriptor& desc, ObjectId id) {
     object_ids_.push_back(id);
 
     return index;
+}
+
+std::vector<ObjectPool::StreamView> ObjectPool::stream_views() const {
+    // 各 SoA stream を宣言順 (= アロケータ確保順) に列挙する。
+    // element_size は sizeof(T)、base/count/capacity は stream の現状をそのまま。
+    auto view = [](const char* name, const char* group, auto& s) -> StreamView {
+        using Elem = std::remove_reference_t<decltype(s[0])>;
+        return StreamView{
+            name, group,
+            sizeof(Elem),
+            static_cast<const void*>(s.data()),
+            s.size(),
+            s.capacity()
+        };
+    };
+
+    std::vector<StreamView> out;
+    out.reserve(13);
+    // Group A: Culling (Hot)
+    out.push_back(view("bounds",            "A:culling",   bounds_));
+    out.push_back(view("visibility_flags",  "A:culling",   visibility_flags_));
+    // Group B: Sort/Batch (Hot)
+    out.push_back(view("shader_keys",       "B:sort",      shader_keys_));
+    out.push_back(view("sort_keys",         "B:sort",      sort_keys_));
+    out.push_back(view("material_keys",     "B:sort",      material_keys_));
+    // Group C: Transform (Hot for Dynamic)
+    out.push_back(view("transforms",        "C:transform", transforms_));
+    out.push_back(view("prev_transforms",   "C:transform", prev_transforms_));
+    // Group D: Metadata (Cold)
+    out.push_back(view("mesh_handles",      "D:meta",      mesh_handles_));
+    out.push_back(view("material_handles",  "D:meta",      material_handles_));
+    out.push_back(view("lod_levels",        "D:meta",      lod_levels_));
+    out.push_back(view("flags",             "D:meta",      flags_));
+    out.push_back(view("last_frame_updated","D:meta",      last_frame_updated_));
+    // ID mapping
+    out.push_back(view("object_ids",        "id",          object_ids_));
+    return out;
 }
 
 ObjectId ObjectPool::remove(uint32_t index) {
