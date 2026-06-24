@@ -23,6 +23,7 @@ set(PICTOR_TESTS
     unit_gpu_ring_flight_test
     unit_gpu_timer_test
     unit_perf_introspection_test
+    unit_cache_info_test
     pixel_text_test
     fps_baseline_test
 )

@@ -75,6 +75,7 @@ endif()
 add_library(pictor STATIC
     # Core
     src/core/types.cpp
+    src/core/cache_info.cpp
 
     # Memory Subsystem
     src/memory/frame_allocator.cpp
