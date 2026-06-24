@@ -29,6 +29,12 @@ NodeHandle GraphStore::add_node(float cx, float cy, float w, float h,
     return handle;
 }
 
+void GraphStore::set_positions(const std::vector<float>& xs, const std::vector<float>& ys) {
+    if (xs.size() != nodes_.cx.size() || ys.size() != nodes_.cy.size()) return;
+    nodes_.cx = xs;
+    nodes_.cy = ys;
+}
+
 void GraphStore::add_edge(NodeHandle from, NodeHandle to, EdgeKind kind) {
     edges_.from.push_back(from);
     edges_.to.push_back(to);
