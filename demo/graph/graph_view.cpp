@@ -1,0 +1,171 @@
+#include "graph_view.h"
+
+#ifdef PICTOR_HAS_VULKAN
+
+#include "pictor/surface/vulkan_context.h"
+
+#include <utility>
+
+namespace pictor::graph {
+
+namespace {
+inline void unpack_rgba(uint32_t rgba, float out[4]) {
+    out[0] = static_cast<float>((rgba >> 24) & 0xFFu) / 255.0f;
+    out[1] = static_cast<float>((rgba >> 16) & 0xFFu) / 255.0f;
+    out[2] = static_cast<float>((rgba >> 8)  & 0xFFu) / 255.0f;
+    out[3] = static_cast<float>( rgba        & 0xFFu) / 255.0f;
+}
+constexpr float kEdgeThicknessPx = 1.5f;
+} // namespace
+
+bool GraphView::initialize(VulkanContext& vk_ctx, const char* shader_dir, GraphStore store) {
+    store_ = std::move(store);
+    grid_.build(store_);
+
+    const uint32_t nodes = static_cast<uint32_t>(store_.node_count());
+    const uint32_t edges = static_cast<uint32_t>(store_.edge_count());
+    if (!renderer_.initialize(vk_ctx, shader_dir, nodes, edges))
+        return false;
+
+    node_inst_.reserve(nodes);
+    edge_inst_.reserve(edges);
+    vis_stamp_.assign(nodes, 0);
+
+    fit_to_bounds();
+    return true;
+}
+
+void GraphView::shutdown() {
+    renderer_.shutdown();
+}
+
+bool GraphView::contains(float win_x, float win_y) const {
+    return win_x >= bounds_.offset.x &&
+           win_x <  bounds_.offset.x + static_cast<int32_t>(bounds_.extent.width) &&
+           win_y >= bounds_.offset.y &&
+           win_y <  bounds_.offset.y + static_cast<int32_t>(bounds_.extent.height);
+}
+
+void GraphView::to_world(float win_x, float win_y, float& wx, float& wy) const {
+    const float local_x = win_x - static_cast<float>(bounds_.offset.x);
+    const float local_y = win_y - static_cast<float>(bounds_.offset.y);
+    const float hw = bounds_.extent.width  * 0.5f;
+    const float hh = bounds_.extent.height * 0.5f;
+    const float z  = camera_.zoom();
+    wx = camera_.center_x() + (local_x - hw) / z;
+    wy = camera_.center_y() + (local_y - hh) / z;
+}
+
+void GraphView::pan(float dx, float dy) {
+    camera_.pan_pixels(dx, dy);
+}
+
+void GraphView::zoom_at(float win_x, float win_y, float factor) {
+    const float local_x = win_x - static_cast<float>(bounds_.offset.x);
+    const float local_y = win_y - static_cast<float>(bounds_.offset.y);
+    camera_.zoom_at(local_x, local_y, factor,
+                    static_cast<float>(bounds_.extent.width),
+                    static_cast<float>(bounds_.extent.height));
+}
+
+void GraphView::update_hover(float win_x, float win_y) {
+    float wx, wy;
+    to_world(win_x, win_y, wx, wy);
+    hovered_ = grid_.pick(wx, wy);
+}
+
+void GraphView::reset_view() {
+    fit_to_bounds();
+}
+
+void GraphView::fit_to_bounds() {
+    const auto& n = store_.nodes();
+    float min_x = 0, max_x = 0, min_y = 0, max_y = 0;
+    if (store_.node_count() > 0) {
+        min_x = max_x = n.cx[0];
+        min_y = max_y = n.cy[0];
+        for (size_t i = 1; i < store_.node_count(); ++i) {
+            if (n.cx[i] < min_x) min_x = n.cx[i];
+            if (n.cx[i] > max_x) max_x = n.cx[i];
+            if (n.cy[i] < min_y) min_y = n.cy[i];
+            if (n.cy[i] > max_y) max_y = n.cy[i];
+        }
+    }
+    const float span_x = (max_x - min_x) + 200.0f;
+    const float span_y = (max_y - min_y) + 200.0f;
+    const float vw = bounds_.extent.width  > 0 ? static_cast<float>(bounds_.extent.width)  : 1280.0f;
+    const float vh = bounds_.extent.height > 0 ? static_cast<float>(bounds_.extent.height) : 720.0f;
+    const float zx = vw / span_x;
+    const float zy = vh / span_y;
+    fit_cx_   = (min_x + max_x) * 0.5f;
+    fit_cy_   = (min_y + max_y) * 0.5f;
+    fit_zoom_ = (zx < zy) ? zx : zy;
+    camera_.reset(fit_cx_, fit_cy_, fit_zoom_);
+}
+
+void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
+    if (bounds_.extent.width == 0 || bounds_.extent.height == 0) return;
+
+    const float vw = static_cast<float>(bounds_.extent.width);
+    const float vh = static_cast<float>(bounds_.extent.height);
+    const float z  = camera_.zoom();
+
+    // View AABB in world units.
+    const float min_x = camera_.center_x() - (vw * 0.5f) / z;
+    const float max_x = camera_.center_x() + (vw * 0.5f) / z;
+    const float min_y = camera_.center_y() - (vh * 0.5f) / z;
+    const float max_y = camera_.center_y() + (vh * 0.5f) / z;
+
+    grid_.query_visible(min_x, min_y, max_x, max_y, vis_nodes_);
+
+    ++frame_;
+    const auto& n = store_.nodes();
+    node_inst_.clear();
+    node_inst_.reserve(vis_nodes_.size());
+    for (uint32_t i : vis_nodes_) {
+        vis_stamp_[i] = frame_;
+        NodeInstance d;
+        d.rect[0] = n.cx[i];
+        d.rect[1] = n.cy[i];
+        d.rect[2] = n.w[i];
+        d.rect[3] = n.h[i];
+        if (i == hovered_) {
+            // Highlight the hovered node with a bright accent.
+            d.color[0] = 1.0f; d.color[1] = 0.85f; d.color[2] = 0.30f; d.color[3] = 1.0f;
+        } else {
+            unpack_rgba(n.rgba[i], d.color);
+        }
+        node_inst_.push_back(d);
+    }
+
+    // Edges visible if either endpoint is visible this frame.
+    const auto& e = store_.edges();
+    edge_inst_.clear();
+    for (size_t k = 0; k < store_.edge_count(); ++k) {
+        const uint32_t a = e.from[k];
+        const uint32_t b = e.to[k];
+        if (vis_stamp_[a] != frame_ && vis_stamp_[b] != frame_) continue;
+        EdgeInstance d;
+        d.ends[0] = n.cx[a]; d.ends[1] = n.cy[a];
+        d.ends[2] = n.cx[b]; d.ends[3] = n.cy[b];
+        d.color[0] = 0.45f; d.color[1] = 0.50f; d.color[2] = 0.58f;
+        d.color[3] = kEdgeThicknessPx;
+        edge_inst_.push_back(d);
+    }
+
+    last_vis_nodes_ = static_cast<uint32_t>(node_inst_.size());
+    last_vis_edges_ = static_cast<uint32_t>(edge_inst_.size());
+
+    GraphPushConstants pc{};
+    Camera2D::build_proj(pc.proj, vw, vh);
+    camera_.build_view(pc.view, vw, vh);
+    pc.params[0] = z;
+
+    renderer_.draw(cmd, bounds_, pc, flight,
+                   node_inst_.data(), last_vis_nodes_,
+                   edge_inst_.data(), last_vis_edges_);
+}
+
+} // namespace pictor::graph
+
+#endif // PICTOR_HAS_VULKAN
