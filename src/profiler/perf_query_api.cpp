@@ -4,6 +4,7 @@
 #include "pictor/memory/memory_subsystem.h"
 #include "pictor/batch/batch_builder.h"
 #include "pictor/profiler/profiler.h"
+#include "pictor/core/cache_info.h"
 
 #include <array>
 #include <cmath>
@@ -113,6 +114,12 @@ PerfQueryAPI::~PerfQueryAPI() = default;
 MemoryLayoutReport PerfQueryAPI::memory_layout_report() const {
     MemoryLayoutReport report;
     report.cache_line_size = kCacheLine;
+
+    // 実機キャッシュライン (ビルド想定との不一致を可視化)。
+    const CacheLineInfo cli = query_cache_line_info();
+    report.runtime_cache_line_size = cli.runtime_line_size;
+    report.cache_line_matches      = cli.matches;
+    report.cpu_arch                = cli.arch;
 
     const std::array<PoolType, 3> pools = {
         PoolType::STATIC, PoolType::DYNAMIC, PoolType::GPU_DRIVEN
@@ -373,6 +380,9 @@ std::string PerfQueryAPI::export_memory_json() const {
     std::ostringstream os;
     os << "{";
     os << "\"cacheLineSize\":" << r.cache_line_size;
+    os << ",\"runtimeCacheLineSize\":" << r.runtime_cache_line_size;
+    os << ",\"cacheLineMatches\":" << (r.cache_line_matches ? "true" : "false");
+    os << ",\"cpuArch\":"; json_escape(os, r.cpu_arch);
     os << ",\"poolAllocatorTotalBytes\":" << r.pool_allocator_total_bytes;
     os << ",\"soaReservedBytes\":" << r.soa_reserved_bytes;
     os << ",\"soaUsedBytes\":" << r.soa_used_bytes;
