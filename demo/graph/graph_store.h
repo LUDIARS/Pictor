@@ -57,6 +57,10 @@ public:
                         uint32_t rgba, NodeKind kind);
     void       add_edge(NodeHandle from, NodeHandle to, EdgeKind kind = EdgeKind::Call);
 
+    /// Overwrite all node centers (e.g. with a freshly computed layout). Sizes
+    /// must match node_count(); mismatched input is ignored.
+    void set_positions(const std::vector<float>& xs, const std::vector<float>& ys);
+
     size_t       node_count() const { return nodes_.cx.size(); }
     size_t       edge_count() const { return edges_.from.size(); }
     const Nodes& nodes()      const { return nodes_; }

@@ -416,6 +416,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             demo/graph/graph_store.cpp
             demo/graph/camera2d.cpp
             demo/graph/graph_generator.cpp
+            demo/graph/layout_engine.cpp
             demo/graph/vk_util.cpp
             demo/graph/spatial_grid.cpp
             demo/graph/graph_renderer.cpp

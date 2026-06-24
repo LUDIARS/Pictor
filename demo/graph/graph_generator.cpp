@@ -33,7 +33,7 @@ constexpr uint32_t kKindColor[static_cast<int>(NodeKind::Count)] = {
 
 } // namespace
 
-GraphStore generate_layered_graph(uint32_t node_count, uint32_t seed) {
+GraphStore generate_layered_graph(uint32_t node_count, uint32_t seed, bool scatter) {
     GraphStore store;
     if (node_count == 0) return store;
 
@@ -43,6 +43,8 @@ GraphStore generate_layered_graph(uint32_t node_count, uint32_t seed) {
     const uint32_t per_layer =
         std::max(1u, static_cast<uint32_t>(std::sqrt(static_cast<double>(node_count))));
     const uint32_t layer_count = (node_count + per_layer - 1u) / per_layer;
+    // Scatter box half-extent (used only for initial positions when scatter=true).
+    const float scatter_r = static_cast<float>(per_layer) * 100.0f;
 
     constexpr float kNodeW    = 120.0f;
     constexpr float kNodeH    = 44.0f;
@@ -68,11 +70,17 @@ GraphStore generate_layered_graph(uint32_t node_count, uint32_t seed) {
         const float y     = static_cast<float>(layer) * stride_y;
 
         for (uint32_t i = 0; i < in_this; ++i) {
-            const float x = x0 + static_cast<float>(i) * stride_x;
-            // Slight jitter so the grid does not look mechanical.
-            const float jx = (rng.unit() - 0.5f) * kGapX * 0.5f;
-            const auto  kind = static_cast<NodeKind>(rng.below(static_cast<uint32_t>(NodeKind::Count)));
-            store.add_node(x + jx, y, kNodeW, kNodeH,
+            const auto kind = static_cast<NodeKind>(rng.below(static_cast<uint32_t>(NodeKind::Count)));
+            float px, py;
+            if (scatter) {
+                px = (rng.unit() - 0.5f) * 2.0f * scatter_r;
+                py = (rng.unit() - 0.5f) * 2.0f * scatter_r;
+            } else {
+                // Slight jitter so the grid does not look mechanical.
+                px = x0 + static_cast<float>(i) * stride_x + (rng.unit() - 0.5f) * kGapX * 0.5f;
+                py = y;
+            }
+            store.add_node(px, py, kNodeW, kNodeH,
                            kKindColor[static_cast<int>(kind)], kind);
             ++made;
         }
