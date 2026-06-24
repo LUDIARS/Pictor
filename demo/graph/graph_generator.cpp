@@ -2,11 +2,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace pictor::graph {
 
 namespace {
+
+// Per-kind name prefix for synthetic symbol labels (until real clangd data).
+constexpr const char* kKindPrefix[static_cast<int>(NodeKind::Count)] = {
+    "fn_", "m_", "var_", "Type_", "sym_"
+};
 
 /// Small deterministic LCG so the demo graph is reproducible across runs
 /// without pulling in <random> (and without any global state).
@@ -80,8 +86,9 @@ GraphStore generate_layered_graph(uint32_t node_count, uint32_t seed, bool scatt
                 px = x0 + static_cast<float>(i) * stride_x + (rng.unit() - 0.5f) * kGapX * 0.5f;
                 py = y;
             }
+            std::string label = kKindPrefix[static_cast<int>(kind)] + std::to_string(made);
             store.add_node(px, py, kNodeW, kNodeH,
-                           kKindColor[static_cast<int>(kind)], kind);
+                           kKindColor[static_cast<int>(kind)], kind, std::move(label));
             ++made;
         }
     }
