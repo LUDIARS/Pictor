@@ -189,7 +189,7 @@ Args parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv);
-    printf("=== Pictor Iter Relation Graph Demo (Step 4: labels / text LOD) ===\n");
+    printf("=== Pictor Iter Relation Graph Demo (Step 5: snippet LOD + LRU) ===\n");
     printf("[init] Nodes: %u  frames: %llu  scatter: %s\n", args.nodes,
            static_cast<unsigned long long>(args.frames), args.scatter ? "yes" : "no");
 
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
     GlfwWindowConfig win_cfg;
     win_cfg.width  = 1280;
     win_cfg.height = 720;
-    win_cfg.title  = "Pictor — Iter Relation Graph (Step 4: labels / text LOD)";
+    win_cfg.title  = "Pictor — Iter Relation Graph (Step 5: snippet LOD + LRU)";
     win_cfg.vsync  = true;
     if (!surface_provider.create(win_cfg)) {
         fprintf(stderr, "[init] FATAL: window\n");
@@ -368,11 +368,12 @@ int main(int argc, char** argv) {
         auto now = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(now - fps_t0).count();
         if (elapsed >= 1.0) {
-            printf("[loop] FPS %.1f | visible %u/%u nodes, %u/%u edges | zoom %.3f | hover %d\n",
+            printf("[loop] FPS %.1f | visible %u/%u nodes, %u/%u edges | zoom %.3f | hover %d | snip$ %u\n",
                    fps_frames / elapsed,
                    graph.visible_nodes(), graph.total_nodes(),
                    graph.visible_edges(), graph.total_edges(),
-                   graph.zoom(), static_cast<int>(graph.hovered()));
+                   graph.zoom(), static_cast<int>(graph.hovered()),
+                   graph.snippet_cache_size());
             fps_t0 = now;
             fps_frames = 0;
         }
