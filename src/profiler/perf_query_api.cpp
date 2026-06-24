@@ -25,7 +25,7 @@ namespace pictor {
 
 const char* to_string(BatchSplitReason reason) {
     switch (reason) {
-        case BatchSplitReason::None:              return "None";
+        case BatchSplitReason::Mergeable:         return "Mergeable";
         case BatchSplitReason::DifferentMesh:     return "DifferentMesh";
         case BatchSplitReason::DifferentMaterial: return "DifferentMaterial";
         case BatchSplitReason::DifferentShader:   return "DifferentShader";
@@ -317,7 +317,7 @@ BatchEligibilityReport PerfQueryAPI::batch_eligibility_report() const {
         if (a.count <= 1) {
             g.ideal_batches = a.count;
             g.gpu_batchable = false;
-            g.reasons.push_back(BatchSplitReason::None);
+            g.reasons.push_back(BatchSplitReason::Mergeable);
         } else if (a.any_transparent) {
             g.ideal_batches = a.count;
             g.gpu_batchable = false;
@@ -326,7 +326,7 @@ BatchEligibilityReport PerfQueryAPI::batch_eligibility_report() const {
             g.ideal_batches = 1;
             g.gpu_batchable = true;
             if (a.any_custom) g.reasons.push_back(BatchSplitReason::CustomShader);
-            else              g.reasons.push_back(BatchSplitReason::None);
+            else              g.reasons.push_back(BatchSplitReason::Mergeable);
         }
 
         total_objects += a.count;

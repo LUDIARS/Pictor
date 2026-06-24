@@ -94,8 +94,9 @@ struct CacheTrafficInfo {
 // ------------------------------------------------------------
 
 /// オブジェクト集合が 1 GPU バッチへ畳めない理由。
+/// (`None` は X11 `Xlib.h` のマクロと衝突するため `Mergeable` を使う。)
 enum class BatchSplitReason : uint8_t {
-    None = 0,            // 単一バッチ — 完全に畳める
+    Mergeable = 0,       // 単一バッチ — 完全に畳める / 畳む対象なし
     DifferentMesh,
     DifferentMaterial,
     DifferentShader,
