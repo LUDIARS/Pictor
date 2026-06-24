@@ -15,6 +15,7 @@
 #include "pictor/profiler/overlay_renderer.h"
 #include "pictor/profiler/stats_overlay.h"
 #include "pictor/profiler/data_exporter.h"
+#include "pictor/profiler/perf_query_api.h"
 #include "pictor/data/data_handler.h"
 #include "pictor/data/data_query_api.h"
 #include "pictor/gi/gi_lighting_system.h"
@@ -197,6 +198,16 @@ public:
 
     /// Create a read-only query API for external tools/editors
     DataQueryAPI create_query_api() const { return DataQueryAPI(*data_handler_); }
+
+    /// Create a read-only performance / DoD-cache introspection API for external
+    /// tools (Ergo の pictor_perf プラグイン)。レンダーループには触れず、既存
+    /// サブシステムの状態を読むだけ (spec/subsystem/perf_introspection.md)。
+    PerfQueryAPI create_perf_query_api() const {
+        return PerfQueryAPI(*scene_, *memory_, *batch_builder_, *profiler_);
+    }
+
+    /// Read-only access to the batch builder (per-batch 計測 / 適格性照合用)。
+    const BatchBuilder& batch_builder() const { return *batch_builder_; }
 
     // ---- GI Lighting ----
 
