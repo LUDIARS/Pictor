@@ -5,6 +5,7 @@
 #include "pictor/surface/vulkan_context.h"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
 namespace pictor::graph {
@@ -17,6 +18,37 @@ inline void unpack_rgba(uint32_t rgba, float out[4]) {
     out[3] = static_cast<float>( rgba        & 0xFFu) / 255.0f;
 }
 constexpr float kEdgeThicknessPx = 1.5f;
+
+// Synthetic code snippet for a node (placeholder for clangd read_snippet).
+// Deterministic from the symbol name + kind. Shaped as a few short lines so it
+// reads like a definition inside the node card.
+std::string make_synthetic_snippet(const std::string& name, uint8_t kind) {
+    const char* ret = "void";
+    switch (static_cast<NodeKind>(kind)) {
+    case NodeKind::Function: ret = "int";    break;
+    case NodeKind::Method:   ret = "auto";   break;
+    case NodeKind::Variable: ret = "static"; break;
+    case NodeKind::Type:     ret = "struct"; break;
+    default:                 ret = "void";   break;
+    }
+    std::string s;
+    if (static_cast<NodeKind>(kind) == NodeKind::Type) {
+        s += "struct " + name + " {\n";
+        s += "  int   id;\n";
+        s += "  float value;\n";
+        s += "};";
+    } else if (static_cast<NodeKind>(kind) == NodeKind::Variable) {
+        s += "static " + name + " =\n";
+        s += "    compute();";
+    } else {
+        s += std::string(ret) + " " + name + "(int n) {\n";
+        s += "  if (n <= 0) return 0;\n";
+        s += "  return work(n) +\n";
+        s += "         " + name + "(n - 1);\n";
+        s += "}";
+    }
+    return s;
+}
 } // namespace
 
 bool GraphView::initialize(VulkanContext& vk_ctx, const char* shader_dir, GraphStore store) {
@@ -224,7 +256,7 @@ void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
                    edge_inst_.data(), last_vis_edges_);
 }
 
-void GraphView::draw_labels(BitmapTextRenderer& text) const {
+void GraphView::draw_labels(BitmapTextRenderer& text) {
     if (bounds_.extent.width == 0 || bounds_.extent.height == 0) return;
 
     const auto& n = store_.nodes();
@@ -236,29 +268,62 @@ void GraphView::draw_labels(BitmapTextRenderer& text) const {
     const float cx = camera_.center_x();
     const float cy = camera_.center_y();
 
-    constexpr float kLabelMinPx = 48.0f;  // LABEL LOD: hide when a node is smaller
-    constexpr int   kMaxLabels  = 350;    // keep within the text batch budget
-    int drawn = 0;
+    constexpr float kLabelMinPx   = 48.0f;   // >= this: show the symbol name
+    constexpr float kSnippetMinPx = 200.0f;  // >= this: show the code snippet card
+    int char_budget = 3600;                  // keep under BitmapTextRenderer's batch cap
 
-    // vis_nodes_ holds this frame's visible handles (from render()); labels track
-    // the animated positions so they follow the layout-in motion.
     for (uint32_t i : vis_nodes_) {
+        if (char_budget <= 0) break;
         const float w_px = n.w[i] * z;
-        if (w_px < kLabelMinPx) continue;          // too small to read
-        const std::string& s = n.label[i];
-        if (s.empty()) continue;
+        if (w_px < kLabelMinPx) continue;            // too small to read
+        const std::string& name = n.label[i];
+        if (name.empty()) continue;
 
-        const float sx = ox + (anim_x_[i] - cx) * z + ew * 0.5f;
-        const float sy = oy + (anim_y_[i] - cy) * z + eh * 0.5f;
-        if (sx < ox || sx > ox + ew || sy < oy || sy > oy + eh) continue; // outside leaf
+        // Node center -> screen (animated position).
+        const float scx = ox + (anim_x_[i] - cx) * z + ew * 0.5f;
+        const float scy = oy + (anim_y_[i] - cy) * z + eh * 0.5f;
+        if (scx < ox || scx > ox + ew || scy < oy || scy > oy + eh) continue;
 
-        const float scale = std::clamp(n.h[i] * z * 0.42f / 16.0f, 0.6f, 2.2f);
-        const float tw = static_cast<float>(s.size()) * 8.0f * scale;
-        const float th = 16.0f * scale;
-        text.set_scale(scale);
-        text.draw_text(sx - tw * 0.5f, sy - th * 0.5f, s.c_str(),
-                       0.92f, 0.95f, 1.0f, 1.0f);
-        if (++drawn >= kMaxLabels) break;
+        const float h_px = n.h[i] * z;
+
+        if (w_px < kSnippetMinPx) {
+            // ── LABEL LOD: centered symbol name ──
+            const float scale = std::clamp(h_px * 0.42f / 16.0f, 0.6f, 2.2f);
+            const float tw = static_cast<float>(name.size()) * 8.0f * scale;
+            const float th = 16.0f * scale;
+            text.set_scale(scale);
+            text.draw_text(scx - tw * 0.5f, scy - th * 0.5f, name.c_str(),
+                           0.92f, 0.95f, 1.0f, 1.0f);
+            char_budget -= static_cast<int>(name.size());
+        } else {
+            // ── NEAR LOD: lazily-fetched snippet card (LRU-cached) ──
+            const uint8_t kind = n.kind[i];
+            std::string snip = snippets_.get(i, [&]() {
+                return make_synthetic_snippet(name, kind);
+            });
+            const float scale = std::clamp(h_px / (7.0f * 16.0f * 1.25f), 0.7f, 1.6f);
+            const float line_h = 16.0f * scale * 1.25f;
+            const float left   = scx - w_px * 0.5f + 8.0f;
+            float       ty     = scy - h_px * 0.5f + 6.0f;
+            const float bottom = scy + h_px * 0.5f - 4.0f;
+
+            size_t start = 0;
+            while (start <= snip.size() && ty + line_h <= bottom && char_budget > 0) {
+                size_t nl = snip.find('\n', start);
+                const size_t end = (nl == std::string::npos) ? snip.size() : nl;
+                std::string line = snip.substr(start, end - start);
+                text.set_scale(scale);
+                // First line (signature) brighter, body dimmer.
+                if (start == 0)
+                    text.draw_text(left, ty, line.c_str(), 0.95f, 0.97f, 1.0f, 1.0f);
+                else
+                    text.draw_text(left, ty, line.c_str(), 0.62f, 0.78f, 0.66f, 1.0f);
+                char_budget -= static_cast<int>(line.size());
+                ty += line_h;
+                if (nl == std::string::npos) break;
+                start = nl + 1;
+            }
+        }
     }
 }
 
