@@ -410,7 +410,22 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
         target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
 
-        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d)")
+        # Iter relation-graph demo (instanced/DoD large graph view, Step 1)
+        add_executable(pictor_graph_demo
+            demo/graph/main.cpp
+            demo/graph/graph_store.cpp
+            demo/graph/camera2d.cpp
+            demo/graph/graph_generator.cpp
+            demo/graph/graph_renderer.cpp
+        )
+        target_include_directories(pictor_graph_demo PRIVATE demo/graph)
+        target_link_libraries(pictor_graph_demo PRIVATE pictor)
+        if(MSVC)
+            # /utf-8 does not propagate from the pictor lib to demo targets.
+            target_compile_options(pictor_graph_demo PRIVATE /utf-8)
+        endif()
+
+        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d, graph)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
     endif()
@@ -497,6 +512,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.vert
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.frag
+        ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_node.vert
+        ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_edge.vert
+        ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_flat.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.vert
@@ -538,6 +556,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_texture2d_demo)
         add_dependencies(pictor_texture2d_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_graph_demo)
+        add_dependencies(pictor_graph_demo pictor_shaders)
     endif()
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_shaders)
