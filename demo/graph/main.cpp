@@ -21,6 +21,7 @@
 
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
+#include "pictor/profiler/bitmap_text_renderer.h"
 #include "camera2d.h"
 #include "dock_layout.h"
 #include "graph_generator.h"
@@ -68,6 +69,15 @@ uint32_t panel_color(int panel_id) {
     case kPanelInspector: return 0x1B2230FF; // dark slate
     case kPanelConsole:   return 0x15181EFF; // near-black
     default:              return 0x101218FF; // neutral dark
+    }
+}
+
+const char* panel_name(int panel_id) {
+    switch (panel_id) {
+    case kPanelGraph:     return "Graph";
+    case kPanelInspector: return "Inspector";
+    case kPanelConsole:   return "Console";
+    default:              return "Panel";
     }
 }
 
@@ -179,7 +189,7 @@ Args parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv);
-    printf("=== Pictor Iter Relation Graph Demo (Step 3: layered layout) ===\n");
+    printf("=== Pictor Iter Relation Graph Demo (Step 4: labels / text LOD) ===\n");
     printf("[init] Nodes: %u  frames: %llu  scatter: %s\n", args.nodes,
            static_cast<unsigned long long>(args.frames), args.scatter ? "yes" : "no");
 
@@ -188,7 +198,7 @@ int main(int argc, char** argv) {
     GlfwWindowConfig win_cfg;
     win_cfg.width  = 1280;
     win_cfg.height = 720;
-    win_cfg.title  = "Pictor — Iter Relation Graph (Step 3: layered layout)";
+    win_cfg.title  = "Pictor — Iter Relation Graph (Step 4: labels / text LOD)";
     win_cfg.vsync  = true;
     if (!surface_provider.create(win_cfg)) {
         fprintf(stderr, "[init] FATAL: window\n");
@@ -220,6 +230,18 @@ int main(int argc, char** argv) {
     UiRectRenderer ui;
     if (!ui.initialize(vk_ctx, "shaders", 256)) {
         fprintf(stderr, "[init] FATAL: ui renderer\n");
+        graph.shutdown();
+        vk_ctx.shutdown();
+        surface_provider.destroy();
+        return 1;
+    }
+
+    // Text renderer (embedded 8x16 monospace bitmap font) — labels for nodes
+    // (LABEL LOD) and dock chrome (tab / panel names).
+    BitmapTextRenderer text;
+    if (!text.initialize(vk_ctx, "shaders")) {
+        fprintf(stderr, "[init] FATAL: text renderer\n");
+        ui.shutdown();
         graph.shutdown();
         vk_ctx.shutdown();
         surface_provider.destroy();
@@ -303,6 +325,25 @@ int main(int argc, char** argv) {
         ui.draw(cmd, ext, ui_proj, flight, chrome.data(),
                 static_cast<uint32_t>(chrome.size()));
 
+        // Text pass: dock chrome labels (tab + panel names) then node labels.
+        text.begin(cmd, ext);
+        text.set_scale(1.0f);
+        for (const auto& t : dock.tabs()) {
+            const char* nm = panel_name(t.panel_id);
+            const float tw = static_cast<float>(std::strlen(nm)) * 8.0f;
+            const float tx = t.rect.x + (t.rect.w - tw) * 0.5f;
+            const float ty = t.rect.y + (t.rect.h - 16.0f) * 0.5f;
+            if (t.active) text.draw_text(tx, ty, nm, 0.92f, 0.96f, 1.0f, 1.0f);
+            else          text.draw_text(tx, ty, nm, 0.55f, 0.60f, 0.68f, 1.0f);
+        }
+        for (const auto& p : dock.panels()) {
+            if (p.panel_id == kPanelGraph) continue;
+            text.draw_text(p.rect.x + 10.0f, p.rect.y + 8.0f, panel_name(p.panel_id),
+                           0.70f, 0.76f, 0.86f, 1.0f);
+        }
+        graph.draw_labels(text);
+        text.end();
+
         vkCmdEndRenderPass(cmd);
         vkEndCommandBuffer(cmd);
 
@@ -346,6 +387,7 @@ int main(int argc, char** argv) {
     dock.save(kLayoutFile);
 
     vk_ctx.device_wait_idle();
+    text.shutdown();
     ui.shutdown();
     graph.shutdown();
     vk_ctx.shutdown();

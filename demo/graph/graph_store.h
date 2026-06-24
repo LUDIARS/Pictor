@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace pictor::graph {
@@ -43,6 +44,7 @@ public:
         std::vector<uint32_t> rgba;     // packed 0xRRGGBBAA
         std::vector<uint8_t>  kind;     // NodeKind
         std::vector<uint8_t>  flags;    // selected/hovered/... (Step 1: unused)
+        std::vector<std::string> label; // symbol name (cold; only NEAR-LOD labels read it)
     };
 
     struct Edges {
@@ -54,7 +56,7 @@ public:
     void reserve(size_t node_capacity, size_t edge_capacity);
 
     NodeHandle add_node(float cx, float cy, float w, float h,
-                        uint32_t rgba, NodeKind kind);
+                        uint32_t rgba, NodeKind kind, std::string label = {});
     void       add_edge(NodeHandle from, NodeHandle to, EdgeKind kind = EdgeKind::Call);
 
     /// Overwrite all node centers (e.g. with a freshly computed layout). Sizes

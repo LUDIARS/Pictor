@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include "pictor/profiler/bitmap_text_renderer.h"
 #include "camera2d.h"
 #include "graph_instances.h"
 #include "graph_renderer.h"
@@ -45,6 +46,11 @@ public:
     /// Cull + upload + draw, clipped to the widget's bounds. Also advances the
     /// layout-in animation and applies a finished worker layout.
     void render(VkCommandBuffer cmd, uint32_t flight);
+
+    /// Draw symbol labels for the nodes that are visible *and* large enough on
+    /// screen (LABEL LOD), using the shared text renderer. Call after render()
+    /// within the frame's text batch (begin/end). Bounded by the visible set.
+    void draw_labels(BitmapTextRenderer& text) const;
 
     bool layout_pending() const { return !layout_applied_; }
     bool animating()      const { return animating_; }

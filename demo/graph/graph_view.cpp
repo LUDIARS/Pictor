@@ -4,6 +4,7 @@
 
 #include "pictor/surface/vulkan_context.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace pictor::graph {
@@ -221,6 +222,44 @@ void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
     renderer_.draw(cmd, bounds_, pc, flight,
                    node_inst_.data(), last_vis_nodes_,
                    edge_inst_.data(), last_vis_edges_);
+}
+
+void GraphView::draw_labels(BitmapTextRenderer& text) const {
+    if (bounds_.extent.width == 0 || bounds_.extent.height == 0) return;
+
+    const auto& n = store_.nodes();
+    const float z  = camera_.zoom();
+    const float ox = static_cast<float>(bounds_.offset.x);
+    const float oy = static_cast<float>(bounds_.offset.y);
+    const float ew = static_cast<float>(bounds_.extent.width);
+    const float eh = static_cast<float>(bounds_.extent.height);
+    const float cx = camera_.center_x();
+    const float cy = camera_.center_y();
+
+    constexpr float kLabelMinPx = 48.0f;  // LABEL LOD: hide when a node is smaller
+    constexpr int   kMaxLabels  = 350;    // keep within the text batch budget
+    int drawn = 0;
+
+    // vis_nodes_ holds this frame's visible handles (from render()); labels track
+    // the animated positions so they follow the layout-in motion.
+    for (uint32_t i : vis_nodes_) {
+        const float w_px = n.w[i] * z;
+        if (w_px < kLabelMinPx) continue;          // too small to read
+        const std::string& s = n.label[i];
+        if (s.empty()) continue;
+
+        const float sx = ox + (anim_x_[i] - cx) * z + ew * 0.5f;
+        const float sy = oy + (anim_y_[i] - cy) * z + eh * 0.5f;
+        if (sx < ox || sx > ox + ew || sy < oy || sy > oy + eh) continue; // outside leaf
+
+        const float scale = std::clamp(n.h[i] * z * 0.42f / 16.0f, 0.6f, 2.2f);
+        const float tw = static_cast<float>(s.size()) * 8.0f * scale;
+        const float th = 16.0f * scale;
+        text.set_scale(scale);
+        text.draw_text(sx - tw * 0.5f, sy - th * 0.5f, s.c_str(),
+                       0.92f, 0.95f, 1.0f, 1.0f);
+        if (++drawn >= kMaxLabels) break;
+    }
 }
 
 } // namespace pictor::graph
