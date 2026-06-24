@@ -156,8 +156,9 @@ void key_callback(GLFWwindow* win, int key, int, int action, int) {
 }
 
 struct Args {
-    uint32_t nodes  = 10000;
-    uint64_t frames = 0;
+    uint32_t nodes   = 10000;
+    uint64_t frames  = 0;
+    bool     scatter = false;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -167,6 +168,8 @@ Args parse_args(int argc, char** argv) {
             a.nodes = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
             a.frames = std::strtoull(argv[++i], nullptr, 10);
+        else if (std::strcmp(argv[i], "--scatter") == 0)
+            a.scatter = true;
     }
     if (a.nodes == 0) a.nodes = 1;
     return a;
@@ -176,16 +179,16 @@ Args parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv);
-    printf("=== Pictor Iter Relation Graph Demo (Step 2 + dock) ===\n");
-    printf("[init] Nodes: %u  frames: %llu\n", args.nodes,
-           static_cast<unsigned long long>(args.frames));
+    printf("=== Pictor Iter Relation Graph Demo (Step 3: layered layout) ===\n");
+    printf("[init] Nodes: %u  frames: %llu  scatter: %s\n", args.nodes,
+           static_cast<unsigned long long>(args.frames), args.scatter ? "yes" : "no");
 
     // Window
     GlfwSurfaceProvider surface_provider;
     GlfwWindowConfig win_cfg;
     win_cfg.width  = 1280;
     win_cfg.height = 720;
-    win_cfg.title  = "Pictor — Iter Relation Graph (Step 2 + dock)";
+    win_cfg.title  = "Pictor — Iter Relation Graph (Step 3: layered layout)";
     win_cfg.vsync  = true;
     if (!surface_provider.create(win_cfg)) {
         fprintf(stderr, "[init] FATAL: window\n");
@@ -205,7 +208,7 @@ int main(int argc, char** argv) {
 
     // Graph widget
     GraphView graph;
-    if (!graph.initialize(vk_ctx, "shaders", generate_layered_graph(args.nodes))) {
+    if (!graph.initialize(vk_ctx, "shaders", generate_layered_graph(args.nodes, 1u, args.scatter))) {
         fprintf(stderr, "[init] FATAL: graph view\n");
         vk_ctx.shutdown();
         surface_provider.destroy();

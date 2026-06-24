@@ -31,12 +31,65 @@ bool GraphView::initialize(VulkanContext& vk_ctx, const char* shader_dir, GraphS
     edge_inst_.reserve(edges);
     vis_stamp_.assign(nodes, 0);
 
+    // Render starts at the generator positions and animates to the layout the
+    // worker computes.
+    anim_x_ = store_.nodes().cx;
+    anim_y_ = store_.nodes().cy;
+
     fit_to_bounds();
+    start_layout_worker();
     return true;
 }
 
 void GraphView::shutdown() {
+    if (layout_thread_.joinable()) layout_thread_.join();
     renderer_.shutdown();
+}
+
+void GraphView::start_layout_worker() {
+    // Copy topology so the worker is independent of any later store mutation.
+    const uint32_t n = static_cast<uint32_t>(store_.node_count());
+    std::vector<uint32_t> from = store_.edges().from;
+    std::vector<uint32_t> to   = store_.edges().to;
+    layout_thread_ = std::thread([this, n, from = std::move(from), to = std::move(to)]() {
+        LayoutResult r = compute_layered_layout(n, from, to, {});
+        layout_result_ = std::move(r);
+        layout_ready_.store(true, std::memory_order_release);
+    });
+}
+
+void GraphView::maybe_apply_layout() {
+    if (layout_applied_) return;
+    if (!layout_ready_.load(std::memory_order_acquire)) return;
+    if (layout_thread_.joinable()) layout_thread_.join();
+    layout_applied_ = true;
+    if (!layout_result_.ok) return;
+
+    // Target positions become authoritative; cull/hit-test use them immediately.
+    store_.set_positions(layout_result_.x, layout_result_.y);
+    grid_.build(store_);
+    fit_to_bounds();           // re-frame to the new layout
+    animating_ = true;         // render lerps anim_ -> store positions
+}
+
+void GraphView::advance_animation() {
+    if (!animating_) return;
+    const auto& n = store_.nodes();
+    const float k = 0.18f;     // per-frame approach factor
+    float max_delta = 0.0f;
+    for (size_t i = 0; i < n.cx.size(); ++i) {
+        const float dx = n.cx[i] - anim_x_[i];
+        const float dy = n.cy[i] - anim_y_[i];
+        anim_x_[i] += dx * k;
+        anim_y_[i] += dy * k;
+        const float ad = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+        if (ad > max_delta) max_delta = ad;
+    }
+    if (max_delta < 0.5f) {    // settled — snap and stop the O(N) update
+        anim_x_ = n.cx;
+        anim_y_ = n.cy;
+        animating_ = false;
+    }
 }
 
 bool GraphView::contains(float win_x, float win_y) const {
@@ -104,6 +157,9 @@ void GraphView::fit_to_bounds() {
 }
 
 void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
+    maybe_apply_layout();
+    advance_animation();
+
     if (bounds_.extent.width == 0 || bounds_.extent.height == 0) return;
 
     const float vw = static_cast<float>(bounds_.extent.width);
@@ -125,8 +181,9 @@ void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
     for (uint32_t i : vis_nodes_) {
         vis_stamp_[i] = frame_;
         NodeInstance d;
-        d.rect[0] = n.cx[i];
-        d.rect[1] = n.cy[i];
+        // Render at the animated position (lerps to the layout target).
+        d.rect[0] = anim_x_[i];
+        d.rect[1] = anim_y_[i];
         d.rect[2] = n.w[i];
         d.rect[3] = n.h[i];
         if (i == hovered_) {
@@ -146,8 +203,8 @@ void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
         const uint32_t b = e.to[k];
         if (vis_stamp_[a] != frame_ && vis_stamp_[b] != frame_) continue;
         EdgeInstance d;
-        d.ends[0] = n.cx[a]; d.ends[1] = n.cy[a];
-        d.ends[2] = n.cx[b]; d.ends[3] = n.cy[b];
+        d.ends[0] = anim_x_[a]; d.ends[1] = anim_y_[a];
+        d.ends[2] = anim_x_[b]; d.ends[3] = anim_y_[b];
         d.color[0] = 0.45f; d.color[1] = 0.50f; d.color[2] = 0.58f;
         d.color[3] = kEdgeThicknessPx;
         edge_inst_.push_back(d);
