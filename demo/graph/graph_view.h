@@ -14,6 +14,7 @@
 #include "graph_renderer.h"
 #include "graph_store.h"
 #include "layout_engine.h"
+#include "snippet_cache.h"
 #include "spatial_grid.h"
 
 namespace pictor {
@@ -47,10 +48,13 @@ public:
     /// layout-in animation and applies a finished worker layout.
     void render(VkCommandBuffer cmd, uint32_t flight);
 
-    /// Draw symbol labels for the nodes that are visible *and* large enough on
-    /// screen (LABEL LOD), using the shared text renderer. Call after render()
-    /// within the frame's text batch (begin/end). Bounded by the visible set.
-    void draw_labels(BitmapTextRenderer& text) const;
+    /// Draw text overlays for visible nodes via LOD: nothing when small, the
+    /// symbol name when mid-size (LABEL LOD), and a lazily-fetched code snippet
+    /// card when large (NEAR LOD, LRU-cached). Call after render() within the
+    /// frame's text batch (begin/end). Bounded by the visible set + a char budget.
+    void draw_labels(BitmapTextRenderer& text);
+
+    uint32_t snippet_cache_size() const { return static_cast<uint32_t>(snippets_.size()); }
 
     bool layout_pending() const { return !layout_applied_; }
     bool animating()      const { return animating_; }
@@ -93,6 +97,9 @@ private:
     uint32_t hovered_ = INVALID_NODE;
     float    fit_cx_ = 0.0f, fit_cy_ = 0.0f, fit_zoom_ = 1.0f;
     uint32_t last_vis_nodes_ = 0, last_vis_edges_ = 0;
+
+    // NEAR-LOD snippet cards: lazily fetched, LRU-bounded.
+    SnippetCache snippets_{256};
 };
 
 } // namespace graph
