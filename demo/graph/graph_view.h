@@ -3,13 +3,16 @@
 #ifdef PICTOR_HAS_VULKAN
 
 #include <vulkan/vulkan.h>
+#include <atomic>
 #include <cstdint>
+#include <thread>
 #include <vector>
 
 #include "camera2d.h"
 #include "graph_instances.h"
 #include "graph_renderer.h"
 #include "graph_store.h"
+#include "layout_engine.h"
 #include "spatial_grid.h"
 
 namespace pictor {
@@ -39,8 +42,12 @@ public:
     void clear_hover() { hovered_ = INVALID_NODE; }
     void reset_view();
 
-    /// Cull + upload + draw, clipped to the widget's bounds.
+    /// Cull + upload + draw, clipped to the widget's bounds. Also advances the
+    /// layout-in animation and applies a finished worker layout.
     void render(VkCommandBuffer cmd, uint32_t flight);
+
+    bool layout_pending() const { return !layout_applied_; }
+    bool animating()      const { return animating_; }
 
     uint32_t visible_nodes() const { return last_vis_nodes_; }
     uint32_t visible_edges() const { return last_vis_edges_; }
@@ -52,12 +59,23 @@ public:
 private:
     void fit_to_bounds();
     void to_world(float win_x, float win_y, float& wx, float& wy) const;
+    void start_layout_worker();
+    void maybe_apply_layout();
+    void advance_animation();
 
     VkRect2D      bounds_{};
     GraphStore    store_;
     SpatialGrid   grid_;
     Camera2D      camera_;
     GraphRenderer renderer_;
+
+    // ── Layout (Sugiyama) computed on a worker thread, animated into place ──
+    std::thread        layout_thread_;
+    std::atomic<bool>  layout_ready_{false};
+    LayoutResult       layout_result_;        // written by worker, read after ready
+    bool               layout_applied_ = false;
+    std::vector<float> anim_x_, anim_y_;       // animated render positions (lerp -> store)
+    bool               animating_ = false;
 
     // Per-frame cull scratch (reused; no per-frame allocation after warm-up).
     std::vector<uint32_t>     vis_nodes_;
