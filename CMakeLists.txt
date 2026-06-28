@@ -424,6 +424,8 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             demo/graph/graph_view.cpp
             demo/graph/ui_rect_renderer.cpp
             demo/graph/dock_layout.cpp
+            demo/graph/synthetic_data_channel.cpp
+            demo/graph/clangd_data_channel.cpp
         )
         target_include_directories(pictor_graph_demo PRIVATE demo/graph)
         target_link_libraries(pictor_graph_demo PRIVATE pictor)

@@ -112,6 +112,13 @@ void GraphRenderer::shutdown() {
     initialized_     = false;
 }
 
+void GraphRenderer::ensure_capacity(uint32_t node_count, uint32_t edge_count) {
+    if (!initialized_) return;
+    vkDeviceWaitIdle(device_);
+    node_buf_.ensure_capacity(VkDeviceSize(node_count) * sizeof(NodeInstance));
+    edge_buf_.ensure_capacity(VkDeviceSize(edge_count) * sizeof(EdgeInstance));
+}
+
 void GraphRenderer::draw(VkCommandBuffer cmd, VkRect2D region, const GraphPushConstants& pc,
                          uint32_t flight,
                          const NodeInstance* nodes, uint32_t node_count,

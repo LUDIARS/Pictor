@@ -48,6 +48,11 @@ public:
               const NodeInstance* nodes, uint32_t node_count,
               const EdgeInstance* edges, uint32_t edge_count);
 
+    /// Grow the per-flight instance buffers to hold up to `node_count` nodes and
+    /// `edge_count` edges. Called by incremental expand when the total grows past
+    /// the initial capacity; waits for the device to idle before reallocating.
+    void ensure_capacity(uint32_t node_count, uint32_t edge_count);
+
     bool is_initialized() const { return initialized_; }
 
 private:

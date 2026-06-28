@@ -19,6 +19,45 @@ inline void unpack_rgba(uint32_t rgba, float out[4]) {
 }
 constexpr float kEdgeThicknessPx = 1.5f;
 
+// True if segment a-b meets the axis-aligned view rect. Catches edges whose
+// endpoints are both off-screen but whose line crosses the viewport (the
+// frame-stamp endpoint test alone misses these). Liang-Barsky parametric clip.
+bool segment_intersects_rect(float ax, float ay, float bx, float by,
+                             float min_x, float min_y, float max_x, float max_y) {
+    if (ax >= min_x && ax <= max_x && ay >= min_y && ay <= max_y) return true;
+    if (bx >= min_x && bx <= max_x && by >= min_y && by <= max_y) return true;
+    const float dx = bx - ax;
+    const float dy = by - ay;
+    float t0 = 0.0f, t1 = 1.0f;
+    const float p[4] = {-dx, dx, -dy, dy};
+    const float q[4] = {ax - min_x, max_x - ax, ay - min_y, max_y - ay};
+    for (int i = 0; i < 4; ++i) {
+        if (p[i] == 0.0f) {
+            if (q[i] < 0.0f) return false;   // parallel and outside this edge
+        } else {
+            const float r = q[i] / p[i];
+            if (p[i] < 0.0f) { if (r > t1) return false; if (r > t0) t0 = r; }
+            else             { if (r < t0) return false; if (r < t1) t1 = r; }
+        }
+    }
+    return t0 <= t1;
+}
+
+// Box size of expand-spawned child nodes (matches the generator's nodes).
+constexpr float kChildW = 120.0f;
+constexpr float kChildH = 44.0f;
+
+// Palette indexed by NodeKind (matches graph_generator's colors).
+uint32_t kind_color(NodeKind kind) {
+    switch (kind) {
+    case NodeKind::Function: return 0x4FA3FFFFu; // blue
+    case NodeKind::Method:   return 0x6BD389FFu; // green
+    case NodeKind::Variable: return 0xE0B04AFFu; // amber
+    case NodeKind::Type:     return 0xC080F0FFu; // violet
+    default:                 return 0x9AA0A6FFu; // grey
+    }
+}
+
 // Synthetic code snippet for a node (placeholder for clangd read_snippet).
 // Deterministic from the symbol name + kind. Shaped as a few short lines so it
 // reads like a definition inside the node card.
@@ -164,6 +203,59 @@ void GraphView::reset_view() {
     fit_to_bounds();
 }
 
+NodeHandle GraphView::pick(float win_x, float win_y) const {
+    float wx, wy;
+    to_world(win_x, win_y, wx, wy);
+    return grid_.pick(wx, wy);
+}
+
+void GraphView::expand_node(NodeHandle h) {
+    if (h == INVALID_NODE || h >= store_.node_count()) return;
+    if (!layout_applied_ || channel_ == nullptr) return;   // wait for the settle / source
+    const uint64_t parent_id = store_.id_of(h);
+    if (!expanded_.insert(parent_id).second) return;       // expand each node once
+
+    const GraphData kids = channel_->request_children(parent_id);
+    if (kids.nodes.empty() && kids.edges.empty()) return;
+
+    // Spawn point = the parent's current animated position, so children appear to
+    // grow out of it; their target is a fan one layer below the parent.
+    const float px  = store_.nodes().cx[h];
+    const float py  = store_.nodes().cy[h];
+    const float apx = anim_x_[h];
+    const float apy = anim_y_[h];
+
+    std::vector<const GraphNodeDesc*> fresh;
+    fresh.reserve(kids.nodes.size());
+    for (const auto& nd : kids.nodes)
+        if (store_.find(nd.id) == INVALID_NODE) fresh.push_back(&nd);
+
+    const LayoutParams lp;
+    const float layer_y = py + lp.layer_gap;
+    const float half    = (fresh.size() > 0) ? (static_cast<float>(fresh.size()) - 1.0f) * 0.5f : 0.0f;
+    for (size_t i = 0; i < fresh.size(); ++i) {
+        const float tx = px + (static_cast<float>(i) - half) * lp.node_gap;
+        store_.add_node(tx, layer_y, kChildW, kChildH, kind_color(fresh[i]->kind),
+                        fresh[i]->kind, fresh[i]->name, fresh[i]->id);
+        anim_x_.push_back(apx);
+        anim_y_.push_back(apy);
+    }
+
+    for (const auto& ed : kids.edges) {
+        const NodeHandle f = store_.find(ed.from_id);
+        const NodeHandle t = store_.find(ed.to_id);
+        if (f != INVALID_NODE && t != INVALID_NODE) store_.add_edge(f, t, ed.kind);
+    }
+
+    // Re-index and grow GPU capacity for the new totals. Camera is left as-is so
+    // the click never jumps the view.
+    grid_.build(store_);
+    vis_stamp_.assign(store_.node_count(), 0);
+    renderer_.ensure_capacity(static_cast<uint32_t>(store_.node_count()),
+                              static_cast<uint32_t>(store_.edge_count()));
+    if (!fresh.empty()) animating_ = true;
+}
+
 void GraphView::fit_to_bounds() {
     const auto& n = store_.nodes();
     float min_x = 0, max_x = 0, min_y = 0, max_y = 0;
@@ -219,7 +311,10 @@ void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
         d.rect[1] = anim_y_[i];
         d.rect[2] = n.w[i];
         d.rect[3] = n.h[i];
-        if (i == hovered_) {
+        if (i == selected_) {
+            // Selected (last clicked) node: strong orange accent.
+            d.color[0] = 1.0f; d.color[1] = 0.55f; d.color[2] = 0.18f; d.color[3] = 1.0f;
+        } else if (i == hovered_) {
             // Highlight the hovered node with a bright accent.
             d.color[0] = 1.0f; d.color[1] = 0.85f; d.color[2] = 0.30f; d.color[3] = 1.0f;
         } else {
@@ -228,13 +323,17 @@ void GraphView::render(VkCommandBuffer cmd, uint32_t flight) {
         node_inst_.push_back(d);
     }
 
-    // Edges visible if either endpoint is visible this frame.
+    // Edges visible if either endpoint is visible this frame, or — for long edges
+    // whose endpoints are both off-screen — if the segment itself crosses the view.
     const auto& e = store_.edges();
     edge_inst_.clear();
     for (size_t k = 0; k < store_.edge_count(); ++k) {
         const uint32_t a = e.from[k];
         const uint32_t b = e.to[k];
-        if (vis_stamp_[a] != frame_ && vis_stamp_[b] != frame_) continue;
+        if (vis_stamp_[a] != frame_ && vis_stamp_[b] != frame_ &&
+            !segment_intersects_rect(anim_x_[a], anim_y_[a], anim_x_[b], anim_y_[b],
+                                     min_x, min_y, max_x, max_y))
+            continue;
         EdgeInstance d;
         d.ends[0] = anim_x_[a]; d.ends[1] = anim_y_[a];
         d.ends[2] = anim_x_[b]; d.ends[3] = anim_y_[b];

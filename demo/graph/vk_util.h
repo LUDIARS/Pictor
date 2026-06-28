@@ -41,6 +41,13 @@ public:
                     VkDescriptorSetLayout set_layout, VkDescriptorPool pool);
     void destroy(VkDevice device);
 
+    /// Grow every flight's buffer so it can hold at least `bytes`, re-pointing the
+    /// existing descriptor sets at the new storage. No-op when already large
+    /// enough. The caller MUST have made the device idle (incremental expand grows
+    /// the total node/edge count between frames). Returns false on allocation
+    /// failure.
+    bool ensure_capacity(VkDeviceSize bytes);
+
     /// Copy `bytes` of instance data into the given flight's mapped buffer.
     void upload(uint32_t flight, const void* data, VkDeviceSize bytes);
 
@@ -48,6 +55,12 @@ public:
     VkDeviceSize    capacity() const { return capacity_; }
 
 private:
+    // Create buffer + memory + mapping for one flight and bind it to sets_[f].
+    bool create_storage(uint32_t flight, VkDeviceSize bytes);
+
+    VkDevice         device_ = VK_NULL_HANDLE;
+    VkPhysicalDevice phys_   = VK_NULL_HANDLE;
+
     std::vector<VkBuffer>        buffers_;
     std::vector<VkDeviceMemory>  memories_;
     std::vector<void*>           mapped_;
