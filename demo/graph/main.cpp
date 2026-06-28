@@ -28,6 +28,7 @@
 #include "graph_instances.h"
 #include "graph_store.h"
 #include "graph_view.h"
+#include "synthetic_data_channel.h"
 #include "ui_rect_renderer.h"
 
 #include <GLFW/glfw3.h>
@@ -58,9 +59,15 @@ struct AppState {
     double last_x = 0.0, last_y = 0.0;
     double cursor_x = 0.0, cursor_y = 0.0;
 
+    // Click vs drag discrimination for node select / expand.
+    double     press_x = 0.0, press_y = 0.0;
+    NodeHandle press_node = INVALID_NODE;
+
     bool   save_request  = false;
     bool   reset_request = false;
 };
+
+constexpr float kClickSlopPx = 4.0f;  // movement under this = click, not pan
 
 AppState g_state;
 
@@ -121,8 +128,22 @@ void mouse_button_callback(GLFWwindow* win, int button, int action, int) {
             g_state.graph_panning = true;
             g_state.last_x = x;
             g_state.last_y = y;
+            g_state.press_x = x;
+            g_state.press_y = y;
+            g_state.press_node = g_state.graph->pick(fx, fy);
         }
     } else { // RELEASE
+        // A press+release on a node without dragging = select + expand it. Pure
+        // pan drags (cursor moved past the slop) never select, so the view is
+        // not jumped by an accidental click.
+        const double mdx = x - g_state.press_x;
+        const double mdy = y - g_state.press_y;
+        const bool is_click = (mdx * mdx + mdy * mdy) <= kClickSlopPx * kClickSlopPx;
+        if (g_state.graph_panning && is_click && g_state.press_node != INVALID_NODE) {
+            g_state.graph->select(g_state.press_node);
+            g_state.graph->expand_node(g_state.press_node);
+        }
+        g_state.press_node    = INVALID_NODE;
         g_state.graph_panning = false;
         g_state.dock_dragging = false;
         g_state.dock->end_drag();
@@ -226,6 +247,11 @@ int main(int argc, char** argv) {
     }
     printf("[init] Graph: %u nodes, %u edges\n", graph.total_nodes(), graph.total_edges());
 
+    // Source of children for click-to-expand (Step 6). Synthetic today; swap for
+    // ClangdDataChannel once Iter's IPC bridge is wired.
+    SyntheticDataChannel channel(args.nodes, 1u);
+    graph.set_data_channel(&channel);
+
     // Dock chrome renderer
     UiRectRenderer ui;
     if (!ui.initialize(vk_ctx, "shaders", 256)) {
@@ -264,7 +290,7 @@ int main(int argc, char** argv) {
     glfwSetScrollCallback(win, scroll_callback);
     glfwSetKeyCallback(win, key_callback);
 
-    printf("[loop] Drag=pan, Scroll=zoom, drag splitter=resize, click tab=switch, R=fit, S=save, Esc=quit\n");
+    printf("[loop] Drag=pan, Scroll=zoom, click node=select+expand, drag splitter=resize, click tab=switch, R=fit, S=save, Esc=quit\n");
 
     uint64_t frame_count = 0;
     auto fps_t0 = std::chrono::steady_clock::now();

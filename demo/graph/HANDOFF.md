@@ -41,7 +41,7 @@ per-frame の流れ (GraphView::render):
 
 描画は anim 位置 (レイアウト lerp 中)、cull/hit-test は target 位置 (grid)。
 
-## 3. 進捗 (すべて origin/main にマージ済み)
+## 3. 進捗
 
 | Step | 内容 | PR | commit |
 |---|---|---|---|
@@ -51,15 +51,21 @@ per-frame の流れ (GraphView::render):
 | 3 | Sugiyama layered layout (worker + lerp 整列) | #91 | 993b312 |
 | 4 | テキスト + LABEL LOD (BitmapTextRenderer 再利用) | #92 | 2a69d46 |
 | 5 | NEAR-LOD snippet カード + LRU 遅延取得 | #93 | 63479ff |
+| 6 | incremental expand + lerp / IDataChannel / edge cull / dock desc / click-jump 抑制 | #397/#398/#400 | feat/pictor-397-400 |
 
-LOD 描画パイプライン（点 → 名前 → コード）は完成。
+LOD 描画パイプライン（点 → 名前 → コード）は完成。Step 6 で **クリック展開**
+(IDataChannel 経由で子取得→`id_to_index` で append-only マージ→親位置から lerp、
+GPU バッファ動的再確保) と既知課題 (edge cull / dock descriptor / click-jump) を解消。
 
 ## 4. ファイルマップ (`demo/graph/`)
 
 | ファイル | 役割 |
 |---|---|
 | `main.cpp` | window/loop/入力、dock 解決→graph leaf 配置、text バッチ |
-| `graph_store.{h,cpp}` | SoA ストア (append-only)、`set_positions`、`label` |
+| `graph_store.{h,cpp}` | SoA ストア (append-only)、`set_positions`、`label`、`id`/`find`/`id_of` (expand dedup) |
+| `data_channel.h` | `IDataChannel` + `{nodes,edges}` 契約 (GraphData/Node/Edge desc)。データ源境界 |
+| `synthetic_data_channel.{h,cpp}` | 決定的合成 `IDataChannel` (initial + request_children) |
+| `clangd_data_channel.{h,cpp}` | clangd callHierarchy 契約ミラー + `{nodes,edges}` 変換 + 注入 fetch 境界 (Iter IPC) |
 | `graph_generator.{h,cpp}` | 決定的合成グラフ + シンボル名。`--scatter` で初期散布 |
 | `spatial_grid.{h,cpp}` | CSR 一様グリッド (cull / pick) |
 | `camera2d.{h,cpp}` | pan/zoom カメラ、world↔screen 行列 |
@@ -88,20 +94,35 @@ FPS 行に `visible u/total`・`zoom`・`hover`・`snip$`(キャッシュ件数)
 
 ## 6. 残作業 (Memoria タスク登録済み)
 
-- **Step 6: incremental expand + lerp** — ノードクリックで子取得→`id_to_index` で
-  append-only マージ→影響部のみ再 layout→lerp。`DynamicInstanceBuffers` は容量=総数固定
-  なので、expand で総数が増える場合のバッファ再確保が必要。
-- **clangd 実データ結線 + Iter 実連携** — 合成ジェネレータを実データへ。clangd
-  callHierarchy の `{nodes,edges}` 契約と `request_children` の IPC/FFI 境界 (IDataChannel)。
-  Iter の OS 子窓の1つを Pictor native surface 化し、Monaco/ControlPanel は Web のまま合成。
-- **実行時検証 (確認作業)** — exe を起動し cull(visible/total)・splitter・タブ・hover・
-  layout 整列・LABEL/snippet を目視確認 (Pictor no-run のため未実施)。
-- **既知課題** —
-  - エッジ cull の取りこぼし: 両端点が画面外で線分だけ視界を横切るエッジは未描画
-    (frame-stamp が端点可視判定)。必要なら線分×view AABB 交差判定を追加。
-  - dock の floating / closable / ドラッグ再ドック / 新規分割生成が未実装 (resize+タブ切替のみ)。
-  - ノード click→選択 / ソースジャンプ未配線 (hover highlight のみ)。
-  - Tier A 宣言的レンダラ (corpus-renderer-native 本体) は未着手 (概念のみ)。
+### 解決済み (Step 6 / feat/pictor-397-400)
+
+- **#397 incremental expand + lerp** — ノードクリック (press+release without drag) で
+  `IDataChannel::request_children`→`GraphStore::find` (`id_to_index`) で append-only
+  マージ→新ノードは親の anim 位置から fan-out 目標へ lerp。総数増加時は
+  `GraphRenderer::ensure_capacity`→`DynamicInstanceBuffers::ensure_capacity` で per-flight
+  バッファを device idle 後に再確保 (descriptor set はそのまま rebind、pool 枯渇なし)。
+- **#398 IDataChannel + clangd 契約** — `data_channel.h` に `{nodes,edges}` 契約と
+  `IDataChannel`。`SyntheticDataChannel` (合成) と `ClangdDataChannel` (clangd
+  callHierarchy ミラー→GraphData 変換、`std::function` fetch が Rust(Iter)↔C++(Pictor)
+  IPC 境界)。Pictor は Tauri/serde 非依存のまま。**実 IPC 配線 (Iter Rust 側の
+  `graph_request_children` コマンド + fetch 注入) は未着手** — Pictor 側の型と境界は確定。
+- **#400 edge cull** — `segment_intersects_rect` (Liang-Barsky) を追加。両端点 off-screen
+  でも線分が view を横切るエッジを描画。
+- **#400 dock_layout** — `DockDesc` (Corpus `DockLayoutNode` ミラー: leaf/split/tabs) +
+  `DockLayout::set_layout` で宣言的ツリーから構築。`set_default` も set_layout 経由に。
+- **#400 click-jump 抑制** — ノードクリックで `select`+`expand_node` するが camera は
+  一切動かさない (fit/reset 呼ばない)。drag (slop 超え) は pan のみで選択しない。
+
+### 未着手
+
+- **clangd 実 IPC 配線** — Iter Rust に `graph_request_children` を追加し、
+  `ClangdDataChannel` の fetch にバインド。Iter の OS 子窓を Pictor native surface 化し
+  Monaco/ControlPanel は Web のまま合成。
+- **実行時検証 (確認作業)** — exe 起動し expand lerp / edge cull / dock / hover / layout を
+  目視確認 (Pictor no-run のため未実施)。
+- **dock**: floating / closable / ドラッグ再ドック / 新規分割生成 (現状 resize+タブ+宣言構築)。
+- **ノード source ジャンプ** 未配線 (select highlight + expand のみ)。
+- **Tier A 宣言的レンダラ** (corpus-renderer-native 本体) は未着手 (概念のみ)。
 
 ## 7. 設計判断 / 落とし穴
 
