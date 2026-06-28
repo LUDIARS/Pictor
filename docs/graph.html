@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pictor — ドメイン / 機能 グラフビュー</title>
+<link rel="stylesheet" href="assets/pictor.css">
+</head>
+<body>
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html"><span class="logo">Pc</span> Pictor
+      <span class="tag">Data-Driven Rendering Pipeline</span></a>
+    <nav class="links">
+      <a href="index.html">概要</a>
+      <a href="graph.html" class="active">グラフ</a>
+      <a href="api.html">API</a>
+      <a href="review.html">レビュー</a>
+      <a href="https://github.com/ludiars/pictor">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero" style="padding-bottom:1rem">
+    <h1>ドメイン / 機能 グラフビュー</h1>
+    <p class="sub">Pictor の各サブシステム（ドメイン）と機能、その関連（フレームデータフロー・依存）を
+      インタラクティブに俯瞰する。ノードをクリックすると関連と説明を表示。</p>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn" id="btn-flow">▶ フレームデータフローを強調</button>
+    <button class="btn" id="btn-reset">⟳ リセット</button>
+    <span class="muted small">ノードをドラッグで移動 / クリックで詳細 / ホバーで関連ハイライト</span>
+  </div>
+
+  <div class="graph-wrap">
+    <svg id="graph" viewBox="0 0 1000 720" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend">
+      <div class="card">
+        <h3>グループ</h3>
+        <div id="legend-list"></div>
+        <hr style="border-color:var(--border);margin:1rem 0">
+        <div class="small muted">
+          <b>実線（青系）</b> = フレームデータフロー<br>
+          <b>点線（灰）</b> = 依存 / 利用<br>
+          ● が大きいノードは公開 API を持つドメイン
+        </div>
+        <div id="node-info">
+          <div class="nm muted">ノードを選択してください</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="small muted" style="margin-top:1.5rem">
+    関連の定義元: <code>spec/subsystem/README.md</code>（フレームパイプライン順）、
+    <code>README.md</code>（サブシステム一覧）、<code>include/pictor/pictor.h</code>（集約ヘッダ）。
+  </p>
+</main>
+
+<footer>
+  Pictor ドキュメント · グラフビューは外部ライブラリ非依存（vanilla JS + SVG）で描画。
+</footer>
+
+<script>
+// ── domain / feature graph data ───────────────────────────────
+const GROUPS = {
+  frontend:  { c:"#58a6ff", label:"フロントエンド (登録・分類・更新)" },
+  geometry:  { c:"#a371f7", label:"ジオメトリ処理 (カリング・バッチ・GPU駆動)" },
+  backend:   { c:"#f778ba", label:"バックエンド (パス実行・コマンド)" },
+  pass:      { c:"#3fb950", label:"描画パス機能 (GI/デカール/PP/マテリアル/シェーダ)" },
+  foundation:{ c:"#d29922", label:"基盤 (Renderer/メモリ/サーフェス/計測)" },
+  content:   { c:"#ff7b72", label:"コンテンツ (テキスト・アニメ・ベクター)" },
+  iface:     { c:"#56d4dd", label:"境界 (C API / WebGL / Visus / UI)" },
+};
+
+const NODES = [
+  // foundation
+  {id:"core",   label:"PictorRenderer", g:"foundation", api:1, big:1, doc:"api.html#core",
+   desc:"パイプライン全体を統括するエントリポイント。サブシステムの初期化・フレーム駆動・プロファイル切替を行う。"},
+  {id:"memory", label:"Memory",  g:"foundation", api:1, doc:"review.html#memory",
+   desc:"Frame(bump) / Pool(SoA) / GPU サブアロケータ。DoD レイアウトを支える横断基盤。"},
+  {id:"surface",label:"Surface / Vulkan", g:"foundation", api:1, doc:"api.html#surface",
+   desc:"ISurfaceProvider でウィンドウ系を抽象化 + VulkanContext (instance/device/swapchain)。"},
+  {id:"profiler",label:"Profiler", g:"foundation", api:1, doc:"api.html#profiler",
+   desc:"FPS・パス別 CPU/GPU 時間・メモリ統計・オーバーレイ。実 Vulkan GPU timestamp 対応。"},
+
+  // frontend flow
+  {id:"data",   label:"Data / アセット", g:"frontend", api:1, doc:"api.html#data",
+   desc:"テクスチャ/メッシュ/モデル(FBX) のライフサイクル。DataHandler ファサード + 読取専用 DataQueryAPI。"},
+  {id:"scene",  label:"Scene (SoA store)", g:"frontend", api:1, doc:"api.html#scene",
+   desc:"SceneRegistry + ObjectPool。SoA ストリームで全オブジェクトを並列配列管理。"},
+  {id:"update", label:"Update", g:"frontend", api:1, doc:"api.html#scene",
+   desc:"per-frame transform 更新スケジューラ。CPU並列 / Non-Temporal / GPU compute を自動選択。"},
+
+  // geometry flow
+  {id:"culling",label:"Culling", g:"geometry", api:1, doc:"api.html#scene",
+   desc:"WorldPartition 広域 → FlatBVH 詳細 → GPU Hi-Z の多段カリング。"},
+  {id:"batch",  label:"Batch", g:"geometry", api:1, doc:"api.html#scene",
+   desc:"BatchBuilder + Radix Sort O(n) で draw batch / indirect 生成。key-index ペアのみソート。"},
+  {id:"gpu",    label:"GPU-Driven", g:"geometry", api:1, doc:"api.html#memory",
+   desc:"compute update → cull → LOD → indirect compaction の GPU 駆動パイプライン + バッファ管理。"},
+
+  // backend
+  {id:"pipeline",label:"Pipeline / Scheduler", g:"backend", api:1, doc:"review.html#pipeline",
+   desc:"PipelineProfile に基づき RenderPass 実行順を決定（系統A）。JSON プロファイルで外部設定可能。"},
+  {id:"command",label:"CommandEncoder", g:"backend", api:0, doc:"review.html#pipeline",
+   desc:"DrawCommand 生成と VkCommandBuffer 記録（系統B、一部ハードコード）。"},
+
+  // pass features
+  {id:"material",label:"Material", g:"pass", api:1, doc:"api.html#material",
+   desc:"BaseMaterialBuilder の Fluent API で PBR マテリアル構築。パス別バリアントを自動生成。"},
+  {id:"shader", label:"Shader Registry", g:"pass", api:1, doc:"api.html#pipeline",
+   desc:"Visus カスタムシェーダ登録 + Vulkan pipeline 生成（SPIR-V 事前コンパイル前提）。"},
+  {id:"gi",     label:"GI (影/AO/Probe)", g:"pass", api:1, doc:"api.html#gi",
+   desc:"GILightingSystem (CSM/SSAO/Probe) ランタイム + GIBakeSystem オフラインベイク。"},
+  {id:"decal",  label:"Decal", g:"pass", api:0, doc:"review.html#decal",
+   desc:"投影デカール。depth から world 復元 + OBB 投影。"},
+  {id:"postprocess",label:"PostProcess", g:"pass", api:1, doc:"api.html#postprocess",
+   desc:"実 Vulkan host-driven チェーン（Bloom/ToneMapping/Vignette/ColorGrading/DoF）。汎用 pass 挿入対応。"},
+
+  // content
+  {id:"text",   label:"Text", g:"content", api:1, doc:"api.html#text",
+   desc:"自前 TTF/OTF パース + 3 描画経路 (atlas / image / SVG)。外部フォントライブラリ非依存。"},
+  {id:"animation",label:"Animation", g:"content", api:1, doc:"api.html#animation",
+   desc:"Skeleton/IK/clip + FBX/BVH importer + 2D/Rive/Lottie/Vector。AnimationSystem が統括。"},
+  {id:"vector", label:"Vector / Rive", g:"content", api:1, doc:"api.html#animation",
+   desc:"Rive Renderer 統合ラッパー（PICTOR_ENABLE_RIVE）。.riv をアートボード/ステートマシンで再生。"},
+
+  // interface
+  {id:"visus",  label:"Visus", g:"iface", api:0, doc:"api.html#pipeline",
+   desc:"ObjectDescriptor 生成の記述子。CUSTOM kind がカスタムシェーダ差込の seam。"},
+  {id:"c_api",  label:"C API", g:"iface", api:1, doc:"api.html#capi",
+   desc:"ABI 安定な C エクスポート。WASM / N-API / Capacitor 等の上位向け窓口。"},
+  {id:"webgl",  label:"WebGL2 Backend", g:"iface", api:1, doc:"api.html#webgl",
+   desc:"Emscripten 向け WebGL2 代替バックエンド。Vulkan と並行・非抽象。"},
+  {id:"ui",     label:"UI", g:"iface", api:0, doc:"api.html",
+   desc:"オーバーレイ等の内部 UI 描画ヘルパ。"},
+];
+
+// type: "flow" = per-frame data flow ; "dep" = dependency / uses
+const LINKS = [
+  // per-frame data flow
+  ["data","scene","flow"],["scene","update","flow"],["update","culling","flow"],
+  ["culling","batch","flow"],["batch","gpu","flow"],["gpu","pipeline","flow"],
+  ["pipeline","command","flow"],
+  ["pipeline","gi","flow"],["pipeline","decal","flow"],["pipeline","postprocess","flow"],
+  // dependencies / uses
+  ["material","batch","dep"],["material","pipeline","dep"],["shader","pipeline","dep"],
+  ["visus","shader","dep"],["visus","core","dep"],
+  ["memory","scene","dep"],["memory","update","dep"],["memory","culling","dep"],
+  ["memory","batch","dep"],["memory","gpu","dep"],
+  ["surface","pipeline","dep"],["surface","postprocess","dep"],["surface","vector","dep"],
+  ["core","data","dep"],["core","scene","dep"],["core","pipeline","dep"],["core","memory","dep"],
+  ["core","surface","dep"],["core","profiler","dep"],["core","gi","dep"],["core","animation","dep"],
+  ["animation","scene","dep"],["animation","data","dep"],["animation","vector","dep"],
+  ["text","data","dep"],["text","material","dep"],
+  ["profiler","pipeline","dep"],
+  ["c_api","core","dep"],["c_api","webgl","dep"],["webgl","scene","dep"],
+  ["gi","pipeline","dep"],
+];
+
+// ── render legend ─────────────────────────────────────────────
+const legendList = document.getElementById("legend-list");
+for (const [k,v] of Object.entries(GROUPS)) {
+  const d = document.createElement("div");
+  d.className = "legend-item"; d.dataset.group = k;
+  d.innerHTML = `<span class="swatch" style="background:${v.c}"></span>${v.label}`;
+  d.onclick = () => highlightGroup(k);
+  legendList.appendChild(d);
+}
+
+// ── force-directed layout (self-contained) ────────────────────
+const W=1000, H=720, svg=document.getElementById("graph");
+const NS="http://www.w3.org/2000/svg";
+const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
+NODES.forEach(n=>{ n.x=W/2+(Math.random()-.5)*400; n.y=H/2+(Math.random()-.5)*400; n.vx=0; n.vy=0; });
+const adj = {}; NODES.forEach(n=>adj[n.id]=new Set());
+LINKS.forEach(([a,b])=>{ adj[a].add(b); adj[b].add(a); });
+
+const gLinks=document.createElementNS(NS,"g");
+const gNodes=document.createElementNS(NS,"g");
+svg.appendChild(gLinks); svg.appendChild(gNodes);
+
+const linkEls = LINKS.map(([a,b,t])=>{
+  const l=document.createElementNS(NS,"line");
+  l.setAttribute("stroke", t==="flow" ? "#3b6ea5" : "#39414e");
+  l.setAttribute("stroke-width", t==="flow" ? 2 : 1.2);
+  if(t==="dep") l.setAttribute("stroke-dasharray","4 4");
+  l.dataset.a=a; l.dataset.b=b; l.dataset.t=t;
+  gLinks.appendChild(l); return l;
+});
+
+const nodeEls = NODES.map(n=>{
+  const g=document.createElementNS(NS,"g"); g.style.cursor="pointer";
+  const r=n.big?22:(n.api?14:10);
+  const c=document.createElementNS(NS,"circle");
+  c.setAttribute("r",r); c.setAttribute("fill",GROUPS[n.g].c);
+  c.setAttribute("stroke","#0d1117"); c.setAttribute("stroke-width",2);
+  c.setAttribute("opacity", n.api?1:0.7);
+  const t=document.createElementNS(NS,"text");
+  t.textContent=n.label; t.setAttribute("font-size",n.big?13:11);
+  t.setAttribute("fill","#e6edf3"); t.setAttribute("text-anchor","middle");
+  t.setAttribute("dy", r+13); t.setAttribute("paint-order","stroke");
+  t.setAttribute("stroke","#0d1117"); t.setAttribute("stroke-width","3");
+  g.appendChild(c); g.appendChild(t); g.dataset.id=n.id;
+  gNodes.appendChild(g);
+  g.addEventListener("pointerdown", e=>startDrag(e,n));
+  g.addEventListener("mouseenter", ()=>hoverNode(n.id));
+  g.addEventListener("mouseleave", ()=>{ if(!selected) clearHighlight(); });
+  g.addEventListener("click", ()=>selectNode(n.id));
+  n._g=g; n._c=c; n._r=r; return g;
+});
+
+function tick(){
+  // repulsion
+  for(let i=0;i<NODES.length;i++)for(let j=i+1;j<NODES.length;j++){
+    const a=NODES[i],b=NODES[j]; let dx=a.x-b.x,dy=a.y-b.y; let d2=dx*dx+dy*dy||1;
+    const f=2600/d2; const d=Math.sqrt(d2); dx/=d;dy/=d;
+    a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;
+  }
+  // springs
+  LINKS.forEach(([ai,bi])=>{
+    const a=byId[ai],b=byId[bi]; let dx=b.x-a.x,dy=b.y-a.y; const d=Math.sqrt(dx*dx+dy*dy)||1;
+    const f=(d-120)*0.02; dx/=d;dy/=d;
+    a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;
+  });
+  // center gravity + integrate
+  NODES.forEach(n=>{
+    n.vx+=(W/2-n.x)*0.002; n.vy+=(H/2-n.y)*0.002;
+    n.vx*=0.86; n.vy*=0.86;
+    if(n!==dragging){ n.x+=n.vx; n.y+=n.vy; }
+    n.x=Math.max(40,Math.min(W-40,n.x)); n.y=Math.max(36,Math.min(H-50,n.y));
+    n._g.setAttribute("transform",`translate(${n.x},${n.y})`);
+  });
+  linkEls.forEach(l=>{
+    const a=byId[l.dataset.a],b=byId[l.dataset.b];
+    l.setAttribute("x1",a.x);l.setAttribute("y1",a.y);
+    l.setAttribute("x2",b.x);l.setAttribute("y2",b.y);
+  });
+}
+let frames=0;
+function loop(){ tick(); if(frames++<100000) requestAnimationFrame(loop); }
+loop();
+
+// ── interaction ───────────────────────────────────────────────
+let dragging=null, selected=null;
+function startDrag(e,n){ dragging=n; e.target.setPointerCapture?.(e.pointerId);
+  svg.addEventListener("pointermove",onMove); svg.addEventListener("pointerup",endDrag); }
+function pt(e){ const r=svg.getBoundingClientRect();
+  return [ (e.clientX-r.left)/r.width*W, (e.clientY-r.top)/r.height*H ]; }
+function onMove(e){ if(!dragging)return; const [x,y]=pt(e); dragging.x=x;dragging.y=y;dragging.vx=0;dragging.vy=0; }
+function endDrag(){ dragging=null; svg.removeEventListener("pointermove",onMove); svg.removeEventListener("pointerup",endDrag); }
+
+function setDim(ids){
+  nodeEls.forEach(g=>{ g.style.opacity = (!ids||ids.has(g.dataset.id))?1:0.15; });
+  linkEls.forEach(l=>{ const on=!ids||(ids.has(l.dataset.a)&&ids.has(l.dataset.b));
+    l.style.opacity=on?1:0.06; });
+}
+function hoverNode(id){ const s=new Set([id,...adj[id]]); setDim(s); }
+function clearHighlight(){ setDim(null); }
+function highlightGroup(g){ selected=null; const s=new Set(NODES.filter(n=>n.g===g).map(n=>n.id)); setDim(s);
+  showInfo(null,`グループ: ${GROUPS[g].label}`); }
+
+function selectNode(id){
+  selected=id; const n=byId[id]; const s=new Set([id,...adj[id]]); setDim(s);
+  showInfo(n);
+}
+function showInfo(n,title){
+  const box=document.getElementById("node-info");
+  if(!n){ box.innerHTML=`<div class="nm">${title||""}</div>`; return; }
+  const rel=[...adj[n.id]].map(x=>byId[x].label);
+  box.innerHTML = `<div class="nm" style="color:${GROUPS[n.g].c}">${n.label}`+
+    (n.api?` <span class="pill ok">API</span>`:` <span class="pill info">internal</span>`)+`</div>`+
+    `<p class="small">${n.desc}</p>`+
+    `<div class="node-edge-list"><b>関連:</b> ${rel.join(" · ")}</div>`+
+    `<p><a href="${n.doc}">→ ドキュメントを開く</a></p>`;
+}
+
+document.getElementById("btn-flow").onclick=()=>{
+  selected=null;
+  const flowIds=new Set(); LINKS.forEach(([a,b,t])=>{ if(t==="flow"){flowIds.add(a);flowIds.add(b);} });
+  setDim(flowIds);
+  showInfo(null,"フレームデータフロー: data → scene → update → culling → batch → gpu → pipeline → passes");
+};
+document.getElementById("btn-reset").onclick=()=>{ selected=null; clearHighlight();
+  showInfo(null,"ノードを選択してください"); };
+</script>
+</body>
+</html>

@@ -4,6 +4,11 @@
 
 Pictorは、描画オブジェクトの一元管理と最適な描画パイプラインの自動選択を行うレンダリングパイプラインモジュールです。特定のインタフェースを通じてオブジェクト記述子(ObjectDescriptor)を受け付け、データ駆動設計(DOD)に基づく高効率なレンダリングを実行します。
 
+> 📘 **ドキュメントサイト** (GitHub Pages): [https://ludiars.github.io/pictor/](https://ludiars.github.io/pictor/)
+> — サービスの役割・特徴・設計の概要、ドメイン/機能の[グラフビュー](https://ludiars.github.io/pictor/graph.html)、
+> トグル展開できる[API リファレンス](https://ludiars.github.io/pictor/api.html)、[spec↔code レビュー](https://ludiars.github.io/pictor/review.html)。
+> ソースは [`/docs`](docs/) 配下。Pages は Settings → Pages → Source: **GitHub Actions** で有効化。
+
 ---
 
 ## セットアップ

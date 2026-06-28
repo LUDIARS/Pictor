@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pictor — spec ↔ code 対応レビュー</title>
+<link rel="stylesheet" href="assets/pictor.css">
+</head>
+<body>
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html"><span class="logo">Pc</span> Pictor
+      <span class="tag">Data-Driven Rendering Pipeline</span></a>
+    <nav class="links">
+      <a href="index.html">概要</a>
+      <a href="graph.html">グラフ</a>
+      <a href="api.html">API</a>
+      <a href="review.html" class="active">レビュー</a>
+      <a href="https://github.com/ludiars/pictor">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <h1>spec ↔ code 対応レビュー</h1>
+    <p class="sub"><code>spec/</code> 配下の設計資料が実際の <code>include/pictor/</code> ・ <code>src/</code>
+      の実装と対応しているかを検証した結果。クラス名・API シグネチャ・構造体・enum・file:line 参照を突合。</p>
+    <div class="badges">
+      <span class="badge">対象: spec/subsystem ×13 + spec/pipeline ×2 + extensibility + setup ×4</span>
+      <span class="badge">検証日: 2026-06</span>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>総評 — 高い対応度。</b> 検証した 20 件の spec 文書のうち大半が実装と一致しており、
+    file:line 参照も spot-check した範囲で正確。spec は「設計済みだが未配線の領域」（系統A / 系統B）を
+    <em>自覚的かつ正直に</em>区別して記述している点が際立つ。実装と乖離する記述は <b>3 点</b>に留まる
+    （うち機能影響のあるものは Memory の 1 点）。
+  </div>
+
+  <h2>サマリー</h2>
+  <table>
+    <thead><tr><th>spec 文書</th><th>対象実装</th><th>判定</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td><code>subsystem/surface.md</code></td><td>surface/</td><td><span class="pill ok">一致</span></td><td>ISurfaceProvider / VulkanContext / NativeWindowHandle すべて対応</td></tr>
+      <tr><td><code>subsystem/memory.md</code></td><td>memory/</td><td><span class="pill warn">要修正</span></td><td>GPU プール数の記述ずれ（5→実 4、<code>allocate_indirect()</code> 不在）</td></tr>
+      <tr><td><code>subsystem/data.md</code></td><td>data/</td><td><span class="pill ok">一致</span></td><td>DataHandler / TextureRegistry / VertexDataUploader / DataQueryAPI 対応</td></tr>
+      <tr><td><code>subsystem/scene.md</code></td><td>scene/</td><td><span class="pill ok">一致</span></td><td>SceneRegistry / ObjectPool の SoA ストリーム対応</td></tr>
+      <tr><td><code>subsystem/update.md</code></td><td>update/</td><td><span class="pill ok">一致</span></td><td>UpdateScheduler の戦略自動選択・JobDispatcher 対応</td></tr>
+      <tr><td><code>subsystem/culling.md</code></td><td>culling/</td><td><span class="pill ok">一致</span></td><td>CullingSystem / FlatBVH / WorldPartition、BVHNode 32B 等まで正確</td></tr>
+      <tr><td><code>subsystem/batch.md</code></td><td>batch/</td><td><span class="pill ok">一致</span></td><td>BatchBuilder / RadixSort 対応</td></tr>
+      <tr><td><code>subsystem/gpu.md</code></td><td>gpu/</td><td><span class="pill ok">一致</span></td><td>GPUDrivenPipeline / GPUBufferManager 対応</td></tr>
+      <tr><td><code>subsystem/shader.md</code></td><td>shader/ · visus/</td><td><span class="pill ok">一致</span></td><td>ShaderRegistry / CustomShaderDef / VertexLayout 対応</td></tr>
+      <tr><td><code>subsystem/gi.md</code></td><td>gi/</td><td><span class="pill ok">一致</span></td><td>GILightingSystem / GIBakeSystem、config 構造体まで対応</td></tr>
+      <tr><td><code>subsystem/decal.md</code></td><td>decal/</td><td><span class="pill info">軽微</span></td><td><code>kMaxDecals=64</code> が公開ヘッダでなく .cpp にある（文書精度のみ）</td></tr>
+      <tr><td><code>subsystem/text.md</code></td><td>text/</td><td><span class="pill ok">一致</span></td><td>FontLoader / 3 描画経路（atlas/image/SVG）対応</td></tr>
+      <tr><td><code>subsystem/webgl.md</code></td><td>webgl/</td><td><span class="pill ok">一致</span></td><td>WebGL2 代替バックエンド対応</td></tr>
+      <tr><td><code>pipeline-profile-config.md</code></td><td>pipeline/</td><td><span class="pill ok">一致</span></td><td>PipelineProfileDef / serializer / loader / 5 preset 対応、系統A/B を明記</td></tr>
+      <tr><td><code>pipeline-system-b-config.md</code></td><td>pipeline/</td><td><span class="pill ok">一致</span></td><td>AttachmentRegistry / RenderPassRegistry / PipelineCompiler / CompiledGraph 対応</td></tr>
+      <tr><td><code>rendering-extensibility-design.md</code></td><td>shader/ postprocess/ profiler/</td><td><span class="pill ok">一致</span></td><td>phase1/2 の実装状況表が実コードと一致</td></tr>
+      <tr><td><code>setup/README · build · build-options · integration</code></td><td>CMakeLists.txt</td><td><span class="pill ok">一致</span></td><td>ビルドオプション・file:line とも正確。C API の未配線も自覚的に記載</td></tr>
+    </tbody>
+  </table>
+
+  <h2>是正提案（3 点）</h2>
+
+  <section id="memory">
+  <h3>1. Memory — GPU プール数の記述ずれ <span class="pill warn">要修正</span></h3>
+  <p><code>spec/subsystem/memory.md</code> は GPU アロケータを「用途別 <b>4+1 プール</b>」とし、表に
+    <code>indirect</code>（16MB / ring / per-frame reset）を 5 番目のプールとして掲げ、暗に
+    <code>allocate_indirect()</code> 相当を期待させる。一方、実装
+    <code>include/pictor/memory/gpu_memory_allocator.h</code> のプールは <b>4 本</b>のみ：</p>
+  <pre><code>// gpu_memory_allocator.h
+GpuAllocation allocate_mesh(...);      Pool mesh_pool_;
+GpuAllocation allocate_ssbo(...);      Pool ssbo_pool_;
+GpuAllocation allocate_instance(...);  Pool instance_pool_;
+GpuAllocation allocate_staging(...);   Pool staging_pool_;
+// allocate_indirect() / indirect_pool_ は存在しない</code></pre>
+  <p>indirect draw buffer は専用プールではなく <code>allocate_ssbo()</code>（SSBO プール）から確保される。
+    なお <code>Config::indirect_buffer_size = 16MB</code> フィールドだけは残っており、専用プールに
+    結び付いていない。</p>
+  <p><b>提案:</b> spec を実装に合わせ「4 プール（mesh / ssbo / instance / staging）。indirect は SSBO プールから
+    サブアロケート」と訂正するか、逆に実装側へ <code>indirect_pool_</code> + <code>allocate_indirect()</code> を
+    追加して config フィールドと整合させる。前者（ドキュメント訂正）が低リスク。</p>
+  </section>
+
+  <section id="decal">
+  <h3>2. Decal — 定数の配置 <span class="pill info">軽微</span></h3>
+  <p><code>spec/subsystem/decal.md</code> はコンパイル時定数 <code>kMaxDecals = 64</code> に言及するが、
+    実体は公開ヘッダではなく <code>src/decal/decal_system.cpp</code> 内に定義されている。
+    機能上の問題はなく、文書の精度上の指摘に留まる。consumer が上限を参照したい場合は
+    ヘッダへ昇格すると良い。</p>
+  </section>
+
+  <section id="capi">
+  <h3>3. C API — README とビルド設定の不整合 <span class="pill warn">要修正</span></h3>
+  <p><code>README.md</code> はビルドオプション表に <code>PICTOR_BUILD_C_API</code>（C ABI エクスポート）を
+    列挙しているが、<code>CMakeLists.txt</code> には対応する <code>option()</code> もターゲット定義も無い。
+    実体 <code>include/pictor/c_api.h</code> と <code>src/c_api/c_api.cpp</code> は存在するため、
+    <b>「ソースはあるがビルド配線が無い」</b>状態。</p>
+  <p>この乖離は <code>spec/setup/build-options.md</code> が既に正直に注記しており、spec の自己整合性は高い。
+    <b>提案:</b> README から当該行を外すか、CMakeLists に <code>option(PICTOR_BUILD_C_API ...)</code> +
+    <code>pictor_c_api</code> ターゲットを追加して README に合わせる。</p>
+  </section>
+
+  <h2 id="pipeline">系統A / 系統B についての補足</h2>
+  <p>レビューで特筆すべきは、spec が Pictor のレンダリングパイプラインを <b>2 系統</b>に分けて
+    正直に記述している点。これは「誇張しない」設計姿勢の表れであり、レビュー対象としても健全：</p>
+  <div class="grid cols-2">
+    <div class="card">
+      <h3>系統A — 宣言データ</h3>
+      <p class="small"><code>PipelineProfileDef</code>（pass 列 / post_process / shadow / GI / memory 等）。
+        <code>*.profile.json</code> で完全に外部化済み・ツール編集可。プロファイル選択・pass 順序・
+        メモリ/更新/GI/GPU駆動/プロファイラの設定値は実ランタイムに反映される。</p>
+    </div>
+    <div class="card">
+      <h3>系統B — 実描画</h3>
+      <p class="small">実 <code>VkRenderPass</code> チェーン / framebuffer / draw 記録。一部は依然ハードコード。
+        post-process の既存エフェクトのパラメータ・on/off は <code>build_post_process_config()</code>
+        ブリッジ経由で実描画に届く。Phase 3 で scene 側 attachment の汎用化が進行中。</p>
+    </div>
+  </div>
+  <p class="small muted">spec はこの A↔B の「未配線」領域を各所で明示している
+    （例: <code>shader_override</code> / <code>render_targets</code> は構造体に格納されるが scheduler 未消費）。
+    レビュー上、これらは「バグ」ではなく「設計上の段階的実装の宣言」として扱った。</p>
+
+  <h2>検証方法</h2>
+  <ul>
+    <li>各 spec が主張するクラス・interface・struct・enum・file:line 参照を抽出。</li>
+    <li><code>include/pictor/&lt;name&gt;/</code> ・ <code>src/&lt;name&gt;/</code> ・ <code>CMakeLists.txt</code> を
+      Glob/Grep/Read で突合。</li>
+    <li>シンボルの存在・シグネチャ・構造体フィールド・enum 値・既定値・CMake オプション行番号を確認。</li>
+    <li>判定: <span class="pill ok">一致</span> / <span class="pill info">軽微</span> /
+      <span class="pill warn">要修正</span>。</li>
+  </ul>
+</main>
+
+<footer>
+  Pictor ドキュメント · 本レビューは静的コード/spec 突合に基づく（実行・ベンチマークは含まない）。
+</footer>
+</body>
+</html>

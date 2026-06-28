@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pictor — Data-Driven Rendering Pipeline Module</title>
+<link rel="stylesheet" href="assets/pictor.css">
+</head>
+<body>
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html"><span class="logo">Pc</span> Pictor
+      <span class="tag">Data-Driven Rendering Pipeline</span></a>
+    <nav class="links">
+      <a href="index.html" class="active">概要</a>
+      <a href="graph.html">グラフ</a>
+      <a href="api.html">API</a>
+      <a href="review.html">レビュー</a>
+      <a href="https://github.com/ludiars/pictor">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <h1>Pictor</h1>
+    <p class="sub">ObjectDescriptor を入力に、最適な描画パスを<strong>自動選択</strong>する
+      データ駆動レンダリングパイプライン基盤。C++20 / AVX2 / Vulkan。
+      システムレイヤの最下層に位置するレンダリング基盤モジュール。</p>
+    <div class="badges">
+      <span class="badge">C++20</span>
+      <span class="badge">AVX2 SIMD</span>
+      <span class="badge">Vulkan / WebGL2</span>
+      <span class="badge">Data-Oriented Design</span>
+      <span class="badge">v2.1 · LUDIARS: Pc</span>
+    </div>
+  </div>
+
+  <nav class="grid cols-3" style="margin-bottom:1rem">
+    <a class="card" href="graph.html"><h3>🕸 ドメイン / 機能グラフ</h3>
+      <p class="small muted">サブシステムと機能の関連をインタラクティブに俯瞰</p></a>
+    <a class="card" href="api.html"><h3>📘 API リファレンス</h3>
+      <p class="small muted">公開 API をトグル展開で詳細・パラメータ確認</p></a>
+    <a class="card" href="review.html"><h3>✅ spec ↔ code レビュー</h3>
+      <p class="small muted">設計資料と実装の対応検証結果</p></a>
+  </nav>
+
+  <h2 id="role">サービスの役割</h2>
+  <p>Pictor は、<b>描画オブジェクトの一元管理</b>と<b>最適な描画パイプラインの自動選択</b>を担う
+    レンダリングパイプラインモジュール。consumer（上位アプリ／ゲーム）は、描画したいものを
+    <code>ObjectDescriptor</code> という統一フォーマットで登録するだけでよい。Pictor が内部で
+    Static / Dynamic / GPU-Driven へ分類し、カリング・ソート・バッチング・パス実行までを
+    高効率（DoD）に実行する。</p>
+
+  <div class="grid cols-3">
+    <div class="card"><div class="icon">🎯</div><h3>統一入力</h3>
+      <p class="small">すべての描画対象を <code>ObjectDescriptor</code> で受理。consumer は内部レイアウトを
+        意識しない（境界 API は OOP、内部は DoD）。</p></div>
+    <div class="card"><div class="icon">🧭</div><h3>自動パス選択</h3>
+      <p class="small"><code>PipelineProfile</code> により Forward / Forward+ / Deferred / Hybrid を切替。
+        プロファイルは JSON で外部設定可能。</p></div>
+    <div class="card"><div class="icon">⚙️</div><h3>最下層基盤</h3>
+      <p class="small">Vulkan / GLFW / 標準ライブラリのみに依存。上位ライブラリを取り込まない
+        レイヤ規律を保つ。</p></div>
+  </div>
+
+  <h2 id="features">主な特徴</h2>
+  <div class="grid cols-2">
+    <div class="card"><h3>Data-Oriented Design (DoD)</h3>
+      <p class="small">全オブジェクトデータは構造体でなく、同一インデックスで紐付く並列配列
+        （<b>SoA ストリーム</b>）で保持。hot path は flat array + cache-line 整列
+        （<code>alignas(64)</code>）。scatter（map / 個別 new / pointer chase）を排除。</p></div>
+    <div class="card"><h3>多段カリング</h3>
+      <p class="small">WorldPartition 広域グリッド → FlatBVH（binned SAH + van Emde Boas レイアウト）詳細 →
+        GPU Hi-Z occlusion。CPU 側は外部数学ライブラリ非依存。</p></div>
+    <div class="card"><h3>O(n) バッチング</h3>
+      <p class="small"><code>shaderKey</code> から Radix Sort で draw batch / indirect を生成。
+        実データ移動なし（key-index ペアのみソート）。</p></div>
+    <div class="card"><h3>GPU-Driven パイプライン</h3>
+      <p class="small">compute update → cull → LOD select → indirect compaction。GPU がドローコマンドを生成。</p></div>
+    <div class="card"><h3>グローバルイルミネーション</h3>
+      <p class="small">ランタイム GI（CSM シャドウ / SSAO / Light Probe）と、静的オブジェクトの
+        オフライン GI ベイク（Shadow / AO / Irradiance / Lightmap）。</p></div>
+    <div class="card"><h3>マテリアル & ポストプロセス</h3>
+      <p class="small">Fluent API の PBR マテリアル（パス別バリアント自動生成）。実 Vulkan の
+        host-driven post-process チェーン（Bloom / ToneMapping / Vignette / ColorGrading / DoF）。</p></div>
+    <div class="card"><h3>テキスト & アニメーション</h3>
+      <p class="small">自前 TTF/OTF パース + 3 描画経路（atlas / image / SVG）。
+        Skeleton/IK + FBX/BVH import + 2D/Rive/Lottie/Vector アニメ。</p></div>
+    <div class="card"><h3>マルチバックエンド / 移植性</h3>
+      <p class="small">Vulkan（Win32/X11/XCB/Wayland/macOS/Android）に加え、Emscripten 向け WebGL2 代替
+        バックエンドと、WASM/N-API 向け C ABI エクスポート。</p></div>
+  </div>
+
+  <h2 id="design">設計</h2>
+
+  <h3>3 層パイプライン</h3>
+  <p>レイヤ間のデータ受け渡しは SoA ストリームの参照（ポインタ + count）で行い、コピーを最小化する。</p>
+  <pre><code>┌─────────────────────────────────────────────────────────┐
+│  Front-End Layer (オブジェクト管理)                      │
+│  ObjectClassifier → 分類 → Pool配置 (Static/Dynamic/GPU)│
+└───────────────────────┬─────────────────────────────────┘
+                        │ SoA ストリーム参照
+┌───────────────────────▼─────────────────────────────────┐
+│  Middle Layer (バッチング・ソーティング)                  │
+│  shaderKey読取 → Radix Sort O(n) → RenderBatch生成       │
+└───────────────────────┬─────────────────────────────────┘
+                        │ RenderBatch
+┌───────────────────────▼─────────────────────────────────┐
+│  Back-End Layer (コマンド発行)                            │
+│  PipelineProfile → RenderPass実行順決定 → DrawCommand発行 │
+└─────────────────────────────────────────────────────────┘</code></pre>
+
+  <h3>フレーム実行フロー</h3>
+  <pre><code>data(asset) → scene(SoA store) → update(transform) → culling → batch → gpu(driven)
+            → render passes [ gi(shadow/AO/probe) → decal → post-process ]
+surface / memory / shader / text は横断基盤、webgl は Vulkan と並行の代替バックエンド</code></pre>
+  <ol>
+    <li><b>BeginFrame</b> — GPU Fence 待機、Frame Allocator リセット</li>
+    <li><b>UpdateScheduler</b> — プール種別に応じ CPU並列 / Non-Temporal / GPU Compute を選択</li>
+    <li><b>CullingSystem</b> — 広域 → BVH → GPU Hi-Z の多段カリング</li>
+    <li><b>BatchBuilder</b> — sortKey 生成 → Radix Sort → RenderBatch 構築</li>
+    <li><b>RenderPassScheduler</b> — プロファイルに基づくパス実行と DrawCommand 発行</li>
+    <li><b>EndFrame</b> — GPU submit + present、プロファイラ統計集約</li>
+  </ol>
+
+  <h3>設計原則（OOP 境界 + DoD 内部 + SOLID）</h3>
+  <div class="grid cols-2">
+    <div class="card"><h3>境界は OOP / 内部は DoD</h3>
+      <p class="small">公開 API は class + virtual interface（Handle / Material / RenderPath）で
+        「データ表現の自由度」を保ち、consumer に内部レイアウトを漏らさない。内部実装は SoA の DoD。</p></div>
+    <div class="card"><h3>Open/Closed — Registry で拡張</h3>
+      <p class="small">新しい描画パス / Material kind は既存 switch への case 追加ではなく、
+        継承 + Registry 登録で増やす。</p></div>
+    <div class="card"><h3>Interface Segregation</h3>
+      <p class="small">太い IRenderer ではなく <code>ICuller</code> / <code>IShader</code> /
+        <code>ICustomRenderPass</code> / <code>IBatchPolicy</code> 等に分離。</p></div>
+    <div class="card"><h3>Dependency Inversion</h3>
+      <p class="small">consumer は Pictor の抽象 interface に依存。Vulkan handle / GLFW を直叩きさせず
+        Pictor 内部で wrap。</p></div>
+  </div>
+
+  <div class="callout">
+    <b>正直な系統分離。</b> Pictor の spec は「宣言データ（系統A）」と「実描画（系統B）」を明確に区別し、
+    未配線の領域を誇張せず記述する。詳細は <a href="review.html#pipeline">レビュー: 系統A/系統B の補足</a>。
+  </div>
+
+  <h2 id="quickstart">クイックスタート</h2>
+  <pre><code>#include &lt;pictor/pictor.h&gt;
+
+RendererConfig config;
+config.initial_profile  = "Standard";
+config.profiler_enabled = true;
+
+pictor::PictorRenderer renderer;
+renderer.initialize(config);
+
+// オブジェクト登録
+ObjectId id = renderer.register_object(desc);
+
+// 毎フレーム
+renderer.begin_frame(delta_time);
+renderer.render(camera);
+renderer.end_frame();</code></pre>
+  <p class="small muted">ビルド: <code>cmake -B build</code> → <code>cmake --build build</code>
+    （要 CMake 3.20+ / C++20 / AVX2、Vulkan SDK は GPU 機能に推奨）。
+    用途別ビルドは <code>spec/setup/</code> 参照。</p>
+</main>
+
+<footer>
+  Pictor — Data-Driven Rendering Pipeline Module · このサイトは <code>/docs</code> 配下で GitHub Pages 公開。
+  出典: <code>README.md</code> / <code>spec/</code> / <code>plan.md</code> / <code>include/pictor/</code>。
+</footer>
+</body>
+</html>
