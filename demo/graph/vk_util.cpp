@@ -145,11 +145,50 @@ VkPipeline create_instanced_pipeline(VkDevice device, VkRenderPass render_pass,
 
 // ─── DynamicInstanceBuffers ──────────────────────────────────
 
+bool DynamicInstanceBuffers::create_storage(uint32_t f, VkDeviceSize bytes) {
+    VkBufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size  = bytes;
+    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    if (vkCreateBuffer(device_, &info, nullptr, &buffers_[f]) != VK_SUCCESS)
+        return false;
+
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(device_, buffers_[f], &req);
+
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize  = req.size;
+    alloc.memoryTypeIndex = find_memory_type(
+        phys_, req.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device_, &alloc, nullptr, &memories_[f]) != VK_SUCCESS)
+        return false;
+    vkBindBufferMemory(device_, buffers_[f], memories_[f], 0);
+    vkMapMemory(device_, memories_[f], 0, bytes, 0, &mapped_[f]);
+
+    VkDescriptorBufferInfo bi{};
+    bi.buffer = buffers_[f];
+    bi.offset = 0;
+    bi.range  = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet write{};
+    write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet          = sets_[f];
+    write.dstBinding      = 0;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo     = &bi;
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    return true;
+}
+
 bool DynamicInstanceBuffers::initialize(VulkanContext& vk_ctx, uint32_t flights,
                                         VkDeviceSize capacity_bytes,
                                         VkDescriptorSetLayout set_layout,
                                         VkDescriptorPool pool) {
-    VkDevice device = vk_ctx.device();
+    device_   = vk_ctx.device();
+    phys_     = vk_ctx.physical_device();
     capacity_ = capacity_bytes;
     buffers_.resize(flights, VK_NULL_HANDLE);
     memories_.resize(flights, VK_NULL_HANDLE);
@@ -157,49 +196,34 @@ bool DynamicInstanceBuffers::initialize(VulkanContext& vk_ctx, uint32_t flights,
     sets_.resize(flights, VK_NULL_HANDLE);
 
     for (uint32_t f = 0; f < flights; ++f) {
-        VkBufferCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        info.size  = capacity_bytes;
-        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        if (vkCreateBuffer(device, &info, nullptr, &buffers_[f]) != VK_SUCCESS)
-            return false;
-
-        VkMemoryRequirements req;
-        vkGetBufferMemoryRequirements(device, buffers_[f], &req);
-
-        VkMemoryAllocateInfo alloc{};
-        alloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        alloc.allocationSize  = req.size;
-        alloc.memoryTypeIndex = find_memory_type(
-            vk_ctx.physical_device(), req.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (vkAllocateMemory(device, &alloc, nullptr, &memories_[f]) != VK_SUCCESS)
-            return false;
-        vkBindBufferMemory(device, buffers_[f], memories_[f], 0);
-        vkMapMemory(device, memories_[f], 0, capacity_bytes, 0, &mapped_[f]);
-
         VkDescriptorSetAllocateInfo sa{};
         sa.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         sa.descriptorPool     = pool;
         sa.descriptorSetCount = 1;
         sa.pSetLayouts        = &set_layout;
-        if (vkAllocateDescriptorSets(device, &sa, &sets_[f]) != VK_SUCCESS)
+        if (vkAllocateDescriptorSets(device_, &sa, &sets_[f]) != VK_SUCCESS)
             return false;
-
-        VkDescriptorBufferInfo bi{};
-        bi.buffer = buffers_[f];
-        bi.offset = 0;
-        bi.range  = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet write{};
-        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet          = sets_[f];
-        write.dstBinding      = 0;
-        write.descriptorCount = 1;
-        write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo     = &bi;
-        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        if (!create_storage(f, capacity_bytes))
+            return false;
     }
+    return true;
+}
+
+bool DynamicInstanceBuffers::ensure_capacity(VkDeviceSize bytes) {
+    if (bytes <= capacity_) return true;
+    // Grow with headroom (1.5x of the request) to amortize repeated expands.
+    const VkDeviceSize new_cap = bytes + bytes / 2;
+    for (size_t f = 0; f < buffers_.size(); ++f) {
+        if (mapped_[f])   vkUnmapMemory(device_, memories_[f]);
+        if (buffers_[f])  vkDestroyBuffer(device_, buffers_[f], nullptr);
+        if (memories_[f]) vkFreeMemory(device_, memories_[f], nullptr);
+        buffers_[f]  = VK_NULL_HANDLE;
+        memories_[f] = VK_NULL_HANDLE;
+        mapped_[f]   = nullptr;
+        if (!create_storage(static_cast<uint32_t>(f), new_cap))
+            return false;
+    }
+    capacity_ = new_cap;
     return true;
 }
 

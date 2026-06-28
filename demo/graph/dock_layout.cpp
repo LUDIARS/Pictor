@@ -13,36 +13,38 @@ int DockLayout::add_node(const Node& n) {
     return static_cast<int>(nodes_.size()) - 1;
 }
 
+int DockLayout::build_desc(const DockDesc& desc) {
+    switch (desc.kind) {
+    case DockDesc::Kind::Leaf: {
+        Node n; n.kind = Kind::Leaf; n.panel_id = desc.panel;
+        return add_node(n);
+    }
+    case DockDesc::Kind::Tabs: {
+        Node n; n.kind = Kind::Tabs; n.tab_panels = desc.tabs; n.active = desc.active;
+        return add_node(n);
+    }
+    case DockDesc::Kind::Split: {
+        const int a = desc.first  ? build_desc(*desc.first)  : -1;
+        const int b = desc.second ? build_desc(*desc.second) : -1;
+        Node n; n.kind = Kind::Split; n.orient = desc.orient; n.ratio = desc.ratio;
+        n.first = a; n.second = b;
+        return add_node(n);
+    }
+    }
+    return -1;
+}
+
+void DockLayout::set_layout(const DockDesc& root) {
+    nodes_.clear();
+    root_ = build_desc(root);
+}
+
 void DockLayout::set_default(int graph_panel, const std::vector<int>& tab_panels,
                              float split_ratio) {
-    nodes_.clear();
-
-    Node leaf;
-    leaf.kind = Kind::Leaf;
-    leaf.panel_id = graph_panel;
-    const int left = add_node(leaf);
-
-    int right;
-    if (tab_panels.empty()) {
-        Node empty;
-        empty.kind = Kind::Leaf;
-        empty.panel_id = graph_panel;
-        right = add_node(empty);
-    } else {
-        Node tabs;
-        tabs.kind = Kind::Tabs;
-        tabs.tab_panels = tab_panels;
-        tabs.active = 0;
-        right = add_node(tabs);
-    }
-
-    Node split;
-    split.kind = Kind::Split;
-    split.orient = DockOrient::Horizontal;
-    split.ratio = split_ratio;
-    split.first = left;
-    split.second = right;
-    root_ = add_node(split);
+    const DockDesc right = tab_panels.empty() ? DockDesc::leaf(graph_panel)
+                                              : DockDesc::tabset(tab_panels, 0);
+    set_layout(DockDesc::split(DockOrient::Horizontal, split_ratio,
+                               DockDesc::leaf(graph_panel), right));
 }
 
 // ─── Solve ───────────────────────────────────────────────────
