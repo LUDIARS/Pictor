@@ -205,6 +205,7 @@ add_library(pictor STATIC
     src/ui/ui_renderer.cpp
 
     # Public API
+    src/c_api/c_api.cpp
     src/core/pictor_renderer.cpp
     src/core/renderer_subsystem_manager.cpp
     src/core/mobile_lifecycle_controller.cpp
