@@ -64,10 +64,8 @@ PICTOR_API PictorRenderer* pictor_create_renderer_vulkan(void* native_window_han
     set_error("native_window or vulkan_instance is null");
     return nullptr;
   }
-  auto* r = new PictorRenderer();
-  r->backend = PictorRenderer::Backend::Vulkan;
-  r->native_window = native_window_handle;
-  r->vulkan_instance = vulkan_instance;
+  PictorRenderer* r = nullptr;
+  set_error("pictor C API Vulkan renderer is not implemented; use the C++ Vulkan API or WebGL C API");
   // 実装 Phase 2: VkSurfaceKHR を作って pictor の VulkanRenderer に渡す。
   return r;
 }
