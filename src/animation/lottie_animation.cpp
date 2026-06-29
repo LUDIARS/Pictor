@@ -113,7 +113,7 @@ bool LottieAnimation::load_json(const std::string& json_data) {
     }
 
     loaded_ = true;
-    error_.clear();
+    error_ = "Lottie runtime is not linked; metadata-only loading is available, rendering is disabled";
     return true;
 }
 
@@ -206,15 +206,8 @@ void LottieAnimation::advance(float delta_time) {
 void LottieAnimation::render_to_buffer(uint8_t* buffer, uint32_t width, uint32_t height) {
     if (!buffer || width == 0 || height == 0 || !loaded_) return;
 
-    // Clear buffer
-    std::memset(buffer, 0, width * height * 4);
-
-    // In a production build, this would use rlottie or similar library
-    // to render the current frame to the pixel buffer.
-    // The API surface is designed to be compatible with:
-    //   - rlottie (Samsung's Lottie renderer)
-    //   - thorvg (Lottie + vector graphics renderer)
-    //   - skottie (Skia's Lottie renderer)
+    (void)buffer;
+    error_ = "Lottie render_to_buffer is unavailable: Lottie runtime is not linked";
 }
 
 } // namespace pictor

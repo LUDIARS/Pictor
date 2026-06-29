@@ -1,0 +1,17 @@
+# LUDIARS 共通 harness CI ゲート (AIFormat の決定的チェックを呼ぶ)。
+#
+# このファイルは手で編集しない。正本は AIFormat/.github/workflows/harness-checks.yml、
+# 配信元は Castra/scripts/distribute-harness.mjs。更新はそちら側で行い再配信する。
+#
+# AIFormat は public なので checkout は既定の GITHUB_TOKEN で足りる
+# (private リポでも public な AIFormat は読める)。org secret は不要。
+name: harness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  harness:
+    uses: LUDIARS/AIFormat/.github/workflows/harness-checks.yml@main

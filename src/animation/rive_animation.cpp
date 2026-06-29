@@ -67,7 +67,7 @@ bool RiveAnimation::load_memory(const uint8_t* data, size_t size) {
     artboard_width_ = default_ab.width;
     artboard_height_ = default_ab.height;
     loaded_ = true;
-    error_.clear();
+    error_ = "Rive runtime is not linked; metadata-only loading is available, rendering is disabled";
 
     return true;
 }
@@ -165,13 +165,8 @@ void RiveAnimation::advance(float delta_time) {
 void RiveAnimation::render_to_buffer(uint8_t* buffer, uint32_t width, uint32_t height) {
     if (!buffer || width == 0 || height == 0) return;
 
-    // Clear buffer to transparent
-    std::memset(buffer, 0, width * height * 4);
-
-    // In a full implementation, this would use the Rive renderer
-    // to rasterize the current artboard state into the pixel buffer.
-    // The Rive C++ runtime (rive-cpp) provides a Renderer interface
-    // that can target software buffers or GPU backends.
+    (void)buffer;
+    error_ = "Rive render_to_buffer is unavailable: Rive runtime is not linked";
 }
 
 } // namespace pictor

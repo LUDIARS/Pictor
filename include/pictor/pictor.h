@@ -90,6 +90,7 @@
 #include "pictor/animation/rive_animation.h"
 #include "pictor/animation/lottie_animation.h"
 #include "pictor/animation/vector_animation.h"
+#include "pictor/animation/montage.h"
 #include "pictor/animation/animation_system.h"
 
 // Public API
