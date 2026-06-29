@@ -12,6 +12,7 @@ option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
 option(PICTOR_BUILD_WEBGL         "Build WebGL2 backend (Emscripten)" OFF)
 option(PICTOR_ENABLE_RIVE         "Enable Rive Renderer integration (requires prebuilt rive-runtime; see cmake/FindRive.cmake)" OFF)
+option(PICTOR_ENABLE_HW_COUNTERS  "Enable Intel PCM hardware counters (perf C 層, requires PICTOR_PCM_DIR)" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -74,6 +75,8 @@ endif()
 add_library(pictor STATIC
     # Core
     src/core/types.cpp
+    src/core/cache_info.cpp
+    src/core/device_memory_profile.cpp
 
     # Memory Subsystem
     src/memory/frame_allocator.cpp
@@ -150,6 +153,11 @@ add_library(pictor STATIC
     src/profiler/stats_overlay.cpp
     src/profiler/data_exporter.cpp
     src/profiler/bitmap_text_renderer.cpp
+
+    # Perf Introspection (per-object/batch 性能 & DoD キャッシュ可視化)
+    src/profiler/perf_query_api.cpp
+    src/profiler/batch_gpu_timer.cpp
+    src/profiler/hardware_counters.cpp
 
     # Surface Abstraction
     # (glfw / android / ios の各プロバイダはプラットフォーム別に
@@ -251,6 +259,28 @@ endif()
 
 if(PICTOR_USE_LARGE_PAGES)
     target_compile_definitions(pictor PRIVATE PICTOR_LARGE_PAGES=1)
+endif()
+
+# ─── Hardware perf counters (perf C 層, optional) ─────────────
+# Intel PCM をプロセス内から呼んで L2/L3 ミス・DRAM 帯域・IPC を読む。
+#   git clone https://github.com/intel/pcm
+#   cmake -DPICTOR_ENABLE_HW_COUNTERS=ON -DPICTOR_PCM_DIR=/path/to/pcm ...
+# 要求されたのに PCM が見つからない場合は黙って無効化せず FATAL_ERROR で落とす
+# (無言フォールバック禁止)。OFF のときは NullHardwareCounterProvider が理由付きで
+# available=false を返す。
+if(PICTOR_ENABLE_HW_COUNTERS)
+    target_compile_definitions(pictor PUBLIC PICTOR_ENABLE_HW_COUNTERS=1)
+    if(NOT DEFINED PICTOR_PCM_DIR)
+        message(FATAL_ERROR "PICTOR_ENABLE_HW_COUNTERS=ON には PICTOR_PCM_DIR (Intel PCM のパス) が必要")
+    endif()
+    target_include_directories(pictor PRIVATE ${PICTOR_PCM_DIR}/src ${PICTOR_PCM_DIR})
+    find_library(PCM_LIB
+        NAMES pcm PCM libpcm
+        HINTS ${PICTOR_PCM_DIR} ${PICTOR_PCM_DIR}/build/lib ${PICTOR_PCM_DIR}/lib)
+    if(NOT PCM_LIB)
+        message(FATAL_ERROR "PICTOR_ENABLE_HW_COUNTERS=ON だが PCM ライブラリが見つからない (PICTOR_PCM_DIR=${PICTOR_PCM_DIR})")
+    endif()
+    target_link_libraries(pictor PUBLIC ${PCM_LIB})
 endif()
 
 # ─── Rive Renderer (optional) ────────────────────────────────
@@ -380,7 +410,31 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
         target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
 
-        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d)")
+        # Iter relation-graph demo (instanced/DoD graph view + cull/hit-test + dock)
+        add_executable(pictor_graph_demo
+            demo/graph/main.cpp
+            demo/graph/graph_store.cpp
+            demo/graph/camera2d.cpp
+            demo/graph/graph_generator.cpp
+            demo/graph/layout_engine.cpp
+            demo/graph/snippet_cache.cpp
+            demo/graph/vk_util.cpp
+            demo/graph/spatial_grid.cpp
+            demo/graph/graph_renderer.cpp
+            demo/graph/graph_view.cpp
+            demo/graph/ui_rect_renderer.cpp
+            demo/graph/dock_layout.cpp
+            demo/graph/synthetic_data_channel.cpp
+            demo/graph/clangd_data_channel.cpp
+        )
+        target_include_directories(pictor_graph_demo PRIVATE demo/graph)
+        target_link_libraries(pictor_graph_demo PRIVATE pictor)
+        if(MSVC)
+            # /utf-8 does not propagate from the pictor lib to demo targets.
+            target_compile_options(pictor_graph_demo PRIVATE /utf-8)
+        endif()
+
+        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d, graph)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
     endif()
@@ -467,6 +521,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.vert
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.frag
+        ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_node.vert
+        ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_edge.vert
+        ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_flat.frag
+        ${CMAKE_SOURCE_DIR}/demo/graph/shaders/ui_rect.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.vert
@@ -508,6 +566,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_texture2d_demo)
         add_dependencies(pictor_texture2d_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_graph_demo)
+        add_dependencies(pictor_graph_demo pictor_shaders)
     endif()
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_shaders)
