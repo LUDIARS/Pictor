@@ -41,6 +41,11 @@ void PictorRenderer::shutdown() {
     if (!initialized_) return;
 
     // §12: Release all resources, GPU sync
+#ifdef PICTOR_HAS_VULKAN
+    // compiled graph の descriptor pool を先に返す (VkDevice が生きている
+    // うちに解放する契約 — host は renderer.shutdown() を device 破棄前に呼ぶ)。
+    release_render_graph();
+#endif
     gi_facade_.reset();
     mobile_.reset();
     subsystems_.shutdown();
@@ -147,16 +152,16 @@ void PictorRenderer::render(const Camera& camera) {
         profiler_->end_gpu_section("GILighting");
     }
 
-    // §11.3 Step 5-6: Encode + Submit
+    // §11.3 Step 5-6: managed パス巡回 (custom pass のみ実行)。 built-in pass
+    // の実描画は host が render_compiled() (→ execute_compiled) で記録する。
     profiler_->begin_cpu_section(CpuSection::CommandEncode);
     pass_scheduler_->execute(*batch_builder_, *culling_, gpu_pipeline_);
     profiler_->end_cpu_section(CpuSection::CommandEncode);
 
-    // draw call / triangle 統計はかつて CommandEncoder から記録していたが、
-    // CommandEncoder::encode() は実際には呼ばれておらず常に 0 を返していた
-    // (虚偽統計、 review/2026-06-11 D-2)。 実描画コマンドの発行は host-driven
-    // 経路 (execute_compiled / PostProcessPipeline) が担うため、 managed 経路は
-    // これらを集計しない (0 のまま = 「未計測」)。
+    // draw call / triangle 統計は render_compiled() の recorder オーバーロード
+    // が実測値 (発行した vkCmdDrawIndexed 数) を record_draw_calls /
+    // record_triangles で集計する (D-2 虚偽統計の是正)。 host が recorder を
+    // 使わない場合は 0 のまま = 「未計測」であり、 偽値は入らない。
 
     // Record memory stats
     auto mem_stats = memory_->get_stats();
@@ -312,7 +317,88 @@ void PictorRenderer::apply_profile(const PipelineProfileDef& profile) {
     subsystems_.apply_profile(profile);
     // gpu_pipeline_ / gi_system_ が再生成・破棄され得るため alias を取り直す。
     sync_subsystem_aliases_();
+
+#ifdef PICTOR_HAS_VULKAN
+    // §3.5: compile はプロファイル切替時のみ再実行 (毎フレーム不可)。
+    // apply_profile はプロファイル切替 / reload の時だけ呼ばれるので、
+    // engaged なら新しい pass 構成で graph を差し替える。
+    if (compiled_driver_.engaged() && pass_scheduler_) {
+        compiled_driver_.recompile(profile, *pass_scheduler_);
+    }
+#endif
 }
+
+// ---- Compiled Render Graph (系統B 配線, §3.5 / D-2) ----
+
+#ifdef PICTOR_HAS_VULKAN
+
+bool PictorRenderer::compile_render_graph(VkDevice                   device,
+                                          const AttachmentRegistry&  attachments,
+                                          const RenderPassRegistry&  render_passes,
+                                          const FramebufferRegistry& framebuffers,
+                                          uint32_t                   flight_count,
+                                          uint32_t                   swapchain_image_count)
+{
+    if (!initialized_ || !pass_scheduler_) return false;
+
+    CompiledPathDriver::Deps deps;
+    deps.device                = device;
+    deps.attachments           = &attachments;
+    deps.render_passes         = &render_passes;
+    deps.framebuffers          = &framebuffers;
+    deps.flight_count          = flight_count;
+    deps.swapchain_image_count = swapchain_image_count;
+
+    if (compiled_driver_.engaged()) {
+        // 再呼び出し (swapchain resize 等) — 旧 graph を解放してから
+        // 新しい依存で組み直す。
+        compiled_driver_.disengage(*pass_scheduler_);
+    }
+    return compiled_driver_.engage(deps, profile_manager_->current_profile(),
+                                   *pass_scheduler_);
+}
+
+void PictorRenderer::release_render_graph() {
+    if (pass_scheduler_) compiled_driver_.disengage(*pass_scheduler_);
+}
+
+bool PictorRenderer::has_compiled_render_graph() const {
+    return pass_scheduler_ && pass_scheduler_->has_compiled_graph();
+}
+
+void PictorRenderer::render_compiled(VkCommandBuffer cmd, uint32_t flight_index,
+                                     uint32_t image_index,
+                                     const RenderPassScheduler::PassRecordFn& record)
+{
+    if (!initialized_ || !pass_scheduler_) return;
+    if (is_frame_work_suppressed_()) return;
+
+    pass_scheduler_->execute_compiled(cmd, flight_index, image_index, record);
+}
+
+void PictorRenderer::render_compiled(VkCommandBuffer cmd, uint32_t flight_index,
+                                     uint32_t image_index,
+                                     CompiledBatchRecorder& recorder)
+{
+    if (!initialized_ || !pass_scheduler_) return;
+    if (is_frame_work_suppressed_()) return;
+
+    // render() が組んだ当該フレームのバッチを recorder に渡して記録する。
+    recorder.begin_frame(&batch_builder_->batches());
+    pass_scheduler_->execute_compiled(
+        cmd, flight_index, image_index,
+        [&recorder](VkCommandBuffer c, const CompiledPass& cp,
+                    uint32_t flight, uint32_t image) {
+            recorder.record(c, cp, flight, image);
+        });
+
+    // 実測統計を profiler へ (D-2: 虚偽値ではなく発行済みコマンドの集計)。
+    const auto& s = recorder.stats();
+    profiler_->record_draw_calls(s.draw_calls);
+    profiler_->record_triangles(s.triangles);
+}
+
+#endif // PICTOR_HAS_VULKAN
 
 // ---- Profiler ----
 
