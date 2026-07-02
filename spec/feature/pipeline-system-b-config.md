@@ -337,6 +337,18 @@ public:
 
 検証: KS が無改変で起動でき、 フレーム出力が従来と pixel-equivalent。 プロファイル切替で compile が走り直して flat graph が差し替わる。 hot path に string lookup が 0 個であること (perfetto trace で `std::string`/`unordered_map` シンボルが per-frame に出ないことを確認)。
 
+#### ステップ C 配線状況 (2026-07-02, `fix/render-compiled-path-wiring`)
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| compile の呼び出し元 | `CompiledPathDriver` (`pipeline/compiled_path_driver.{h,cpp}`) — engage / recompile / disengage で graph ライフサイクル (descriptor pool 解放含む) を管理。 `PictorRenderer::compile_render_graph()` が公開 seam、 プロファイル切替 (`apply_profile`) 時は自動再 compile (毎フレーム compile しない) | ✅ |
+| フレームループからの execute_compiled | `PictorRenderer::render_compiled(cmd, flight, image, ...)` — host のコマンドバッファ記録中に呼ぶ。 PassRecordFn 版 (完全 host record) と `CompiledBatchRecorder` 版 (RenderBatch → vkCmdDrawIndexed + 実測統計) の 2 オーバーロード | ✅ |
+| record_batches 相当 | `CompiledBatchRecorder` — OPAQUE/TRANSPARENT を `IBatchGpuSource` (host が MeshHandle/shaderKey → VkBuffer/VkPipeline を解決する seam) 経由で記録。 material variant はバッチ単位インライン解決 (per-frame alloc なし)。 SHADOW / DEPTH_ONLY は未実装 — 無言 skip せず 1 回 warn + stats 計上 (§7.1) | ✅ (SHADOW/DEPTH_ONLY は未実装を明示) |
+| 旧 managed `execute()` | custom pass 実行のみに縮退。 built-in pass は compiled graph 未設置なら 1 回だけ明示 warn (D-2 のサイレント no-op を解消)。 `remap_batches_for_pass` (M-2 per-frame alloc) は削除 | ✅ |
+| draw call / triangle 統計 | recorder の実測値を `render_compiled()` が profiler へ集計。 GPUDrivenPipeline の placeholder 統計 (visible=count / draw_calls=1) は「未計測 = 0」へ是正 | ✅ |
+| headless 統合テスト | `tests/unit_compiled_graph_wiring_test.cpp` — headless compile (device=NULL) の graph 構造 / execute_compiled の record 順序 / driver ライフサイクル / recorder 統計 / プロファイル切替再 compile | ✅ |
+| KS 側配線 | `kuzu.profile.json` + registries 構築 → `compile_render_graph()` 呼び出し | 未 (KS 側 PR、 §9) |
+
 ### 4.4 ステップ D: 既存呼び出し側の整理
 
 - `FrameComposer` を `RenderPassScheduler::execute()` 経由に統合 (HUD レイヤーは pass として scheduler 内に置く / または "post-scheduler hook" として残す)
