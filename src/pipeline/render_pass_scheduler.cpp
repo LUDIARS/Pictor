@@ -1,5 +1,7 @@
 ﻿#include "pictor/pipeline/render_pass_scheduler.h"
 
+#include <cstdio>
+
 namespace pictor {
 
 RenderPassScheduler::RenderPassScheduler(const PipelineProfileDef& profile)
@@ -19,12 +21,13 @@ void RenderPassScheduler::register_custom_pass(ICustomRenderPass* pass) {
 }
 
 void RenderPassScheduler::execute(const BatchBuilder& batch_builder,
-                                   const CullingSystem& culling,
+                                   const CullingSystem& /*culling*/,
                                    GPUDrivenPipeline* gpu_pipeline) {
     const auto& batches = batch_builder.batches();
 
     for (const auto& pass_def : pass_order_) {
-        // Check for custom pass with matching name
+        // Registered custom passes run here — the only work the managed
+        // path executes itself (host-provided CPU-side logic).
         bool handled = false;
         for (auto* custom : custom_passes_) {
             if (pass_def.pass_name == custom->name()) {
@@ -35,66 +38,32 @@ void RenderPassScheduler::execute(const BatchBuilder& batch_builder,
         }
         if (handled) continue;
 
-        // Execute built-in pass types
-        switch (pass_def.pass_type) {
-            case PassType::COMPUTE:
-                if (pass_def.gpu_driven_pass && gpu_pipeline) {
-                    // GPU Driven compute passes are handled by GPUDrivenPipeline
-                    // The pipeline dispatches compute shaders for:
-                    // - ComputeUpdate, GPUCullPass, GPULODCompact
-                }
-                break;
+        // gpu_driven な COMPUTE pass は GPUDrivenPipeline::execute() が
+        // フレームループ側で別途担当する (pictor_renderer.cpp §7.2)。
+        if (pass_def.pass_type == PassType::COMPUTE &&
+            pass_def.gpu_driven_pass && gpu_pipeline) {
+            continue;
+        }
 
-            case PassType::SHADOW:
-                // Shadow pass: render shadow-casting geometry into the shadow atlas.
-                // Uses shadow-specific material variants (stripped to alpha test only).
-                //
-                // Vulkan implementation steps:
-                //   1. Remap batches to shadow pass variants (strip unused features)
-                //   2. Filter batches: only objects with CAST_SHADOW flag
-                //   3. For each cascade (0..cascadeCount-1):
-                //      a. Begin render pass (depth-only, shadow atlas layer as attachment)
-                //      b. Set viewport/scissor to cascade resolution
-                //      c. Bind shadow_depth pipeline
-                //      d. Bind cascade's lightViewProj via push constant
-                //      e. For each shadow batch:
-                //         - Push model matrix, cascade index, materialFlags, alphaCutoff
-                //         - Bind vertex/index buffers
-                //         - If alpha test: bind albedo texture to set=1, binding=0
-                //         - vkCmdDrawIndexed
-                //      f. End render pass
-                //   4. Transition shadow atlas to SHADER_READ_ONLY for fragment sampling
-                {
-                    auto shadow_batches = remap_batches_for_pass(batches, PassType::SHADOW);
-                    // Filter out non-shadow-casting batches
-                    // (materials without CAST_SHADOW feature will have zeroed shader key)
-                    (void)shadow_batches;
-                }
-                break;
+        // built-in pass の描画コマンド発行は managed 経路では行わない —
+        // コマンドバッファ / メッシュ VkBuffer / VkPipeline は host 所有
+        // (spec/pipeline-system-b-config.md §1.2)。 compiled graph が
+        // 設置済みなら host が execute_compiled() で同じ pass 構成を実描画
+        // しているので、 ここは委譲済みとして素通りしてよい。
+        if (has_compiled_graph()) continue;
 
-            case PassType::DEPTH_ONLY:
-                // Record depth-only pre-pass commands
-                break;
-
-            case PassType::OPAQUE:
-                // Record opaque geometry draw commands
-                // Shadow map is bound as set=2 for sampling
-                // Uses batches sorted front-to-back
-                break;
-
-            case PassType::TRANSPARENT:
-                // Record transparent geometry draw commands
-                // Shadow map is bound as set=2 for sampling
-                // Uses batches sorted back-to-front
-                break;
-
-            case PassType::POST_PROCESS:
-                // Execute post-process stack (full-screen passes)
-                break;
-
-            case PassType::CUSTOM:
-                // Unhandled custom pass (no matching ICustomRenderPass)
-                break;
+        // compiled graph 未設置 = 実描画経路がどこにも無い。 旧実装は空 case
+        // で無言 no-op だった (review/2026-06-11 D-2 「動いているように見えて
+        // 何もしない」)。 §7.1 に従い 1 回だけ明示 warn する。
+        if (!warned_unwired_builtin_) {
+            std::fprintf(stderr,
+                         "[RenderPassScheduler] execute(): built-in pass '%s' は "
+                         "managed 経路では描画されません。 host 側で "
+                         "PipelineCompiler::compile() (PictorRenderer::"
+                         "compile_render_graph) → execute_compiled() を配線して"
+                         "ください\n",
+                         pass_def.pass_name.c_str());
+            warned_unwired_builtin_ = true;
         }
     }
 }
@@ -169,37 +138,9 @@ void RenderPassScheduler::execute_compiled(VkCommandBuffer cmd,
 
 #endif // PICTOR_HAS_VULKAN
 
-std::vector<RenderBatch> RenderPassScheduler::remap_batches_for_pass(
-    const std::vector<RenderBatch>& batches,
-    PassType pass_type) const
-{
-    if (!material_registry_) return batches;
-
-    std::vector<RenderBatch> remapped;
-    remapped.reserve(batches.size());
-
-    for (const auto& batch : batches) {
-        RenderBatch rb = batch;
-
-        // Look up the pass-specific variant for this batch's material.
-        const auto* variant = material_registry_->variant_for(
-            static_cast<MaterialHandle>(batch.materialKey), pass_type);
-
-        if (variant) {
-            // For shadow pass: skip materials that don't cast shadows
-            if (pass_type == PassType::SHADOW &&
-                !(variant->features & MaterialFeature::CAST_SHADOW)) {
-                continue;
-            }
-
-            rb.shaderKey   = variant->shader_key;
-            rb.materialKey = variant->material_key;
-        }
-
-        remapped.push_back(rb);
-    }
-
-    return remapped;
-}
+// remap_batches_for_pass は削除 (review/2026-06-11 M-2): pass ごとの
+// std::vector 新規確保を伴う旧 managed 経路専用ヘルパで、 呼び手が D-2 の
+// 空スタブしか無かった。 pass 別 material variant 解決は
+// `CompiledBatchRecorder` がバッチ単位のインライン解決 (alloc なし) で行う。
 
 } // namespace pictor

@@ -376,6 +376,10 @@ VkFormat AttachmentRegistry::vk_format(uint16_t att_index) const {
 }
 
 VkExtent2D AttachmentRegistry::extent(uint16_t att_index) const {
+    // initialize_vulkan 前 (headless compile / テスト) は resources_ が空。
+    // 範囲外は「未実体化 = extent 0」を返す (FramebufferRegistry::get と同じ
+    // 防御パターン — PipelineCompiler が headless でも構造を組めるように)。
+    if (att_index >= resources_.size()) return VkExtent2D{0, 0};
     return resources_[att_index].extent;
 }
 
