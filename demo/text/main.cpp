@@ -56,12 +56,25 @@ static const char* effect_names[] = {"No Effect", "Outline", "Drop Shadow", "Glo
 // ============================================================
 
 struct TextPushConstants {
-    int32_t  render_mode;   // 0 = textured, 1 = solid color
-    int32_t  effect_mode;   // 0..3
+    // Layout must match the GLSL push_constant block in
+    // demo/text/shaders/text_quad.frag under std430 rules:
+    //   offset  0: int   renderMode
+    //   offset  4: int   effectMode
+    //   offset  8: (8-byte pad — vec4 has 16-byte alignment)
+    //   offset 16: vec4  outlineColor
+    //   offset 32: float outlineWidth
+    // Total: 48 bytes.  The two _pad fields are required — without them
+    // the shader reads outlineColor / outlineWidth from the wrong offsets
+    // (so effects silently fall through to zero strength).
+    int32_t  render_mode;      // 0 = textured, 1 = solid color
+    int32_t  effect_mode;      // 0..3
+    int32_t  _pad0[2];         // pad to 16-byte boundary for vec4
     float    outline_color[4];
     float    outline_width;
-    float    _pad[3];       // align to 16 bytes
+    float    _pad1[3];
 };
+static_assert(sizeof(TextPushConstants) == 48,
+              "TextPushConstants layout must match text_quad.frag std430 block");
 
 // ============================================================
 // Quad vertex (must match text_quad.vert)

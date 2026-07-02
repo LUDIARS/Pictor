@@ -40,11 +40,18 @@ public:
     void register_custom_pass(ICustomRenderPass* pass);
 
     /// Set material registry for pass-specific variant resolution.
-    /// When set, the scheduler resolves per-pass shader/material keys
-    /// from the registry, stripping unused features per pass.
+    /// Consumed by the host-side record path (`CompiledBatchRecorder` が
+    /// batch 単位でインライン解決する) — `material_registry()` で参照する。
     void set_material_registry(const MaterialRegistry* registry) { material_registry_ = registry; }
+    const MaterialRegistry* material_registry() const { return material_registry_; }
 
-    /// Execute all render passes in order
+    /// Managed 経路のパス巡回 — custom pass (`ICustomRenderPass`) の実行のみ。
+    ///
+    /// built-in pass (SHADOW/OPAQUE/...) の描画コマンド発行は host-driven の
+    /// `execute_compiled()` が担う (spec/pipeline-system-b-config.md §1.2 —
+    /// コマンドバッファ / メッシュ VkBuffer は host 所有)。 compiled graph
+    /// 未設置のまま built-in pass に遭遇した場合は「動いて見えて何もしない」
+    /// を避けるため 1 回だけ明示 warn を出す (§7.1 サイレント no-op 禁止)。
     void execute(const BatchBuilder& batch_builder,
                  const CullingSystem& culling,
                  GPUDrivenPipeline* gpu_pipeline);
@@ -65,6 +72,15 @@ public:
 
     /// True if a non-empty CompiledGraph is installed.
     bool has_compiled_graph() const { return !compiled_.passes.empty(); }
+
+    /// Take back ownership of the installed graph (scheduler は空 graph に
+    /// 戻る)。 再 compile / device 破棄前に `CompiledGraph::shutdown()` を
+    /// 呼ぶのは受け取った側の責務 (`CompiledPathDriver` が正規の呼び手)。
+    CompiledGraph take_compiled_graph() {
+        CompiledGraph g = std::move(compiled_);
+        compiled_ = CompiledGraph{};
+        return g;
+    }
 
     /// Read-only access to the installed graph (for diagnostics / KS-side
     /// custom recording).
@@ -103,13 +119,9 @@ private:
     std::vector<ICustomRenderPass*>  custom_passes_;
     const MaterialRegistry*          material_registry_ = nullptr;
     CompiledGraph                    compiled_;
-
-    /// Remap batch keys using pass-specific material variants.
-    /// Returns a new batch list with shader/material keys replaced by
-    /// the variant appropriate for `pass_type`.
-    std::vector<RenderBatch> remap_batches_for_pass(
-        const std::vector<RenderBatch>& batches,
-        PassType pass_type) const;
+    /// execute() の「compiled graph 未設置で built-in pass に遭遇」warn を
+    /// 毎フレーム出さないための 1 回きりフラグ (§7.1)。
+    bool                             warned_unwired_builtin_ = false;
 };
 
 } // namespace pictor

@@ -52,12 +52,14 @@ public:
     void set_config(const GPUDrivenConfig& config) { config_ = config; }
     const GPUDrivenConfig& config() const { return config_; }
 
-    /// Statistics
+    /// Statistics。 compute dispatch が未実装 (Phase 4) のため、 GPU 実行結果
+    /// に依存する `visible_objects` / `draw_calls` は常に 0 = 「未計測」。
+    /// 偽の推定値は入れない (§7.1 / review/2026-06-11 D-2)。
     struct Stats {
-        uint32_t total_objects   = 0;
-        uint32_t visible_objects = 0;
-        uint32_t draw_calls      = 0;
-        uint32_t workgroups      = 0;
+        uint32_t total_objects   = 0;  ///< 対象オブジェクト数 (CPU 側で実測)
+        uint32_t visible_objects = 0;  ///< 未実装: GPU cull 結果 readback 待ち
+        uint32_t draw_calls      = 0;  ///< 未実装: indirect draw 生成待ち
+        uint32_t workgroups      = 0;  ///< dispatch するはずの workgroup 数 (実測)
     };
 
     Stats get_stats() const { return stats_; }
@@ -72,6 +74,8 @@ private:
     GPUBufferManager::SSBOLayout  ssbo_layout_;
     Stats                         stats_;
     bool                          initialized_ = false;
+    /// execute() の「compute dispatch 未実装」warn を 1 回に抑えるフラグ (§7.1)。
+    bool                          warned_dispatch_unimplemented_ = false;
 };
 
 } // namespace pictor

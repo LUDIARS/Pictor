@@ -38,6 +38,8 @@
 #include "pictor/pipeline/pipeline_profile.h"
 #include "pictor/pipeline/pipeline_builder.h"
 #include "pictor/pipeline/render_pass_scheduler.h"
+#include "pictor/pipeline/compiled_path_driver.h"
+#include "pictor/pipeline/compiled_batch_recorder.h"
 
 // Profiler
 #include "pictor/profiler/cpu_timer.h"

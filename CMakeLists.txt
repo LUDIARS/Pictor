@@ -144,6 +144,8 @@ add_library(pictor STATIC
     src/pipeline/render_pass_registry.cpp
     src/pipeline/framebuffer_registry.cpp
     src/pipeline/pipeline_compiler.cpp
+    src/pipeline/compiled_path_driver.cpp
+    src/pipeline/compiled_batch_recorder.cpp
 
     # Profiler
     src/profiler/cpu_timer.cpp
@@ -438,6 +440,23 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d, graph)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
+    endif()
+
+    # MSVC: /utf-8 は pictor lib から demo target へ伝播しない
+    # ([[feedback_msvc_utf8_test_targets]] と同じ理由)。 公開ヘッダは日本語
+    # コメントを含む UTF-8 ソースなので、 CP932 解釈だと C4819 → 構文崩壊で
+    # コンパイルエラーになる。 全 demo target に個別指定する。
+    if(MSVC)
+        foreach(_demo
+            pictor_benchmark pictor_fbx_demo pictor_mobile_demo
+            pictor_text_effects_demo pictor_material_serializer_demo
+            pictor_fbx_viewer pictor_demo pictor_graphics_demo
+            pictor_ocean_demo pictor_text_demo pictor_postprocess_demo
+            pictor_rive_demo pictor_texture2d_demo)
+            if(TARGET ${_demo})
+                target_compile_options(${_demo} PRIVATE /utf-8)
+            endif()
+        endforeach()
     endif()
 endif()
 

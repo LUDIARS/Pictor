@@ -19,6 +19,7 @@ set(PICTOR_TESTS
     unit_postprocess_chain_test
     unit_attachment_def_test
     unit_pipeline_registries_test
+    unit_compiled_graph_wiring_test
     unit_parser_dos_test
     unit_gpu_ring_flight_test
     unit_gpu_timer_test

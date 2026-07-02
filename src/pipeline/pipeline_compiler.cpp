@@ -134,7 +134,13 @@ CompiledGraph PipelineCompiler::compile(const PipelineProfileDef&  profile,
     dpci.poolSizeCount = 1;
     dpci.pPoolSizes    = &pool_size;
 
-    if (vkCreateDescriptorPool(device, &dpci, nullptr, &g.descriptor_pool) != VK_SUCCESS) {
+    // device == VK_NULL_HANDLE は headless compile (unit test / 構造検証)。
+    // vkCreateDescriptorPool を null device に投げると loader が落ちるため
+    // pool を作らず進む — passes の構造 (order / flags / clear / debug_name)
+    // は GPU 無しでも決定的に組める。 input_sets は全 NULL のまま。
+    if (device == VK_NULL_HANDLE) {
+        g.descriptor_pool = VK_NULL_HANDLE;
+    } else if (vkCreateDescriptorPool(device, &dpci, nullptr, &g.descriptor_pool) != VK_SUCCESS) {
         std::fprintf(stderr, "[PipelineCompiler] vkCreateDescriptorPool failed (max_sets=%u)\n",
                      max_sets);
         // Continue without input_sets — passes will still execute, just no

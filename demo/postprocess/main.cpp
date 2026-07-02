@@ -803,7 +803,10 @@ int main() {
     pp.tone_mapping.white_point = 4.0f;
     pp.tone_mapping.saturation = 1.0f;
 
-    renderer.set_postprocess_config(pp);
+    // Post-process は host-driven 化により PictorRenderer から切り離された
+    // (`pictor_renderer.h` の Post-Process 節参照)。 本 demo の視覚効果は
+    // 下の SceneUBO (dofFocusDistance / exposure 等) が担っており、 config は
+    // g_state.pp_config としてキー操作 → UBO へ毎フレーム反映される。
 
     // ---- 6. Register Scene Objects ----
     // Central emissive cube (very bright — triggers bloom)
@@ -1014,8 +1017,8 @@ int main() {
         auto now = std::chrono::high_resolution_clock::now();
         float elapsed = std::chrono::duration<float>(now - start).count();
 
-        // Update post-process config each frame (in case keys changed it)
-        renderer.set_postprocess_config(g_state.pp_config);
+        // g_state.pp_config のキー操作結果は下の SceneUBO 構築で毎フレーム
+        // 反映される (post-process は host-driven — renderer へは渡さない)。
 
         // Orbit camera
         float cos_pitch = std::cos(g_state.pitch);

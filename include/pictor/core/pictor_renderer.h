@@ -11,6 +11,8 @@
 #include "pictor/gpu/gpu_driven_pipeline.h"
 #include "pictor/pipeline/pipeline_profile.h"
 #include "pictor/pipeline/render_pass_scheduler.h"
+#include "pictor/pipeline/compiled_path_driver.h"
+#include "pictor/pipeline/compiled_batch_recorder.h"
 #include "pictor/profiler/profiler.h"
 #include "pictor/profiler/overlay_renderer.h"
 #include "pictor/profiler/stats_overlay.h"
@@ -245,6 +247,51 @@ public:
     /// Access bake system
     GIBakeSystem* bake_system() { return bake_system_; }
 
+    // ---- Compiled Render Graph (系統B host-driven 経路の配線, §3.5) ----
+    //
+    // 実描画コマンドの発行は host-driven: host が VulkanContext / 3 registry
+    // を構築した上で `compile_render_graph()` を 1 回呼び、 フレームループの
+    // コマンドバッファ記録中に `render_compiled()` を呼ぶ。 プロファイル切替
+    // (set_profile / load_profile_from_file / reload_active_profile) 時は
+    // 自動で再 compile される。 swapchain resize 時は registries を再構築後、
+    // `compile_render_graph()` を呼び直すこと。
+    //
+    // Managed の `render()` (culling / batch build / custom pass) と併用する:
+    // render() がフレームの CPU 側データを組み、 render_compiled() がそれを
+    // GPU コマンドへ落とす。 draw call / triangle 統計は recorder 経由の
+    // オーバーロードが実測値を profiler へ集計する (虚偽統計の是正, D-2)。
+
+#ifdef PICTOR_HAS_VULKAN
+    /// Compile the active profile into a CompiledGraph and install it on the
+    /// scheduler. Registries / device は借用 (host 所有、 呼び出し以降も生存
+    /// 必須)。 失敗時 false (詳細は stderr)。
+    bool compile_render_graph(VkDevice                   device,
+                              const AttachmentRegistry&  attachments,
+                              const RenderPassRegistry&  render_passes,
+                              const FramebufferRegistry& framebuffers,
+                              uint32_t                   flight_count,
+                              uint32_t                   swapchain_image_count);
+
+    /// CompiledGraph の GPU リソースを解放して compiled 経路を解除する。
+    /// VkDevice 破棄前に呼ぶこと (shutdown() からも安全に呼ばれる)。
+    void release_render_graph();
+
+    /// True if a compiled graph is installed on the scheduler.
+    bool has_compiled_render_graph() const;
+
+    /// Iterate the compiled graph and record GPU commands. Host のコマンド
+    /// バッファ記録中 (begin_frame → render → ここ → end_frame) に呼ぶ。
+    /// `record` 版: pass 記録は完全に host 責務 (統計は host が profiler へ)。
+    void render_compiled(VkCommandBuffer cmd, uint32_t flight_index,
+                         uint32_t image_index,
+                         const RenderPassScheduler::PassRecordFn& record);
+
+    /// `recorder` 版: BatchBuilder のバッチを CompiledBatchRecorder で記録し、
+    /// 実測 draw call / triangle 数を profiler へ集計する。
+    void render_compiled(VkCommandBuffer cmd, uint32_t flight_index,
+                         uint32_t image_index, CompiledBatchRecorder& recorder);
+#endif // PICTOR_HAS_VULKAN
+
     // ---- Post-Process ----
     // host-driven の `pictor::PostProcessPipeline` を使う。 ホストがシーンを
     // HDR ターゲットへ描き、 自前で initialize_vulkan / record する
@@ -303,6 +350,11 @@ private:
     // 切り出したコントローラ / ファサード (initialize で生成)。
     std::unique_ptr<MobileLifecycleController> mobile_;
     std::unique_ptr<GIFacade>                  gi_facade_;
+
+    // 系統B compiled 経路: profile → CompiledGraph のライフサイクル管理
+    // (compile / プロファイル切替時の再 compile / 解放)。 headless ビルド
+    // では常に disengaged のスタブ。
+    CompiledPathDriver compiled_driver_;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;

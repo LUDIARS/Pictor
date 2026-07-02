@@ -1,5 +1,7 @@
 ﻿#include "pictor/gpu/gpu_driven_pipeline.h"
 
+#include <cstdio>
+
 namespace pictor {
 
 GPUDrivenPipeline::GPUDrivenPipeline(GPUBufferManager& buffer_manager,
@@ -46,37 +48,22 @@ void GPUDrivenPipeline::execute(const Frustum& frustum,
     stats_.workgroups = workgroups;
     stats_.total_objects = object_count;
 
-    // §7.2: GPU Driven Pipeline Steps
-    // All steps are Compute Shader dispatches — recorded as GPU commands.
-    // Actual Vulkan dispatch calls would go here in a real implementation.
+    // §7.2 の 4 ステップ (Compute Update → Compute Cull → LOD Select →
+    // Compact + Indirect Draw) は **compute dispatch 未実装** (Phase 4)。
+    // §7.1 サイレント no-op 禁止に従い、 初回のみ明示 warn を出す。
+    if (!warned_dispatch_unimplemented_) {
+        std::fprintf(stderr,
+                     "[GPUDrivenPipeline] execute(): compute dispatch は未実装 "
+                     "(Phase 4) — GPU cull / indirect draw は発行されません "
+                     "(stats.visible_objects / draw_calls は未計測 = 0)\n");
+        warned_dispatch_unimplemented_ = true;
+    }
 
-    // Step 1: Compute Update (§5.4, §7.2)
-    // dispatch(workgroups, 1, 1) — updates gpu_transforms and gpu_bounds
-    // Input: gpu_velocities, gpu_update_params (uniform)
-    // Output: gpu_transforms, gpu_bounds
-
-    // Step 2: Compute Cull (§7.2)
-    // Frustum culling + Hi-Z occlusion culling
-    // Input: gpu_bounds
-    // Output: gpu_visibility
-
-    // Step 3: LOD Select (§7.2)
-    // Camera distance-based LOD selection
-    // Input: gpu_transforms, gpu_lod_info
-    // Output: gpu_visibility (LOD level stored)
-
-    // Step 4: Compact + Indirect Draw (§7.2)
-    // Compact visible objects and generate DrawIndexedIndirectCommand
-    // Input: gpu_visibility, gpu_mesh_info
-    // Output: IndirectDrawBuffer, DrawCountBuffer
-
-    // In a real Vulkan implementation, these would be:
-    // vkCmdDispatch(cmd, workgroups, 1, 1) for each step
-    // with appropriate barriers between steps
-
-    // Estimate visible count (actual would come from GPU readback)
-    stats_.visible_objects = object_count; // placeholder
-    stats_.draw_calls = 1; // single indirect draw call
+    // 旧実装は visible_objects = object_count / draw_calls = 1 の推定値を
+    // 返していた (review/2026-06-11 D-2 虚偽統計)。 GPU readback 実装まで
+    // 「未計測 = 0」に固定し、 偽値を統計 API に流さない。
+    stats_.visible_objects = 0;
+    stats_.draw_calls      = 0;
 }
 
 void GPUDrivenPipeline::upload_initial_data(const ObjectPool& pool) {
