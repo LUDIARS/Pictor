@@ -1,5 +1,6 @@
 ﻿#include "pictor/batch/radix_sort.h"
 #include "pictor/memory/frame_allocator.h"
+#include <algorithm>
 #include <cstring>
 
 namespace pictor {
@@ -16,7 +17,14 @@ void RadixSort::sort_range(SortPair* pairs, size_t count,
 
     // Allocate temp buffer from frame allocator (§4.3)
     SortPair* temp = allocator.allocate_array<SortPair>(count);
-    if (!temp) return; // out of frame memory
+    if (!temp) {
+        // Out of frame memory: callers rely on the sorted post-condition
+        // (culled keys == UINT64_MAX at the tail), so fall back to an
+        // allocation-free stable sort instead of silently returning unsorted.
+        std::stable_sort(pairs, pairs + count,
+                         [](const SortPair& a, const SortPair& b) { return a.key < b.key; });
+        return;
+    }
 
     SortPair* src = pairs;
     SortPair* dst = temp;

@@ -119,6 +119,14 @@ void CompiledBatchRecorder::record_batches_(VkCommandBuffer cmd,
             continue;
         }
 
+        // render_area なし (headless) で GPU 実体だけある場合も draw は
+        // 発行しない — viewport 未設定の dynamic state pipeline で draw
+        // すると未定義動作。 skip として計上する。
+        if (!has_area) {
+            stats_.batches_skipped++;
+            continue;
+        }
+
         // cp.pipeline は profile の shader_override による pass 単位の直値
         // (compile 済み)。 ある場合はバッチ解決より優先する。
         const VkPipeline pipeline =

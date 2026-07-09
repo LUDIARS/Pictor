@@ -4,6 +4,7 @@
 #include "pictor/memory/pool_allocator.h"
 #include <cstring>
 #include <algorithm>
+#include <utility>
 
 namespace pictor {
 
@@ -24,8 +25,23 @@ public:
 
     SoAStream(const SoAStream&) = delete;
     SoAStream& operator=(const SoAStream&) = delete;
-    SoAStream(SoAStream&&) noexcept = default;
-    SoAStream& operator=(SoAStream&&) noexcept = default;
+    // Explicit moves: null out the source so two streams never alias data_
+    // (the allocator owns the memory, but a stale data_ invites double writes).
+    SoAStream(SoAStream&& other) noexcept
+        : data_(std::exchange(other.data_, nullptr)),
+          size_(std::exchange(other.size_, 0)),
+          capacity_(std::exchange(other.capacity_, 0)),
+          allocator_(std::exchange(other.allocator_, nullptr)) {}
+
+    SoAStream& operator=(SoAStream&& other) noexcept {
+        if (this != &other) {
+            data_      = std::exchange(other.data_, nullptr);
+            size_      = std::exchange(other.size_, 0);
+            capacity_  = std::exchange(other.capacity_, 0);
+            allocator_ = std::exchange(other.allocator_, nullptr);
+        }
+        return *this;
+    }
 
     void init(PoolAllocator* allocator, size_t initial_capacity = 1024) {
         allocator_ = allocator;
@@ -53,8 +69,10 @@ public:
         return static_cast<uint32_t>(size_++);
     }
 
-    /// Swap-and-pop removal (§4.1)
+    /// Swap-and-pop removal (§4.1). Out-of-range index is a no-op
+    /// (size_ - 1 would wrap to SIZE_MAX when empty).
     void swap_and_pop(uint32_t index) {
+        if (index >= size_) return;
         if (index < size_ - 1) {
             data_[index] = data_[size_ - 1];
         }

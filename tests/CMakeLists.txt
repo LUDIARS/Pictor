@@ -11,6 +11,7 @@
 set(PICTOR_TESTS
     unit_frame_allocator_test
     unit_radix_sort_test
+    unit_batch_builder_test
     unit_culling_test
     unit_visus_serializer_test
     unit_visus_instantiator_test
