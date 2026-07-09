@@ -1,0 +1,35 @@
+{
+  "repo": "LUDIARS/Pictor",
+  "date": "2026-06-11",
+  "style": "game",
+  "weighted_score": "B",
+  "scores": {
+    "vulnerability": "B",
+    "design_strength": "B",
+    "design_consistency": "B",
+    "modularity": "A",
+    "code_quality": "B",
+    "data_schema": "A",
+    "sre": "B",
+    "zero_trust": null,
+    "security": "B",
+    "test_strategy": "B",
+    "performance": "B",
+    "license": "A",
+    "cross_platform": "B",
+    "documentation": "A"
+  },
+  "critical_count": 1,
+  "high_count": 12,
+  "autofix_count": 0,
+  "autofix_categories": {
+    "lint": 0,
+    "typo": 0,
+    "unused_import": 0,
+    "dead_code": 0,
+    "gitignore": 0,
+    "toc": 0
+  },
+  "fix_pr": null,
+  "note": "全量診断 (Fable)。スコア低下は品質後退ではなく測定方法の変化 (差分→全量・信頼境界基準)。詳細: review/2026-06-11/REVIEW.md"
+}

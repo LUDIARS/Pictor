@@ -92,6 +92,10 @@ std::vector<ObjectPool::StreamView> ObjectPool::stream_views() const {
 
 ObjectId ObjectPool::remove(uint32_t index) {
     ObjectId swapped_id = INVALID_OBJECT_ID;
+    // count()==0 would wrap last to UINT32_MAX and read object_ids_ OOB
+    if (index >= count()) {
+        return swapped_id;
+    }
     uint32_t last = count() - 1;
 
     if (index < last) {

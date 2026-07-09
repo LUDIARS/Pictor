@@ -74,6 +74,9 @@ private:
     bool compile_and_install_(const PipelineProfileDef& profile,
                               RenderPassScheduler& scheduler);
 
+    /// 旧 graph の解放 (非空なら GPU idle 待ちの上で descriptor pool を破棄)。
+    void release_old_graph_(CompiledGraph& old);
+
     Deps deps_{};
     bool engaged_ = false;
 };

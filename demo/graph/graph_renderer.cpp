@@ -115,8 +115,15 @@ void GraphRenderer::shutdown() {
 void GraphRenderer::ensure_capacity(uint32_t node_count, uint32_t edge_count) {
     if (!initialized_) return;
     vkDeviceWaitIdle(device_);
-    node_buf_.ensure_capacity(VkDeviceSize(node_count) * sizeof(NodeInstance));
-    edge_buf_.ensure_capacity(VkDeviceSize(edge_count) * sizeof(EdgeInstance));
+    // 失敗時は mapped_ が null になり upload() 側が no-op でスキップする。
+    // 黙って進めない (§7.1) ためログだけは出す。
+    if (!node_buf_.ensure_capacity(VkDeviceSize(node_count) * sizeof(NodeInstance)) ||
+        !edge_buf_.ensure_capacity(VkDeviceSize(edge_count) * sizeof(EdgeInstance))) {
+        std::fprintf(stderr,
+                     "[GraphRenderer] instance buffer の拡張に失敗 "
+                     "(nodes=%u edges=%u) — 以降の upload はスキップされます\n",
+                     node_count, edge_count);
+    }
 }
 
 void GraphRenderer::draw(VkCommandBuffer cmd, VkRect2D region, const GraphPushConstants& pc,
