@@ -50,7 +50,8 @@ FrameAllocator::FrameAllocator(size_t capacity)
 #ifdef _MSC_VER
     buffer_ = static_cast<uint8_t*>(_aligned_malloc(capacity, 64));
 #else
-    buffer_ = static_cast<uint8_t*>(std::aligned_alloc(64, capacity));
+    // std::aligned_alloc requires size to be a multiple of the alignment
+    buffer_ = static_cast<uint8_t*>(std::aligned_alloc(64, (capacity + 63) & ~size_t{63}));
 #endif
     owns_memory_ = true;
 #endif
@@ -86,7 +87,7 @@ FrameAllocator::FrameAllocator(FrameAllocator&& other) noexcept
     : buffer_(other.buffer_)
     , capacity_(other.capacity_)
     , offset_(other.offset_.load(std::memory_order_relaxed))
-    , peak_(other.peak_)
+    , peak_(other.peak_.load(std::memory_order_relaxed))
     , owns_memory_(other.owns_memory_)
 {
     other.buffer_ = nullptr;
@@ -104,7 +105,7 @@ FrameAllocator& FrameAllocator::operator=(FrameAllocator&& other) noexcept {
         buffer_ = other.buffer_;
         capacity_ = other.capacity_;
         offset_.store(other.offset_.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        peak_ = other.peak_;
+        peak_.store(other.peak_.load(std::memory_order_relaxed), std::memory_order_relaxed);
         owns_memory_ = other.owns_memory_;
         other.buffer_ = nullptr;
         other.capacity_ = 0;
@@ -129,9 +130,12 @@ void* FrameAllocator::allocate(size_t size, size_t alignment) {
 
         if (offset_.compare_exchange_weak(current, new_offset,
                                           std::memory_order_relaxed)) {
-            // Update peak (not atomic — slight race is acceptable for stats)
-            if (new_offset > peak_) {
-                peak_ = new_offset;
+            // Update peak with a relaxed CAS max-loop (stats only, but the
+            // previous plain read-modify-write was a data race by the standard)
+            size_t observed = peak_.load(std::memory_order_relaxed);
+            while (new_offset > observed &&
+                   !peak_.compare_exchange_weak(observed, new_offset,
+                                                std::memory_order_relaxed)) {
             }
             return buffer_ + aligned;
         }

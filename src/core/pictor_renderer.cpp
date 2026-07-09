@@ -1,6 +1,8 @@
 ﻿#include "pictor/core/pictor_renderer.h"
 #include "pictor/pipeline/pipeline_profile_serializer.h"
 
+#include <cstdio>
+
 namespace pictor {
 
 PictorRenderer::PictorRenderer() = default;
@@ -323,7 +325,15 @@ void PictorRenderer::apply_profile(const PipelineProfileDef& profile) {
     // apply_profile はプロファイル切替 / reload の時だけ呼ばれるので、
     // engaged なら新しい pass 構成で graph を差し替える。
     if (compiled_driver_.engaged() && pass_scheduler_) {
-        compiled_driver_.recompile(profile, *pass_scheduler_);
+        if (!compiled_driver_.recompile(profile, *pass_scheduler_)) {
+            // 空 graph のまま engaged を続けると execute_compiled が
+            // 「何もせず成功」に見える (§7.1)。失敗時は明示的に外す。
+            std::fprintf(stderr,
+                         "[PictorRenderer] apply_profile('%s'): compiled graph の"
+                         "再 compile に失敗 — compiled path を解除します\n",
+                         profile.profile_name.c_str());
+            compiled_driver_.disengage(*pass_scheduler_);
+        }
     }
 #endif
 }

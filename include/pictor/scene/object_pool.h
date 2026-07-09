@@ -3,7 +3,6 @@
 #include "pictor/core/types.h"
 #include "pictor/scene/soa_stream.h"
 #include "pictor/memory/pool_allocator.h"
-#include <unordered_map>
 #include <vector>
 
 namespace pictor {

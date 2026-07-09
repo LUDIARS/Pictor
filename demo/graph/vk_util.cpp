@@ -17,9 +17,17 @@ VkShaderModule load_shader_module(VkDevice device, const char* spv_path) {
         return VK_NULL_HANDLE;
     }
     const size_t size = static_cast<size_t>(file.tellg());
+    // SPIR-V は 4 バイト word 列 (codeSize % 4 == 0 が Vulkan の要求)
+    if (size == 0 || size % 4 != 0) {
+        fprintf(stderr, "[vk_util] Invalid SPIR-V size (%zu bytes): %s\n", size, spv_path);
+        return VK_NULL_HANDLE;
+    }
     std::vector<char> code(size);
     file.seekg(0);
-    file.read(code.data(), static_cast<std::streamsize>(size));
+    if (!file.read(code.data(), static_cast<std::streamsize>(size))) {
+        fprintf(stderr, "[vk_util] Short read on shader: %s\n", spv_path);
+        return VK_NULL_HANDLE;
+    }
 
     VkShaderModuleCreateInfo info{};
     info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -229,6 +237,7 @@ bool DynamicInstanceBuffers::ensure_capacity(VkDeviceSize bytes) {
 
 void DynamicInstanceBuffers::upload(uint32_t flight, const void* data, VkDeviceSize bytes) {
     if (bytes == 0 || data == nullptr) return;
+    if (flight >= mapped_.size() || mapped_[flight] == nullptr) return;  // alloc 失敗後
     if (bytes > capacity_) bytes = capacity_;   // never overrun the buffer
     std::memcpy(mapped_[flight], data, static_cast<size_t>(bytes));
 }

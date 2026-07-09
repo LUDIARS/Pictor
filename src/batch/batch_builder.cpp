@@ -129,7 +129,7 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
         }
     }
 
-    batches_.push_back(current_batch);
+    out.push_back(current_batch);
 }
 
 void BatchBuilder::build_static(FrameAllocator& allocator) {
@@ -145,6 +145,11 @@ void BatchBuilder::build_static(FrameAllocator& allocator) {
 
 void BatchBuilder::build_dynamic(FrameAllocator& allocator) {
     // §6.1: Dynamic Pool — Instanced Draw
+    // sorted_indices_ points into frame-allocator memory; drop the previous
+    // frame's pointer up front so an empty/alloc-failed frame never exposes
+    // a reset region through sorted_indices().
+    sorted_indices_ = nullptr;
+    sorted_index_count_ = 0;
     ObjectPool& pool = registry_.dynamic_pool();
     SortPair* pairs;
     size_t count;
@@ -183,11 +188,6 @@ BatchBuilder::Stats BatchBuilder::get_stats() const {
     Stats stats;
     stats.total_batches = static_cast<uint32_t>(batches_.size());
     stats.total_objects = registry_.total_object_count();
-
-    for (const auto& batch : batches_) {
-        stats.total_objects += batch.count;
-    }
-
     return stats;
 }
 

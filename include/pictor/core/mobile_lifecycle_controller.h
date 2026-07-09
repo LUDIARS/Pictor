@@ -53,8 +53,11 @@ private:
     MobileAutoDowngradePolicy policy_;
     MobileLifecycleSnapshot   snapshot_{};
     IMobileLifecycleObserver* observer_ = nullptr;
-    /// 自動ダウングレード前に active だったプロファイル。 未ダウングレード時は空。
+    /// 自動ダウングレード前に active だったプロファイル。
+    /// 空文字はダウングレード状態の判定に使わない (active_profile() が空を
+    /// 返す host でも動くよう downgraded_ で区別する)。
     std::string               pre_downgrade_profile_;
+    bool                      downgraded_ = false;
 };
 
 } // namespace pictor

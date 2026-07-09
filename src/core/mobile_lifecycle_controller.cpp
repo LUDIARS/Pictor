@@ -31,17 +31,22 @@ void MobileLifecycleController::transition_thermal_(ThermalState next) {
 
     const bool hot_enough  = static_cast<uint8_t>(next) >= static_cast<uint8_t>(policy_.downgrade_at);
     const bool cool_enough = static_cast<uint8_t>(next) <= static_cast<uint8_t>(policy_.restore_below);
-    if (hot_enough && pre_downgrade_profile_.empty()) {
+    // 判定は downgraded_ で行う。 pre_downgrade_profile_ の空文字を sentinel に
+    // すると active_profile() が空を返す host で downgrade が毎回再発火し、
+    // restore が永久に走らない。
+    if (hot_enough && !downgraded_) {
         pre_downgrade_profile_ = hooks_.active_profile ? hooks_.active_profile() : std::string{};
         if (!policy_.low_profile_name.empty() && hooks_.switch_profile) {
             hooks_.switch_profile(policy_.low_profile_name);
         }
-    } else if (cool_enough && !pre_downgrade_profile_.empty()) {
+        downgraded_ = true;
+    } else if (cool_enough && downgraded_) {
         const std::string restore = policy_.high_profile_name.empty()
             ? pre_downgrade_profile_
             : policy_.high_profile_name;
-        if (hooks_.switch_profile) hooks_.switch_profile(restore);
+        if (!restore.empty() && hooks_.switch_profile) hooks_.switch_profile(restore);
         pre_downgrade_profile_.clear();
+        downgraded_ = false;
     }
 }
 

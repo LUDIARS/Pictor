@@ -88,10 +88,13 @@ void GPUBufferManager::mark_dirty(uint32_t start, uint32_t end, uint32_t chunk_s
     uint32_t end_chunk = (end + chunk_size - 1) / chunk_size;
 
     for (uint32_t c = start_chunk; c < end_chunk; ++c) {
-        // Check if chunk already marked
+        // Check if chunk already marked; if so, extend its range so a later
+        // mark_dirty on the same chunk never shrinks the upload region.
         bool found = false;
-        for (const auto& region : dirty_regions_) {
+        for (auto& region : dirty_regions_) {
             if (region.chunk_index == c) {
+                region.end_object = std::max(region.end_object,
+                                             std::min((c + 1) * chunk_size, end));
                 found = true;
                 break;
             }

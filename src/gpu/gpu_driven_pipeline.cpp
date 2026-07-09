@@ -32,6 +32,26 @@ void GPUDrivenPipeline::initialize(uint32_t max_objects) {
     // Allocate GPU SoA buffers (§7.3)
     ssbo_layout_ = buffer_manager_.allocate_soa_buffers(max_objects);
 
+    // SSBO プール枯渇時に initialized_=true のまま進めない (§7.1 サイレント失敗禁止)
+    const bool all_valid = ssbo_layout_.gpu_bounds.valid &&
+                           ssbo_layout_.gpu_transforms.valid &&
+                           ssbo_layout_.gpu_velocities.valid &&
+                           ssbo_layout_.gpu_mesh_info.valid &&
+                           ssbo_layout_.gpu_material_ids.valid &&
+                           ssbo_layout_.gpu_lod_info.valid &&
+                           ssbo_layout_.gpu_visibility.valid &&
+                           ssbo_layout_.indirect_draw.valid &&
+                           ssbo_layout_.draw_count.valid;
+    if (!all_valid) {
+        std::fprintf(stderr,
+                     "[GPUDrivenPipeline] initialize(%u): SSBO 確保に失敗 "
+                     "(プール枯渇) — GPU Driven パスを無効のままにします\n",
+                     max_objects);
+        buffer_manager_.free_soa_buffers(ssbo_layout_);
+        initialized_ = false;
+        return;
+    }
+
     stats_.total_objects = max_objects;
     stats_.workgroups = calculate_workgroups(max_objects);
     initialized_ = true;

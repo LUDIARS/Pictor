@@ -86,7 +86,7 @@ public:
 
     void mark_dirty(uint32_t start, uint32_t end, uint32_t chunk_size = 16384);
     const std::vector<DirtyRegion>& dirty_regions() const { return dirty_regions_; }
-    void clear_dirty() { dirty_regions_.clear(); }
+    void clear_dirty() { dirty_regions_.clear(); dirty_chunk_count_ = 0; }
     bool should_full_copy(uint32_t total_objects) const;
 
     // ---- Stats ----

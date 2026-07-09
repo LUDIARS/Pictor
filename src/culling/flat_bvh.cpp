@@ -191,6 +191,9 @@ void FlatBVH::refit(const AABB* bounds) {
             }
         }
     }
+
+    // Refits degrade tree quality; track it so needs_rebuild() can fire
+    current_cost_ = best_cost_estimate();
 }
 
 bool FlatBVH::needs_rebuild(float quality_threshold) const {

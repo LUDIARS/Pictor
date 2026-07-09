@@ -37,7 +37,7 @@ public:
     size_t used() const { return offset_.load(std::memory_order_relaxed); }
 
     /// Peak usage since last reset
-    size_t peak() const { return peak_; }
+    size_t peak() const { return peak_.load(std::memory_order_relaxed); }
 
     /// Total capacity
     size_t capacity() const { return capacity_; }
@@ -51,7 +51,7 @@ private:
     uint8_t*          buffer_   = nullptr;
     size_t            capacity_ = 0;
     std::atomic<size_t> offset_{0};
-    size_t            peak_     = 0;
+    std::atomic<size_t> peak_{0};
     bool              owns_memory_ = true;
 };
 

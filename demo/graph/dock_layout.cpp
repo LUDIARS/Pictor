@@ -210,7 +210,15 @@ bool DockLayout::load(const char* path) {
             Node n; n.kind = Kind::Tabs;
             size_t cnt = 0;
             ss >> n.active >> cnt;
-            for (size_t i = 0; i < cnt; ++i) { int p = 0; ss >> p; n.tab_panels.push_back(p); }
+            // cnt はファイル由来 — 上限なしで信用すると "tabs 0 9999999999" で
+            // OOM する (parse_limits.h と同じ DoS 対策)。読み失敗も即棄却。
+            constexpr size_t kMaxTabs = 64;
+            if (!ss || cnt > kMaxTabs) return false;
+            for (size_t i = 0; i < cnt; ++i) {
+                int p = 0;
+                if (!(ss >> p)) return false;
+                n.tab_panels.push_back(p);
+            }
             parsed.push_back(n);
         }
     }
@@ -219,6 +227,29 @@ bool DockLayout::load(const char* path) {
         return false;
     if (expected != parsed.size())
         return false;  // corrupt / partial file — fall back to default
+
+    // split の子インデックスを検証する。範囲外は棄却、自己参照などの循環は
+    // solve_node() が無限再帰 (stack overflow) するため到達検査で弾く。
+    const int node_count = static_cast<int>(parsed.size());
+    for (const auto& n : parsed) {
+        if (n.kind == Kind::Split &&
+            (n.first < 0 || n.first >= node_count ||
+             n.second < 0 || n.second >= node_count)) {
+            return false;
+        }
+    }
+    std::vector<uint8_t> visited(parsed.size(), 0);
+    std::vector<int> stack{root};
+    while (!stack.empty()) {
+        int idx = stack.back();
+        stack.pop_back();
+        if (visited[idx]) return false;  // cycle / diamond — 木構造でない
+        visited[idx] = 1;
+        if (parsed[idx].kind == Kind::Split) {
+            stack.push_back(parsed[idx].first);
+            stack.push_back(parsed[idx].second);
+        }
+    }
 
     nodes_ = std::move(parsed);
     root_  = root;

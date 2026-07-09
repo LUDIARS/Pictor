@@ -1,0 +1,35 @@
+{
+  "repo": "LUDIARS/Pictor",
+  "date": "2026-05-15",
+  "style": "game",
+  "weighted_score": "A",
+  "scores": {
+    "vulnerability": "A",
+    "design_strength": "A",
+    "design_consistency": "A",
+    "modularity": "A",
+    "code_quality": "B",
+    "data_schema": "A",
+    "sre": "B",
+    "zero_trust": null,
+    "security": "A",
+    "test_strategy": "C",
+    "performance": "B",
+    "license": "A",
+    "cross_platform": "B",
+    "documentation": "A"
+  },
+  "critical_count": 0,
+  "high_count": 2,
+  "autofix_count": 0,
+  "autofix_categories": {
+    "lint": 0,
+    "typo": 0,
+    "unused_import": 0,
+    "dead_code": 0,
+    "gitignore": 0,
+    "toc": 0
+  },
+  "fix_pr": null,
+  "note": "差分レビュー (HEAD~9..b98cd9f、postprocess 中心)。詳細: review/2026-05-15/REVIEW.md"
+}
