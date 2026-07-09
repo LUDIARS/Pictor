@@ -5,7 +5,7 @@
   "reviewer": "claude-opus-4-7 (ludiars-review)",
   "commit": "23529e6",
   "tracked_files": 272,
-  "weighted_score": 84,
+  "weighted_score": "B+",
   "grades": {
     "design": "A-",
     "vulnerability": "B+",
@@ -15,7 +15,7 @@
   },
   "weights": {
     "design": 0.25,
-    "vulnerability": 0.20,
+    "vulnerability": 0.2,
     "implementation": 0.25,
     "missing_features": 0.15,
     "quality": 0.15
@@ -62,5 +62,26 @@
     "Legacy src/animation/rive_animation.cpp is a placeholder that silently succeeds — should be deprecated or removed now that src/vector/rive_renderer.cpp is the real integration.",
     "No build/test CI workflow despite 5 CTest targets being ready under tests/.",
     "Repo lacks CLAUDE.md / DESIGN.md / spec/ that other LUDIARS repos standardize on; plan.md doubles as DESIGN."
-  ]
+  ],
+  "date": "2026-05-13",
+  "style": "full",
+  "scores": {
+    "design": "A-",
+    "vulnerability": "B+",
+    "implementation": "B+",
+    "missing_features": "B",
+    "quality": "B+"
+  },
+  "critical_count": 0,
+  "high_count": 0,
+  "autofix_categories": {
+    "lint": 0,
+    "typo": 0,
+    "unused_import": 0,
+    "dead_code": 0,
+    "gitignore": 0,
+    "toc": 0
+  },
+  "fix_pr": null,
+  "note": "初回全量レビュー。severity 区分なしの指摘 19 件 (致命的な脆弱性なし)。weighted_score は旧 84/100 表記から換算。"
 }
