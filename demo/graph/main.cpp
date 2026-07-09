@@ -296,6 +296,10 @@ int main(int argc, char** argv) {
     auto fps_t0 = std::chrono::steady_clock::now();
     uint64_t fps_frames = 0;
 
+    // Dock chrome rects — reused across frames (per-frame alloc 回避)
+    std::vector<UiRect> chrome;
+    chrome.reserve(32);
+
     while (!surface_provider.should_close()) {
         surface_provider.poll_events();
 
@@ -314,8 +318,7 @@ int main(int argc, char** argv) {
                 graph.set_bounds(to_vk(p.rect));
 
         // Build dock chrome rects (non-graph panel backgrounds + tabs + splitters).
-        std::vector<UiRect> chrome;
-        chrome.reserve(32);
+        chrome.clear();
         for (const auto& p : dock.panels())
             if (p.panel_id != kPanelGraph)
                 push_rect(chrome, p.rect, panel_color(p.panel_id));

@@ -1,11 +1,33 @@
 {
   "repo": "LUDIARS/Pictor",
+  "date": "2026-05-13",
+  "style": "game",
+  "weighted_score": "B",
+  "scores": {
+    "design": "A",
+    "vulnerability": "B",
+    "implementation": "B",
+    "missing_features": "B",
+    "quality": "B"
+  },
+  "critical_count": 0,
+  "high_count": 0,
+  "autofix_count": 0,
+  "autofix_categories": {
+    "lint": 0,
+    "typo": 0,
+    "unused_import": 0,
+    "dead_code": 0,
+    "gitignore": 0,
+    "toc": 0
+  },
+  "fix_pr": null,
+  "note": "初回全量レビュー。severity 区分なしの指摘 19 件 (致命的な脆弱性なし)。weighted_score は旧 84/100 表記から換算。",
   "short_code": "Pc",
   "review_date": "2026-05-13",
   "reviewer": "claude-opus-4-7 (ludiars-review)",
   "commit": "23529e6",
   "tracked_files": 272,
-  "weighted_score": 84,
   "grades": {
     "design": "A-",
     "vulnerability": "B+",
@@ -15,7 +37,7 @@
   },
   "weights": {
     "design": 0.25,
-    "vulnerability": 0.20,
+    "vulnerability": 0.2,
     "implementation": 0.25,
     "missing_features": 0.15,
     "quality": 0.15
@@ -28,7 +50,6 @@
     "quality": 3,
     "total": 19
   },
-  "autofix_count": 0,
   "autofix_candidates": 9,
   "upper_layer_dependency_check": {
     "policy": "Pictor must not depend on upper layers (Ergo / AC / ergo_custos / Synergos / Memoria / Cernere / Actio / Excubitor / AdventureCube)",

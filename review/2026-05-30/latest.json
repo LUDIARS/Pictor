@@ -1,0 +1,22 @@
+{
+  "repo": "LUDIARS/Pictor",
+  "date": "2026-05-30",
+  "style": "game",
+  "weighted_score": "B",
+  "scores": {
+    "code_conventions": "B"
+  },
+  "critical_count": 1,
+  "high_count": 3,
+  "autofix_count": 0,
+  "autofix_categories": {
+    "lint": 0,
+    "typo": 0,
+    "unused_import": 0,
+    "dead_code": 0,
+    "gitignore": 0,
+    "toc": 0
+  },
+  "fix_pr": null,
+  "note": "コード規約レビュー (AIFormat/RULE_CODE.md + CLAUDE.md 基準)。Critical 1 / High 3 / Medium 4 / Low 2。詳細: review/2026-05-30/CODE_CONVENTIONS_REVIEW.md"
+}
