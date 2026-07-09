@@ -1,6 +1,7 @@
 {
+  "repo": "LUDIARS/Pictor",
   "date": "2026-05-30",
-  "style": "conventions",
+  "style": "game",
   "weighted_score": "B",
   "scores": {
     "code_conventions": "B"

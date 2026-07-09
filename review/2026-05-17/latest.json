@@ -1,7 +1,8 @@
 {
+  "repo": "LUDIARS/Pictor",
   "date": "2026-05-17",
-  "style": "diff",
-  "weighted_score": "A-",
+  "style": "game",
+  "weighted_score": "A",
   "scores": {
     "vulnerability": "A",
     "design_strength": "A",
@@ -10,7 +11,7 @@
     "code_quality": "B",
     "data_schema": "A",
     "sre": "A",
-    "zero_trust": "N/A",
+    "zero_trust": null,
     "security": "A",
     "test_strategy": "B",
     "performance": "B",
