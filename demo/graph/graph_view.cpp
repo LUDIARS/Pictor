@@ -5,6 +5,7 @@
 #include "pictor/surface/vulkan_context.h"
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -397,7 +398,9 @@ void GraphView::draw_labels(BitmapTextRenderer& text) {
         } else {
             // ── NEAR LOD: lazily-fetched snippet card (LRU-cached) ──
             const uint8_t kind = n.kind[i];
-            std::string snip = snippets_.get(i, [&]() {
+            // 参照は次の get() まで有効 (このループ内で消費し切る) —
+            // per-frame の全文コピーを避ける。
+            const std::string& snip = snippets_.get(i, [&]() {
                 return make_synthetic_snippet(name, kind);
             });
             const float scale = std::clamp(h_px / (7.0f * 16.0f * 1.25f), 0.7f, 1.6f);
@@ -407,17 +410,20 @@ void GraphView::draw_labels(BitmapTextRenderer& text) {
             const float bottom = scy + h_px * 0.5f - 4.0f;
 
             size_t start = 0;
+            char line_buf[128];  // 行コピー用の固定バッファ (per-frame substr 確保を避ける)
             while (start <= snip.size() && ty + line_h <= bottom && char_budget > 0) {
                 size_t nl = snip.find('\n', start);
                 const size_t end = (nl == std::string::npos) ? snip.size() : nl;
-                std::string line = snip.substr(start, end - start);
+                const size_t len = std::min(end - start, sizeof(line_buf) - 1);
+                std::memcpy(line_buf, snip.data() + start, len);
+                line_buf[len] = '\0';
                 text.set_scale(scale);
                 // First line (signature) brighter, body dimmer.
                 if (start == 0)
-                    text.draw_text(left, ty, line.c_str(), 0.95f, 0.97f, 1.0f, 1.0f);
+                    text.draw_text(left, ty, line_buf, 0.95f, 0.97f, 1.0f, 1.0f);
                 else
-                    text.draw_text(left, ty, line.c_str(), 0.62f, 0.78f, 0.66f, 1.0f);
-                char_budget -= static_cast<int>(line.size());
+                    text.draw_text(left, ty, line_buf, 0.62f, 0.78f, 0.66f, 1.0f);
+                char_budget -= static_cast<int>(len);
                 ty += line_h;
                 if (nl == std::string::npos) break;
                 start = nl + 1;

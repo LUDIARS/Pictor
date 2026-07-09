@@ -92,8 +92,8 @@ void RendererSubsystemManager::initialize(const RendererConfig& config) {
 
 void RendererSubsystemManager::shutdown() {
     // 構築の逆順で破棄する。
+    data_handler_.reset();      // AnimationSystem& を保持 — 先に破棄
     animation_system_.reset();
-    data_handler_.reset();
     data_exporter_.reset();
     stats_overlay_.reset();
     overlay_.reset();
@@ -142,10 +142,14 @@ void RendererSubsystemManager::apply_profile(const PipelineProfileDef& profile) 
             gi_system_->initialize(
                 profile.gpu_driven_config.max_triangle_count,
                 screen_width_, screen_height_);
+            // initialize() step 10 と同様に bake system も対で作る
+            bake_system_ = std::make_unique<GIBakeSystem>(
+                *gpu_buffer_manager_, *scene_, *gi_system_);
         } else {
             gi_system_->set_config(profile.gi_config);
         }
     } else {
+        bake_system_.reset();   // GILightingSystem& を保持 — 先に破棄
         gi_system_.reset();
     }
 

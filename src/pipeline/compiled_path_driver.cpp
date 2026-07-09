@@ -50,10 +50,22 @@ void CompiledPathDriver::disengage(RenderPassScheduler& scheduler) {
     // scheduler へ move した graph を回収して descriptor pool を解放する。
     // (set_compiled_graph は所有権 move — 解放責任はこちらに残る契約。)
     CompiledGraph old = scheduler.take_compiled_graph();
-    old.shutdown(deps_.device);
+    release_old_graph_(old);
 
     deps_    = Deps{};
     engaged_ = false;
+}
+
+void CompiledPathDriver::release_old_graph_(CompiledGraph& old) {
+    if (old.passes.empty() && old.descriptor_pool == VK_NULL_HANDLE) {
+        return;  // 解放対象なし — idle 待ちも不要
+    }
+    // descriptor pool は in-flight フレームが参照し得る (thermal auto-downgrade
+    // 経由の recompile は描画中にも起こる)。破棄前に GPU idle を待つ。
+    if (deps_.device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(deps_.device);
+    }
+    old.shutdown(deps_.device);
 }
 
 bool CompiledPathDriver::compile_and_install_(const PipelineProfileDef& profile,
@@ -61,7 +73,7 @@ bool CompiledPathDriver::compile_and_install_(const PipelineProfileDef& profile,
 {
     // 差し替え前に旧 graph のリソースを解放 (リークさせない — 全経路で解放)。
     CompiledGraph old = scheduler.take_compiled_graph();
-    old.shutdown(deps_.device);
+    release_old_graph_(old);
 
     CompiledGraph g = PipelineCompiler::compile(profile,
                                                 *deps_.attachments,
