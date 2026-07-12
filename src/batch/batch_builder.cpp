@@ -103,17 +103,21 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
     current_batch.shaderKey = pool.shader_keys()[pairs[0].index];
     current_batch.materialKey = pool.material_keys()[pairs[0].index];
     current_batch.mesh = pool.mesh_handles().data()[pairs[0].index];
+    current_batch.transparency = static_cast<uint8_t>((pairs[0].key >> 56) & 0xFu);
 
     for (size_t i = 1; i < visible_count; ++i) {
         uint32_t idx = pairs[i].index;
         uint64_t sk = pool.shader_keys()[idx];
         uint32_t mk = pool.material_keys()[idx];
 
+        const uint8_t transparency = static_cast<uint8_t>((pairs[i].key >> 56) & 0xFu);
         bool should_merge = (sk == current_batch.shaderKey &&
-                            mk == current_batch.materialKey);
+                            mk == current_batch.materialKey &&
+                            transparency == current_batch.transparency);
 
         if (policy_) {
-            should_merge = policy_->should_merge(pairs[i - 1].key, pairs[i].key);
+            should_merge = transparency == current_batch.transparency &&
+                           policy_->should_merge(pairs[i - 1].key, pairs[i].key);
         }
 
         if (should_merge) {
@@ -126,6 +130,7 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
             current_batch.shaderKey = sk;
             current_batch.materialKey = mk;
             current_batch.mesh = pool.mesh_handles().data()[idx];
+            current_batch.transparency = transparency;
         }
     }
 
@@ -181,6 +186,7 @@ void BatchBuilder::build_gpu_driven() {
     batch.count = pool.count();
     batch.shaderKey = 0; // GPU determines shader
     batch.materialKey = 0;
+    batch.transparency = 0;
     batches_.push_back(batch);
 }
 

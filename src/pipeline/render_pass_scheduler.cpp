@@ -1,12 +1,16 @@
 ﻿#include "pictor/pipeline/render_pass_scheduler.h"
 
 #include <cstdio>
+#include <utility>
 
 namespace pictor {
 
 RenderPassScheduler::RenderPassScheduler(const PipelineProfileDef& profile)
     : pass_order_(profile.render_passes)
 {
+#ifdef PICTOR_HAS_VULKAN
+    pass_record_callbacks_.resize(pass_order_.size());
+#endif
 }
 
 RenderPassScheduler::~RenderPassScheduler() = default;
@@ -14,6 +18,38 @@ RenderPassScheduler::~RenderPassScheduler() = default;
 void RenderPassScheduler::reconfigure(const PipelineProfileDef& profile) {
     // §8.4 step 5: Reconfigure pass order from new profile
     pass_order_ = profile.render_passes;
+#ifdef PICTOR_HAS_VULKAN
+    // IDs are scoped to the compiled profile. Retaining callbacks across a
+    // different pass layout could silently dispatch work to the wrong pass.
+    pass_record_callbacks_.clear();
+    pass_record_callbacks_.resize(pass_order_.size());
+#endif
+}
+
+uint16_t RenderPassScheduler::pass_id_of(std::string_view pass_name) const {
+    // Once compiled, use the graph as the source of truth. This keeps lookup
+    // correct even for callers that recompile directly through CompiledPathDriver.
+    for (const CompiledPass& pass : compiled_.passes) {
+        if (pass.debug_name && pass_name == pass.debug_name) return pass.pass_id;
+    }
+
+    for (size_t i = 0; i < pass_order_.size(); ++i) {
+        if (pass_order_[i].pass_name == pass_name) {
+            if (i >= CompiledPass::INVALID_PASS_ID) return CompiledPass::INVALID_PASS_ID;
+            return static_cast<uint16_t>(i);
+        }
+    }
+    return CompiledPass::INVALID_PASS_ID;
+}
+
+void RenderPassScheduler::set_compiled_graph(CompiledGraph graph) {
+    compiled_ = std::move(graph);
+#ifdef PICTOR_HAS_VULKAN
+    // pass_id is scoped to a compiled graph. Never carry callbacks into a
+    // rebuilt graph where the same numeric ID may name another pass.
+    pass_record_callbacks_.clear();
+    pass_record_callbacks_.resize(compiled_.passes.size());
+#endif
 }
 
 void RenderPassScheduler::register_custom_pass(ICustomRenderPass* pass) {
@@ -70,6 +106,35 @@ void RenderPassScheduler::execute(const BatchBuilder& batch_builder,
 
 #ifdef PICTOR_HAS_VULKAN
 
+bool RenderPassScheduler::set_pass_record_callback(uint16_t pass_id,
+                                                    PassRecordFn record) {
+    if (pass_id == CompiledPass::INVALID_PASS_ID ||
+        pass_id >= pass_record_callbacks_.size()) {
+        return false;
+    }
+    pass_record_callbacks_[pass_id] = std::move(record);
+    return true;
+}
+
+void RenderPassScheduler::clear_pass_record_callbacks() {
+    for (PassRecordFn& record : pass_record_callbacks_) record = PassRecordFn{};
+}
+
+void RenderPassScheduler::record_pass_(VkCommandBuffer cmd,
+                                       const CompiledPass& cp,
+                                       uint32_t flight_index,
+                                       uint32_t image_index,
+                                       const PassRecordFn& fallback) {
+    if (cp.pass_id < pass_record_callbacks_.size()) {
+        const PassRecordFn& record = pass_record_callbacks_[cp.pass_id];
+        if (record) {
+            record(cmd, cp, flight_index, image_index);
+            return;
+        }
+    }
+    if (fallback) fallback(cmd, cp, flight_index, image_index);
+}
+
 void RenderPassScheduler::execute_compiled(VkCommandBuffer cmd,
                                             uint32_t        flight_index,
                                             uint32_t        image_index,
@@ -97,7 +162,7 @@ void RenderPassScheduler::execute_compiled(VkCommandBuffer cmd,
 
         if (cp.is_compute()) {
             // Compute: no render pass, host issues vkCmdDispatch in `record`.
-            if (record) record(cmd, cp, flight_index, image_index);
+            record_pass_(cmd, cp, flight_index, image_index, record);
             continue;
         }
 
@@ -105,14 +170,14 @@ void RenderPassScheduler::execute_compiled(VkCommandBuffer cmd,
             // host_recorded: PostProcess chain 等、 内部で複数 sub-render-pass
             // を持つ pass。 execute_compiled は Begin/End / BindPipeline を
             // 一切発行せず、 host の record callback に command 記録を委ねる。
-            if (record) record(cmd, cp, flight_index, image_index);
+            record_pass_(cmd, cp, flight_index, image_index, record);
             continue;
         }
 
         if (cp.render_pass == VK_NULL_HANDLE || fb == VK_NULL_HANDLE) {
             // Missing GPU resources — host record can still observe the
             // pass (e.g. for tagging) but BeginRenderPass would assert.
-            if (record) record(cmd, cp, flight_index, image_index);
+            record_pass_(cmd, cp, flight_index, image_index, record);
             continue;
         }
 
@@ -130,7 +195,7 @@ void RenderPassScheduler::execute_compiled(VkCommandBuffer cmd,
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cp.pipeline);
         }
 
-        if (record) record(cmd, cp, flight_index, image_index);
+        record_pass_(cmd, cp, flight_index, image_index, record);
 
         vkCmdEndRenderPass(cmd);
     }

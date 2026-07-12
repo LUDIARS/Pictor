@@ -115,7 +115,7 @@ UTF-8 テキスト (BOM 許容)。標準 JSON。コメント不可。
 | `render_targets` | string[] | `[]` | 出力ターゲット名。**現状 framebuffer 未配線** |
 | `input_textures` | string[] | `[]` | 入力テクスチャ名。**現状 未配線** |
 | `sort_mode` | enum string | `FRONT_TO_BACK` | `FRONT_TO_BACK` / `BACK_TO_FRONT` / `NONE` |
-| `filter_mask` | uint | `65535` | バッチフィルタビットマスク |
+| `filter_mask` | uint | `65535` | `RenderBatchFilter` ビット集合。`1` = opaque、`2` = transparent、`65535` = 全カテゴリ。組み込み profile は描画 pass ごとに `1` / `2` を明示する |
 | `gpu_driven_pass` | bool | `false` | GPU 駆動 compute pass か |
 | `required_streams` | string[] | `[]` | SoA ストリームのプリフェッチヒント |
 

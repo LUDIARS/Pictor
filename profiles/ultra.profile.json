@@ -16,9 +16,9 @@
     { "pass_name": "ShadowMapGen",    "pass_type": "COMPUTE",      "sort_mode": "NONE", "required_streams": ["gpu_bounds", "gpu_transforms"] },
     { "pass_name": "SSAOGen",         "pass_type": "COMPUTE",      "sort_mode": "NONE" },
     { "pass_name": "GIProbePass",     "pass_type": "COMPUTE",      "sort_mode": "NONE", "required_streams": ["gpu_transforms"] },
-    { "pass_name": "GBufferPass",     "pass_type": "OPAQUE",       "sort_mode": "FRONT_TO_BACK", "gpu_driven_pass": true, "required_streams": ["gpu_transforms", "gpu_material_ids"] },
+    { "pass_name": "GBufferPass",     "pass_type": "OPAQUE",       "sort_mode": "FRONT_TO_BACK", "filter_mask": 1, "gpu_driven_pass": true, "required_streams": ["gpu_transforms", "gpu_material_ids"] },
     { "pass_name": "LightingPass",    "pass_type": "COMPUTE",      "sort_mode": "NONE" },
-    { "pass_name": "TransparentPass", "pass_type": "TRANSPARENT",  "sort_mode": "BACK_TO_FRONT", "required_streams": ["gpu_transforms", "sortKeys"] },
+    { "pass_name": "TransparentPass", "pass_type": "TRANSPARENT",  "sort_mode": "BACK_TO_FRONT", "filter_mask": 2, "required_streams": ["gpu_transforms", "sortKeys"] },
     { "pass_name": "PostProcess",     "pass_type": "POST_PROCESS", "sort_mode": "NONE" }
   ],
   "post_process": [

@@ -9,6 +9,7 @@
 #include "pictor/material/base_material_builder.h"
 #include <vector>
 #include <functional>
+#include <string_view>
 
 namespace pictor {
 
@@ -62,13 +63,17 @@ public:
     /// Statistics
     uint32_t pass_count() const { return static_cast<uint32_t>(pass_order_.size()); }
 
+    /// Resolve a pass name outside the hot path. The returned ID matches the
+    /// CompiledPass::pass_id produced by PipelineCompiler for the same profile.
+    uint16_t pass_id_of(std::string_view pass_name) const;
+
     // ---- Phase 3: CompiledGraph hot path (`spec/pipeline-system-b-config.md` §3.5) ----
 
     /// Install a pre-compiled graph (produced by `PipelineCompiler::compile()`).
     /// Ownership transferred — scheduler will not call `graph.shutdown()`,
     /// host is responsible for that on device tear-down. Set to an empty
     /// graph to disengage and fall back to the old `execute()` path.
-    void set_compiled_graph(CompiledGraph graph) { compiled_ = std::move(graph); }
+    void set_compiled_graph(CompiledGraph graph);
 
     /// True if a non-empty CompiledGraph is installed.
     bool has_compiled_graph() const { return !compiled_.passes.empty(); }
@@ -99,6 +104,11 @@ public:
                                             uint32_t flight_index,
                                             uint32_t image_index)>;
 
+    /// Install/replace a pass-specific recorder. The table is keyed directly
+    /// by CompiledPass::pass_id; no name lookup occurs during a frame.
+    bool set_pass_record_callback(uint16_t pass_id, PassRecordFn record);
+    void clear_pass_record_callbacks();
+
     /// Hot-path: iterate the compiled graph, BeginRenderPass / record /
     /// EndRenderPass. `record` is invoked once per pass *inside* the render
     /// pass scope (compute passes skip Begin/End and just call `record`).
@@ -122,6 +132,13 @@ private:
     /// execute() の「compiled graph 未設置で built-in pass に遭遇」warn を
     /// 毎フレーム出さないための 1 回きりフラグ (§7.1)。
     bool                             warned_unwired_builtin_ = false;
+#ifdef PICTOR_HAS_VULKAN
+    std::vector<PassRecordFn>        pass_record_callbacks_;
+
+    void record_pass_(VkCommandBuffer cmd, const CompiledPass& cp,
+                      uint32_t flight_index, uint32_t image_index,
+                      const PassRecordFn& fallback);
+#endif
 };
 
 } // namespace pictor

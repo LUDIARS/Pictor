@@ -160,7 +160,8 @@ CompiledGraph PipelineCompiler::compile(const PipelineProfileDef&  profile,
 
         // Look up the VkRenderPass via the pass name (only place we use a
         // string — init time, not hot path).
-        cp.render_pass = rps.get(rps.index_of(pd.pass_name));
+        cp.pass_id = rps.index_of(pd.pass_name);
+        cp.render_pass = rps.get(cp.pass_id);
         if (cp.render_pass == VK_NULL_HANDLE) {
             std::fprintf(stderr, "[PipelineCompiler] pass '%s' has no VkRenderPass (registry built?)\n",
                          pd.pass_name.c_str());

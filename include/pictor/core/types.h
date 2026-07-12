@@ -364,6 +364,18 @@ namespace ShaderKey {
 // Render Batch
 // ============================================================
 
+/// Bit values consumed by RenderPassDef::filter_mask / CompiledPass::filter_mask.
+/// A batch belongs to exactly one transparency category.
+namespace RenderBatchFilter {
+    constexpr uint16_t OPAQUE      = 1u << 0;
+    constexpr uint16_t TRANSPARENT = 1u << 1;
+    constexpr uint16_t ALL         = 0xFFFFu;
+
+    inline uint16_t from_transparency(uint8_t transparency) {
+        return transparency ? TRANSPARENT : OPAQUE;
+    }
+}
+
 struct RenderBatch {
     uint64_t sortKey       = 0;
     uint32_t startIndex    = 0;
@@ -371,6 +383,8 @@ struct RenderBatch {
     uint64_t shaderKey     = 0;
     uint32_t materialKey   = 0;
     MeshHandle mesh        = INVALID_MESH;
+    /// 0 = opaque, 1 = transparent. Kept numeric to match the sort-key field.
+    uint8_t transparency   = 0;
 };
 
 // ============================================================

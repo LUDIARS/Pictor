@@ -98,6 +98,13 @@ void CompiledBatchRecorder::record_batches_(VkCommandBuffer cmd,
     VkPipeline bound_pipeline = VK_NULL_HANDLE;
 
     for (const RenderBatch& batch : *batches_) {
+        const uint32_t batch_filter = RenderBatchFilter::from_transparency(
+            batch.transparency);
+        if ((cp.filter_mask & batch_filter) == 0) {
+            stats_.batches_filtered++;
+            continue;
+        }
+
         // pass 別 material variant 解決 (旧 remap_batches_for_pass の
         // vector 確保を廃し、 バッチ単位のインライン解決に置換 — M-2)。
         uint64_t shader_key = batch.shaderKey;

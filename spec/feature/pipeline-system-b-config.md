@@ -256,6 +256,7 @@ struct CompiledPass {
     uint32_t       filter_mask;          // RenderBatch filter
     uint8_t        sort_mode;            // FRONT_TO_BACK / BACK_TO_FRONT / NONE
     uint8_t        pass_type;            // PassType enum を 1 byte で
+    uint16_t       pass_id;              // pass name を compile 時に解決した callback key
     uint8_t        framebuffer_count;    // 1=per-flight, 3=per-swapchain-image
     uint8_t        is_swapchain : 1;
     uint8_t        is_compute   : 1;
@@ -331,6 +332,7 @@ public:
   - `OPAQUE` / `TRANSPARENT` / `DEPTH_ONLY` / `SHADOW`: `record_batches` が RenderBatch を `vkCmdDraw*` でフラッシュ
   - `POST_PROCESS`: pass_type は CompiledPass にすでに反映済。 既存 `PostProcessPipeline` の chain 経路を CompiledPass.pipeline + framebuffer で駆動 (互換維持)
   - `COMPUTE`: `vkCmdDispatch(cmd, group_x, group_y, group_z)`、 dispatch サイズは CompiledPass に pre-resolve
+- pass 固有 callback は `CompiledPass::pass_id` を添字にした flat table から選ぶ。複数の COMPUTE pass も per-frame 文字列比較なしで区別する
   - `CUSTOM`: `ICustomRenderPass*` を CompiledPass に pre-resolve しておき `cp.custom->execute(cmd, frame_ctx)`
 - `input_textures[]` は compile 時に **per-flight VkDescriptorSet を一括 build**。 hot path は `cp.input_sets[flight]` を bind するだけ。 layout は 1 種類 (sampled image 0..N) を共有
 - `shader_override` は compile 時に `ShaderRegistry::pipeline(handle)` 解決 → `cp.pipeline` に直値

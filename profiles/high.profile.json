@@ -11,8 +11,8 @@
     { "pass_name": "DepthPrePass",    "pass_type": "DEPTH_ONLY",   "sort_mode": "FRONT_TO_BACK", "required_streams": ["bounds", "transforms"] },
     { "pass_name": "LightCullPass",   "pass_type": "COMPUTE",      "sort_mode": "NONE" },
     { "pass_name": "SSAOGen",         "pass_type": "COMPUTE",      "sort_mode": "NONE" },
-    { "pass_name": "OpaquePass",      "pass_type": "OPAQUE",       "sort_mode": "FRONT_TO_BACK", "required_streams": ["transforms", "shaderKeys"] },
-    { "pass_name": "TransparentPass", "pass_type": "TRANSPARENT",  "sort_mode": "BACK_TO_FRONT", "required_streams": ["transforms", "sortKeys"] },
+    { "pass_name": "OpaquePass",      "pass_type": "OPAQUE",       "sort_mode": "FRONT_TO_BACK", "filter_mask": 1, "required_streams": ["transforms", "shaderKeys"] },
+    { "pass_name": "TransparentPass", "pass_type": "TRANSPARENT",  "sort_mode": "BACK_TO_FRONT", "filter_mask": 2, "required_streams": ["transforms", "sortKeys"] },
     { "pass_name": "PostProcess",     "pass_type": "POST_PROCESS", "sort_mode": "NONE" }
   ],
   "post_process": [
