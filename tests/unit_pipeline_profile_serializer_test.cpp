@@ -165,12 +165,12 @@ void test_builder_structured_pass() {
 
 void test_preset_loader_fallback() {
     // With no profile directory, the loader must fall back to C++ factories
-    // and still produce all five named presets.
+    // and still produce all eight named presets.
     std::vector<PresetLoadResult> results;
     auto profiles = load_builtin_presets("", &results);
 
-    PT_ASSERT_OP(profiles.size(), ==, 5u, "loader returns 5 presets");
-    PT_ASSERT_OP(results.size(), ==, 5u, "loader returns 5 results");
+    PT_ASSERT_OP(profiles.size(), ==, 8u, "loader returns 8 presets");
+    PT_ASSERT_OP(results.size(), ==, 8u, "loader returns 8 results");
 
     bool any_from_file = false;
     for (const auto& r : results) {
@@ -179,15 +179,18 @@ void test_preset_loader_fallback() {
     PT_ASSERT(!any_from_file, "empty dir -> all presets from C++ fallback");
 
     // Names must match the C++ factory output exactly.
-    PT_ASSERT(profiles[0].profile_name == "Lite",       "preset[0] = Lite");
-    PT_ASSERT(profiles[1].profile_name == "Standard",   "preset[1] = Standard");
-    PT_ASSERT(profiles[2].profile_name == "Ultra",      "preset[2] = Ultra");
-    PT_ASSERT(profiles[3].profile_name == "MobileLow",  "preset[3] = MobileLow");
-    PT_ASSERT(profiles[4].profile_name == "MobileHigh", "preset[4] = MobileHigh");
+    PT_ASSERT(profiles[0].profile_name == "Low",        "preset[0] = Low");
+    PT_ASSERT(profiles[1].profile_name == "Mid",        "preset[1] = Mid");
+    PT_ASSERT(profiles[2].profile_name == "High",       "preset[2] = High");
+    PT_ASSERT(profiles[3].profile_name == "Lite",       "preset[3] = Lite");
+    PT_ASSERT(profiles[4].profile_name == "Standard",   "preset[4] = Standard");
+    PT_ASSERT(profiles[5].profile_name == "Ultra",      "preset[5] = Ultra");
+    PT_ASSERT(profiles[6].profile_name == "MobileLow",  "preset[6] = MobileLow");
+    PT_ASSERT(profiles[7].profile_name == "MobileHigh", "preset[7] = MobileHigh");
 
     // Fallback content must equal the C++ factory directly.
     PipelineProfileDef std_cpp = PipelineProfileManager::create_standard_profile();
-    PT_ASSERT_OP(profiles[1].render_passes.size(), ==, std_cpp.render_passes.size(),
+    PT_ASSERT_OP(profiles[4].render_passes.size(), ==, std_cpp.render_passes.size(),
                  "fallback Standard matches C++ factory pass count");
 }
 
