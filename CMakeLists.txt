@@ -530,6 +530,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.vert
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/fullscreen_quad.vert
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_blur.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/color_grade.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/dof.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp

@@ -229,5 +229,121 @@ int main() {
                   "refresh leaves extra pass push_data untouched");
     }
 
+    // 7. DoF 有効時はチェーン先頭へ dof pass が途中挿入され、 後段の scene
+    //    入力が dof 出力 (pp_dof) へ配線替えされる。
+    {
+        PostProcessConfig cfg;
+        cfg.depth_of_field.enabled        = true;
+        cfg.depth_of_field.focus_distance = 12.0f;
+        cfg.depth_of_field.bokeh_radius   = 3.0f;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1600, 900, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{5}, "dof chain: 5 passes");
+        PT_ASSERT(chain.passes[0].name == "dof", "dof chain: dof first");
+        PT_ASSERT(chain.passes[0].inputs[0] == kPostProcessSceneTarget,
+                  "dof chain: dof reads scene");
+        PT_ASSERT(chain.passes[0].inputs[1] == kPostProcessDepthTarget,
+                  "dof chain: dof reads depth");
+        PT_ASSERT(chain.passes[0].output == "pp_dof", "dof chain: dof -> pp_dof");
+        PT_ASSERT(chain.passes[1].inputs[0] == "pp_dof",
+                  "dof chain: extract rewired to pp_dof");
+        PT_ASSERT(chain.passes[4].inputs[0] == "pp_dof",
+                  "dof chain: grade rewired to pp_dof");
+        PT_ASSERT_OP(chain.intermediate_names.size(), ==, size_t{3},
+                     "dof chain: pp_dof + ping + pong");
+
+        // push constant: focus_distance が先頭 float、 texel が 1/w, 1/h。
+        struct DofPC {
+            float    focus_distance, focus_range, bokeh_radius;
+            float    near_start, near_end, far_start, far_end;
+            uint32_t sample_count;
+            float    texel_x, texel_y, pad0, pad1;
+        };
+        DofPC pc = read_pc<DofPC>(chain.passes[0]);
+        PT_ASSERT(feq(pc.focus_distance, 12.0f), "dof pc: focus distance");
+        PT_ASSERT(feq(pc.bokeh_radius, 3.0f),    "dof pc: bokeh radius");
+        PT_ASSERT(feq(pc.texel_x, 1.0f / 1600.0f), "dof pc: texel x");
+        PT_ASSERT(feq(pc.texel_y, 1.0f / 900.0f),  "dof pc: texel y");
+
+        // refresh が dof の push_data も詰め直す (構造は不変)。
+        cfg.depth_of_field.focus_distance = 20.0f;
+        refresh_post_process_chain(chain, cfg, 1600, 900, false, false);
+        pc = read_pc<DofPC>(chain.passes[0]);
+        PT_ASSERT(feq(pc.focus_distance, 20.0f), "dof pc: refresh updates focus");
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{5},
+                     "refresh keeps dof chain structure");
+    }
+
+    // 8. チェーン途中編集 API — anchor 基準の挿入 / 削除 / 配線替え。
+    {
+        PostProcessConfig cfg;
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 800, 600, false, false);
+
+        // blur H の後へ SSAO 風の pass を途中挿入。 新しい中間ターゲット名は
+        // intermediate_names へ自動反映される。
+        PostProcessPassDef ssao;
+        ssao.name     = "ssao";
+        ssao.vert_spv = "shaders/fullscreen_quad.vert.spv";
+        ssao.frag_spv = "shaders/ssao.frag.spv";
+        ssao.inputs   = {kPostProcessSceneTarget, kPostProcessDepthTarget};
+        ssao.output   = "pp_ssao";
+        PT_ASSERT(insert_post_process_pass(chain, ssao, "bloom_blur_h",
+                                           PassInsertWhere::AFTER),
+                  "chain edit: insert after blur H");
+        PT_ASSERT_OP(find_post_process_pass(chain, "ssao"), ==, 2,
+                     "chain edit: ssao at index 2 (after blur H)");
+        bool has_ssao_target = false;
+        for (const auto& n : chain.intermediate_names)
+            if (n == "pp_ssao") has_ssao_target = true;
+        PT_ASSERT(has_ssao_target, "chain edit: pp_ssao auto-collected");
+
+        // 同名 / 不在 anchor は拒否 (チェーン不変)。
+        PT_ASSERT(!insert_post_process_pass(chain, ssao, "color_grade",
+                                            PassInsertWhere::BEFORE),
+                  "chain edit: duplicate name rejected");
+        PT_ASSERT(!insert_post_process_pass(chain, PostProcessPassDef{"x"},
+                                            "no_such_pass",
+                                            PassInsertWhere::BEFORE),
+                  "chain edit: unknown anchor rejected");
+
+        // 配線替え: grade の scene 入力を ssao 出力へ。
+        PT_ASSERT(rebind_post_process_input(chain, "color_grade",
+                                            kPostProcessSceneTarget, "pp_ssao"),
+                  "chain edit: rebind grade input");
+        const PostProcessPassDef* gr = find_pass(chain, "color_grade");
+        PT_ASSERT(gr != nullptr && gr->inputs[0] == "pp_ssao",
+                  "chain edit: grade reads pp_ssao");
+        PT_ASSERT(!rebind_post_process_input(chain, "color_grade",
+                                             "not_an_input", "x"),
+                  "chain edit: rebind unknown input rejected");
+
+        // 削除: ssao を抜くと pass 数が戻る。 pp_ssao はまだ grade が読むので
+        // intermediate には残る。
+        PT_ASSERT(remove_post_process_pass(chain, "ssao"),
+                  "chain edit: remove ssao");
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{4},
+                     "chain edit: back to 4 passes");
+        has_ssao_target = false;
+        for (const auto& n : chain.intermediate_names)
+            if (n == "pp_ssao") has_ssao_target = true;
+        PT_ASSERT(has_ssao_target,
+                  "chain edit: target kept while grade still reads it");
+
+        // grade の入力を scene へ戻すと pp_ssao は intermediate から消える。
+        PT_ASSERT(rebind_post_process_input(chain, "color_grade", "pp_ssao",
+                                            kPostProcessSceneTarget),
+                  "chain edit: rebind back to scene");
+        has_ssao_target = false;
+        for (const auto& n : chain.intermediate_names)
+            if (n == "pp_ssao") has_ssao_target = true;
+        PT_ASSERT(!has_ssao_target, "chain edit: unused target dropped");
+
+        PT_ASSERT(!remove_post_process_pass(chain, "ssao"),
+                  "chain edit: double removal rejected");
+    }
+
     return report("unit_postprocess_chain_test");
 }
