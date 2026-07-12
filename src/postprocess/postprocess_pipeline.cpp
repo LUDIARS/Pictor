@@ -377,7 +377,15 @@ bool PostProcessPipeline::create_samplers_() {
     si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod       = 1.0f;
-    return vkCreateSampler(device_, &si, nullptr, &sampler_) == VK_SUCCESS;
+    if (vkCreateSampler(device_, &si, nullptr, &sampler_) != VK_SUCCESS)
+        return false;
+
+    // 深度入力 (__depth__) 用。 D32_SFLOAT の LINEAR filter はデバイス保証が
+    // ないため NEAREST に倒す。
+    si.magFilter  = VK_FILTER_NEAREST;
+    si.minFilter  = VK_FILTER_NEAREST;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    return vkCreateSampler(device_, &si, nullptr, &depth_sampler_) == VK_SUCCESS;
 }
 
 bool PostProcessPipeline::upload_lut_(const unsigned char* rgba, int w, int h) {
@@ -563,15 +571,25 @@ void PostProcessPipeline::write_descriptor_sets_() {
         std::vector<VkDescriptorImageInfo> infos(cp.input_count);
         std::vector<VkWriteDescriptorSet>  writes(cp.input_count);
         for (uint32_t i = 0; i < cp.input_count; ++i) {
-            // 入力 index < 0 のときは LUT (専用 Texture)。 それ以外は targets_。
-            VkImageView view = VK_NULL_HANDLE;
+            // 入力 index >= 0 は targets_、 -1 は LUT (専用 Texture)、
+            // -2 は scene 深度 (__depth__、 NEAREST サンプラ)。
             const int32_t idx = cp.input_indices[i];
-            if (idx >= 0) view = targets_[static_cast<size_t>(idx)].view;
-            else          view = lut_.view;
-
-            infos[i].sampler     = sampler_;
-            infos[i].imageView   = view;
-            infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            if (idx >= 0) {
+                infos[i].sampler     = sampler_;
+                infos[i].imageView   = targets_[static_cast<size_t>(idx)].view;
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            } else if (idx == -1) {
+                infos[i].sampler     = sampler_;
+                infos[i].imageView   = lut_.view;
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            } else {
+                // scene render pass の finalLayout (DEPTH_STENCIL_READ_ONLY)
+                // と一致させる。
+                infos[i].sampler     = depth_sampler_;
+                infos[i].imageView   = scene_depth_view();
+                infos[i].imageLayout =
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            }
 
             writes[i] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
             writes[i].dstSet          = cp.desc_set;
@@ -698,6 +716,10 @@ bool PostProcessPipeline::build_from_chain_(
         for (const auto& in_name : def.inputs) {
             if (in_name == kPostProcessLutTarget) {
                 cp.input_indices.push_back(-1);  // LUT (専用 Texture)
+                continue;
+            }
+            if (in_name == kPostProcessDepthTarget) {
+                cp.input_indices.push_back(-2);  // scene 深度ビュー
                 continue;
             }
             int32_t idx = resolve_target_(in_name);
@@ -886,9 +908,49 @@ bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
     vkDeviceWaitIdle(device_);
 
     // サイズ依存リソースのみ破棄 (render pass / sampler / LUT / descriptor
-    // set layout / pipeline layout は維持)。 pipeline / descriptor pool は
-    // pass 数に依存しないが、 descriptor set は target view に紐づくため
-    // 再生成する。
+    // set layout / pipeline layout は維持)。
+    destroy_chain_resources_();
+
+    width_  = width;
+    height_ = height;
+    extent_ = {width, height};
+
+    // build_from_chain_ は render pass を再利用 (rp_* が非 null なら維持)。
+    if (!build_from_chain_(output_format_, output_views)) {
+        std::fprintf(stderr, "[postprocess] resize: rebuild failed\n");
+        vulkan_ready_ = false;
+        return false;
+    }
+    return true;
+}
+
+bool PostProcessPipeline::rebuild_chain(
+        const PostProcessChain& chain,
+        const std::vector<VkImageView>& output_views) {
+    if (!vulkan_ready_) return false;
+
+    vkDeviceWaitIdle(device_);
+
+    // resize と同じチェーン依存リソースを破棄し、 新チェーン記述で組み直す。
+    // pass 数 / 入出力配線 / シェーダが変わるため pipeline / descriptor も
+    // 全て作り直しになる (render pass / sampler / LUT / layout キャッシュは
+    // input 数 / push サイズ単位の共有物なので維持できる)。
+    destroy_chain_resources_();
+    chain_ = chain;
+
+    if (!build_from_chain_(output_format_, output_views)) {
+        std::fprintf(stderr, "[postprocess] rebuild_chain: rebuild failed\n");
+        vulkan_ready_ = false;
+        return false;
+    }
+    std::fprintf(stderr, "[postprocess] chain rebuilt: %zu pass\n",
+                 compiled_.size());
+    return true;
+}
+
+// targets / output framebuffers / pipelines / descriptor pool を破棄する。
+// 呼出し側で GPU idle を保証すること (resize / rebuild_chain 共通ボディ)。
+void PostProcessPipeline::destroy_chain_resources_() {
     auto destroy_rt = [&](RenderTarget& rt) {
         if (rt.fb)           vkDestroyFramebuffer(device_, rt.fb, nullptr);
         if (rt.view)         vkDestroyImageView(device_, rt.view, nullptr);
@@ -912,18 +974,6 @@ bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
     if (desc_pool_) vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
     desc_pool_ = VK_NULL_HANDLE;
     compiled_.clear();
-
-    width_  = width;
-    height_ = height;
-    extent_ = {width, height};
-
-    // build_from_chain_ は render pass を再利用 (rp_* が非 null なら維持)。
-    if (!build_from_chain_(output_format_, output_views)) {
-        std::fprintf(stderr, "[postprocess] resize: rebuild failed\n");
-        vulkan_ready_ = false;
-        return false;
-    }
-    return true;
 }
 
 #endif // PICTOR_HAS_VULKAN
@@ -970,11 +1020,13 @@ void PostProcessPipeline::shutdown() {
             if (kv.second) vkDestroyDescriptorSetLayout(device_, kv.second, nullptr);
         dsl_by_input_count_.clear();
 
-        if (sampler_)   vkDestroySampler(device_, sampler_, nullptr);
+        if (sampler_)       vkDestroySampler(device_, sampler_, nullptr);
+        if (depth_sampler_) vkDestroySampler(device_, depth_sampler_, nullptr);
         if (rp_scene_)  vkDestroyRenderPass(device_, rp_scene_, nullptr);
         if (rp_inter_)  vkDestroyRenderPass(device_, rp_inter_, nullptr);
         if (rp_output_) vkDestroyRenderPass(device_, rp_output_, nullptr);
         sampler_  = VK_NULL_HANDLE;
+        depth_sampler_ = VK_NULL_HANDLE;
         rp_scene_ = rp_inter_ = rp_output_ = VK_NULL_HANDLE;
         device_   = VK_NULL_HANDLE;
     }
