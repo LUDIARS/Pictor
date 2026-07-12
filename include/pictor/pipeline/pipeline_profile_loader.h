@@ -10,8 +10,9 @@ namespace pictor {
 // ============================================================
 // Pipeline profile loader — built-in presets from external JSON
 // ============================================================
-// The five built-in presets (Lite / Standard / Ultra / MobileLow /
-// MobileHigh) are described declaratively in profiles/*.profile.json.
+// The built-in presets (Low / Mid / High / Lite / Standard / Ultra /
+// MobileLow / MobileHigh) are described declaratively in
+// profiles/*.profile.json.
 // This loader reads those files at startup and falls back to the
 // hardcoded C++ factories in PipelineProfileManager when a file is
 // missing or fails to parse — so the engine is always bootable.
@@ -30,13 +31,14 @@ struct PresetLoadResult {
 /// Resolve a built-in preset by canonical name.
 /// Tries `<profile_dir>/<lowercased-name>.profile.json` first; on any
 /// failure returns the hardcoded C++ factory result instead.
-/// `name` is one of: Lite, Standard, Ultra, MobileLow, MobileHigh.
+/// `name` is one of: Low, Mid, High, Lite, Standard, Ultra, MobileLow,
+/// MobileHigh.
 /// `out_result` (optional) receives load diagnostics.
 PipelineProfileDef load_builtin_preset(const std::string& name,
                                        const std::string& profile_dir,
                                        PresetLoadResult*   out_result = nullptr);
 
-/// Load all five built-in presets, preferring JSON files under
+/// Load all built-in presets, preferring JSON files under
 /// `profile_dir`, falling back to C++ factories per-preset.
 /// `out_results` (optional) receives one PresetLoadResult per preset.
 std::vector<PipelineProfileDef> load_builtin_presets(

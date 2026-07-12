@@ -43,10 +43,111 @@ PostProcessKind post_process_kind_from_name(const std::string& name) {
     return PostProcessKind::UNKNOWN;
 }
 
+// ============================================================
+// パイプライン途中編集 API (§12 拡張)
+// ============================================================
+
+namespace {
+
+/// 名前付き要素列から `name` の index を返す共通実装。 見つからなければ -1。
+template <typename Vec, typename NameOf>
+int find_by_name(const Vec& v, std::string_view name, NameOf name_of) {
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (name_of(v[i]) == name) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+/// anchor の直前 / 直後へ挿入する共通実装。 anchor 不在 / 同名重複は false。
+template <typename Vec, typename Elem, typename NameOf>
+bool insert_by_anchor(Vec& v, std::string_view anchor, Elem elem, bool after,
+                      NameOf name_of) {
+    const int at = find_by_name(v, anchor, name_of);
+    if (at < 0) return false;
+    if (find_by_name(v, name_of(elem), name_of) >= 0) return false;
+    v.insert(v.begin() + at + (after ? 1 : 0), std::move(elem));
+    return true;
+}
+
+} // namespace
+
+int find_render_pass(const PipelineProfileDef& def, std::string_view pass_name) {
+    return find_by_name(def.render_passes, pass_name,
+                        [](const RenderPassDef& p) -> const std::string& {
+                            return p.pass_name;
+                        });
+}
+
+bool insert_render_pass_before(PipelineProfileDef& def, std::string_view anchor,
+                               RenderPassDef pass) {
+    return insert_by_anchor(def.render_passes, anchor, std::move(pass), false,
+                            [](const RenderPassDef& p) -> const std::string& {
+                                return p.pass_name;
+                            });
+}
+
+bool insert_render_pass_after(PipelineProfileDef& def, std::string_view anchor,
+                              RenderPassDef pass) {
+    return insert_by_anchor(def.render_passes, anchor, std::move(pass), true,
+                            [](const RenderPassDef& p) -> const std::string& {
+                                return p.pass_name;
+                            });
+}
+
+bool remove_render_pass(PipelineProfileDef& def, std::string_view pass_name) {
+    const int at = find_render_pass(def, pass_name);
+    if (at < 0) return false;
+    def.render_passes.erase(def.render_passes.begin() + at);
+    return true;
+}
+
+int find_post_process(const PipelineProfileDef& def, std::string_view name) {
+    return find_by_name(def.post_process_stack, name,
+                        [](const PostProcessDef& p) -> const std::string& {
+                            return p.name;
+                        });
+}
+
+bool insert_post_process_before(PipelineProfileDef& def, std::string_view anchor,
+                                PostProcessDef effect) {
+    if (effect.kind == PostProcessKind::UNKNOWN) {
+        effect.kind = post_process_kind_from_name(effect.name);
+    }
+    return insert_by_anchor(def.post_process_stack, anchor, std::move(effect),
+                            false,
+                            [](const PostProcessDef& p) -> const std::string& {
+                                return p.name;
+                            });
+}
+
+bool insert_post_process_after(PipelineProfileDef& def, std::string_view anchor,
+                               PostProcessDef effect) {
+    if (effect.kind == PostProcessKind::UNKNOWN) {
+        effect.kind = post_process_kind_from_name(effect.name);
+    }
+    return insert_by_anchor(def.post_process_stack, anchor, std::move(effect),
+                            true,
+                            [](const PostProcessDef& p) -> const std::string& {
+                                return p.name;
+                            });
+}
+
+bool remove_post_process(PipelineProfileDef& def, std::string_view name) {
+    const int at = find_post_process(def, name);
+    if (at < 0) return false;
+    def.post_process_stack.erase(def.post_process_stack.begin() + at);
+    return true;
+}
+
 PipelineProfileManager::PipelineProfileManager() = default;
 PipelineProfileManager::~PipelineProfileManager() = default;
 
 void PipelineProfileManager::register_defaults() {
+    // 品質 3 段階の既定パイプライン (§8.1 拡張)。
+    register_profile(create_low_profile());
+    register_profile(create_mid_profile());
+    register_profile(create_high_profile());
+    // 従来プリセット (§8.1)。
     register_profile(create_lite_profile());
     register_profile(create_standard_profile());
     register_profile(create_ultra_profile());
@@ -54,26 +155,23 @@ void PipelineProfileManager::register_defaults() {
 }
 
 void PipelineProfileManager::register_profile(const PipelineProfileDef& def) {
-    // Replace if exists
+    // Replace if exists (index 保持なので current_ はそのまま有効)
     for (auto& p : profiles_) {
         if (p.profile_name == def.profile_name) {
             p = def;
-            if (current_ && current_->profile_name == def.profile_name) {
-                current_ = &p;
-            }
             return;
         }
     }
     profiles_.push_back(def);
-    if (!current_) {
-        current_ = &profiles_.back();
+    if (current_ == kNoProfile) {
+        current_ = profiles_.size() - 1;
     }
 }
 
 bool PipelineProfileManager::set_profile(const std::string& name) {
-    for (const auto& p : profiles_) {
-        if (p.profile_name == name) {
-            current_ = &p;
+    for (size_t i = 0; i < profiles_.size(); ++i) {
+        if (profiles_[i].profile_name == name) {
+            current_ = i;
             return true;
         }
     }
@@ -309,6 +407,144 @@ PipelineProfileDef PipelineProfileManager::create_ultra_profile() {
         {"TAA", true},
         {"VolumetricFog", true},
     };
+
+    normalize_post_process_kinds(def);
+    return def;
+}
+
+// ============================================================
+// Quality Tier Definitions — Low / Mid / High (§8.1 拡張)
+//
+// 既定パイプラインの品質 3 段階。 Mid は Low から、 High は Mid から
+// 途中編集 API (insert_render_pass_* / insert_post_process_*) で段階的に
+// 組み上げる — 「パイプラインを途中で変える」 経路そのものを既定
+// プリセットの構築に使うことで、 API とプリセットの整合を保証する。
+// ============================================================
+
+PipelineProfileDef PipelineProfileManager::create_low_profile() {
+    PipelineProfileDef def;
+    def.profile_name = "Low";
+    def.rendering_path = RenderingPath::FORWARD;
+    def.gpu_driven_enabled = false;
+    def.compute_update_enabled = false;
+    def.max_lights = 16;
+    def.msaa_samples = 0;
+
+    // 影なし — Low は最小構成 (forward 1 経路 + tonemap のみ)。
+    def.shadow_config.cascade_count = 0;
+    def.shadow_config.resolution    = 0;
+    def.shadow_config.filter_mode   = ShadowFilterMode::NONE;
+
+    def.memory_config.frame_allocator_size = 4 * 1024 * 1024; // 4MB
+    def.memory_config.flight_count = 2;
+    def.gpu_driven_config = {};
+    def.gpu_driven_config.compute_update = false;
+
+    def.update_config.chunk_size = 16384;
+    def.update_config.nt_store_enabled = false;
+
+    def.profiler_config.enabled      = true;
+    def.profiler_config.overlay_mode = OverlayMode::MINIMAL;
+
+    // GI: 全て off。
+    def.gi_config.shadow_enabled    = false;
+    def.gi_config.ssao_enabled      = false;
+    def.gi_config.gi_probes_enabled = false;
+
+    def.render_passes = {
+        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"PostProcess",     PassType::POST_PROCESS, INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {}},
+    };
+
+    def.post_process_stack = {
+        {"Tonemapping", true},
+    };
+
+    normalize_post_process_kinds(def);
+    return def;
+}
+
+PipelineProfileDef PipelineProfileManager::create_mid_profile() {
+    // Low を種に、 影 2 pass とポスト (Bloom / Vignette) を途中挿入する。
+    PipelineProfileDef def = create_low_profile();
+    def.profile_name = "Mid";
+    def.max_lights   = 64;
+    def.msaa_samples = 2;
+
+    // 影: 2 cascade / PCF。
+    def.shadow_config.cascade_count = 2;
+    def.shadow_config.resolution    = 2048;
+    def.shadow_config.filter_mode   = ShadowFilterMode::PCF;
+    def.gi_config.shadow_enabled          = true;
+    def.gi_config.shadow.cascade_count    = 2;
+    def.gi_config.shadow.resolution       = 2048;
+    def.gi_config.shadow.filter_mode      = ShadowFilterMode::PCF;
+    def.gi_config.shadow.depth_bias       = 0.005f;
+
+    def.memory_config.frame_allocator_size = 8 * 1024 * 1024; // 8MB
+    def.memory_config.flight_count = 3;
+    def.memory_config.gpu_config.mesh_pool_size = 128 * 1024 * 1024;
+    def.memory_config.gpu_config.ssbo_pool_size = 64 * 1024 * 1024;
+
+    def.profiler_config.overlay_mode = OverlayMode::STANDARD;
+
+    // Opaque の前段へ Shadow → DepthPre を途中挿入。
+    insert_render_pass_before(def, "OpaquePass",
+        {"ShadowPass",   PassType::SHADOW,     INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {"bounds", "transforms"}});
+    insert_render_pass_before(def, "OpaquePass",
+        {"DepthPrePass", PassType::DEPTH_ONLY, INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"bounds", "transforms"}});
+
+    // ポスト: Bloom を Tonemapping の前、 Vignette を後へ (Mid = Bloom 等が
+    // 載るパイプライン)。
+    insert_post_process_before(def, "Tonemapping", {"Bloom", true});
+    insert_post_process_after(def, "Tonemapping", {"Vignette", true});
+
+    normalize_post_process_kinds(def);
+    return def;
+}
+
+PipelineProfileDef PipelineProfileManager::create_high_profile() {
+    // Mid を種に、 Forward+ 相当の pass 列 (DepthPre → LightCull → shading)
+    // と DoF を途中挿入する。
+    PipelineProfileDef def = create_mid_profile();
+    def.profile_name = "High";
+    def.rendering_path = RenderingPath::FORWARD_PLUS;
+    def.gpu_driven_enabled = true;
+    def.max_lights   = 256;
+    def.msaa_samples = 0; // フル解像度ポスト前提 (AA はポスト側の領分)
+
+    // 影: 3 cascade へ増強。
+    def.shadow_config.cascade_count    = 3;
+    def.gi_config.shadow.cascade_count = 3;
+
+    // SSAO on (深度 prepass があるので流用できる)。
+    def.gi_config.ssao_enabled      = true;
+    def.gi_config.ssao.sample_count = 32;
+    def.gi_config.ssao.radius       = 0.5f;
+    def.gi_config.ssao.intensity    = 1.0f;
+
+    def.memory_config.frame_allocator_size = 16 * 1024 * 1024; // 16MB
+    def.memory_config.gpu_config.mesh_pool_size = 256 * 1024 * 1024;
+    def.memory_config.gpu_config.ssbo_pool_size = 128 * 1024 * 1024;
+
+    def.gpu_driven_config.max_triangle_count = 50000;
+    def.gpu_driven_config.min_instance_count = 32;
+
+    // Forward+ 相当: DepthPrePass の直後へタイル光源カリングの compute を
+    // 途中挿入する (depth prepass → light cull → forward shading)。
+    insert_render_pass_after(def, "DepthPrePass",
+        {"LightCullPass", PassType::COMPUTE, INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}});
+    insert_render_pass_after(def, "LightCullPass",
+        {"SSAOGen",       PassType::COMPUTE, INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}});
+
+    // ポスト: DoF を Bloom の前へ (チェーン上も dof → bloom → grade の順で
+    // 深度をパイプラインへ捩じ込む — `build_post_process_chain()` 参照)。
+    PostProcessDef dof;
+    dof.name    = "DepthOfField";
+    dof.enabled = true;
+    dof.depth_of_field.enabled = true;
+    insert_post_process_before(def, "Bloom", dof);
 
     normalize_post_process_kinds(def);
     return def;
