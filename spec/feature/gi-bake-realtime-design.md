@@ -1,0 +1,158 @@
+# GI ベイク + リアルタイム設計 (Global Illumination — Baked & Realtime)
+
+> 2026-07-12 起草。カジュアルゲームでも自然な光の反射 (間接光バウンス) を出せる GI を、
+> **ベイクとリアルタイムの両対応**で実装するための設計書。
+> 関連: [`subsystem/gi.md`](subsystem/gi.md)、[`postprocess-effects-design.md`](postprocess-effects-design.md) (SSAO の PP 側)、
+> `plan.md` (Ultra tier)、[`rendering-extensibility-design.md`](rendering-extensibility-design.md)。
+
+## 1. 背景・診断
+
+GI サブシステムは **API 表面・設定モデル・行列演算・シリアライズまで完備だが、実行が全て no-op スタブ**。
+
+| 層 | 実体 | 状態 |
+|---|---|---|
+| API / 設定 (`GIConfig` / `ShadowMapConfig` / `SSAOConfig` / `GIProbeConfig` / `GIBakeConfig`) | `gi_lighting_system.h` / `gi_bake.h` | ✅ 完備 |
+| CSM 行列演算 (cascade split / light view-proj / uniform 構築) | `gi_lighting_system.cpp` | ✅ 動作 |
+| bake 結果の binary save/load / progress callback / `IBakeDataProvider` | `gi_bake.cpp` | ✅ 動作 |
+| **bake 演算** (`bake_ao` / `bake_shadows` / `bake_irradiance` / `bake_lightmap`) | `gi_bake.cpp:217-344` | ❌ 入力を `(void)` 破棄、固定値を返すのみ |
+| **probe データの GPU 転送** (`upload_probe_data`) | `gi_lighting_system.cpp:252-256` | ❌ `(void)sh_data;` |
+| **GPU dispatch** (shadow 描画 / SSAO / probe 補間) | `gi_lighting_system.cpp:310-325` | ❌ コメントのみの no-op |
+| shader (`shadow_map_gen.comp` / `ssao_gen.comp` / `gi_probe_sample.comp` / `lightmap_bake.comp` / `static_ao_bake.comp` / `shadow.glsl`) | `shaders/` | オーサリング済み・未 dispatch |
+| マテリアル側の GI 項サンプリング | `pbr.frag` / `lit.frag` | ❌ 未対応 (ambient 定数のみ) |
+
+さらに構造的な制約が 2 つ:
+
+1. **`GILightingSystem` は `VkDevice` を持たない** (`GPUBufferManager` + `SceneRegistry` のみ)。
+   compute pipeline / descriptor / コマンド発行の置き場が無い。
+2. **メッシュ (VkBuffer) はホスト所有** (host-driven 原則)。Pictor 単独では三角形単位の
+   レイトレースも shadow depth 描画もできない。Pictor が常時持つ形状情報は
+   `SceneRegistry` の **オブジェクト単位のトランスフォーム + バウンディング情報**。
+
+## 2. 方針
+
+**「per-object GI」を正式なプロダクト方針とする。** これは妥協ではなく、既存データモデル
+(`BakedAO` / `BakedIrradiance` / `BakedLightmap` が全て per-object) が最初からそう設計されている。
+カジュアルゲーム (オブジェクト数中規模・スタイライズド表現) では、テクセル単位ライトマップよりも
+
+- オブジェクト単位の AO / 間接光 SH → 頂点/ピクセルで補間
+- probe grid (L2 SH、9 係数) からの動的サンプル
+
+の組が品質/コスト比で優る。UE5 Lumen 級の per-texel GI は目標にしない。
+
+3 phase に分ける。**phase 1 は CPU で完結し headless テスト可能** (実行禁止環境でも検証できる)。
+
+- **phase 1 — CPU ベイク実体 + CPU リアルタイム relight**: bake 4 種の実演算 (AABB プロキシに
+  対するレイキャスト)、probe grid の SH 構築、ライト変更時の probe 再計算 (リアルタイム経路)、
+  `upload_probe_data` の実 GPU 転送。
+- **phase 2 — GPU 配線**: `GIGpuExecutor` 新設 (compute dispatch / descriptor 所有)、
+  `gi_probe_sample.comp` / `ssao_gen.comp` の実 dispatch、CSM depth の host-driven 描画契約、
+  `pbr.frag` / `lit.frag` の GI 項サンプリング。
+- **phase 3 (将来)**: screen-space GI、DDGI 風 probe 自動更新、reflection probe。
+
+### 2.1 ジオメトリプロキシ — CPU ベイクの共通基盤
+
+三角形が無いので、ベイクは **オブジェクト境界 (OBB/球) プロキシへのレイキャスト**で行う。
+
+```cpp
+/// gi/gi_scene_proxy.h — bake / relight が共有する遮蔽クエリ
+class GISceneProxy {
+public:
+    void build(const SceneRegistry& registry);          // static pool → flat SoA
+    bool occluded(const float3& from, const float3& dir,
+                  float max_dist, ObjectId ignore) const; // any-hit
+    float hit_distance(...) const;                       // closest-hit (バウンス用)
+    // 内部: flat な center/half_extent/rotation の SoA (DoD 規約準拠)
+};
+```
+
+- AABB/OBB スラブ判定のみ。数百〜数千オブジェクト × 数百レイ/obj は CPU で十分速い
+  (bake は blocking API、progress callback 完備)。
+- `IBakeDataProvider` に将来 `get_occluder_triangles()` を足せば精密化できる (phase 3)。
+
+### 2.2 phase 1 の各ベイク実装 (`gi_bake.cpp` のスタブ置換)
+
+| bake | 演算 | 出力 |
+|---|---|---|
+| `bake_ao` | オブジェクト中心 + 上半球 `sample_count` 方向 (cosine 重み、golden-angle) に `radius` レイ → 遮蔽率 | `BakedAO::occlusion` (0..1) |
+| `bake_shadows` | 既存 CSM split/行列で cascade 割当 (`cascade_flags`)、light 方向レイで遮蔽深度 | `BakedShadow` |
+| `bake_irradiance` | probe grid を先に構築 (§2.3) → オブジェクト位置で trilinear 補間した SH | `BakedIrradiance` (9×vec4) |
+| `bake_lightmap` | direct: sun + `IBakeDataProvider` の point lights を遮蔽レイ付きで評価。indirect: `bounce_count` 回のプロキシ面バウンス (albedo は一律 0.5 仮定、`indirect_intensity` 係数) | `BakedLightmap` (direct RGB + indirect RGB) |
+
+### 2.3 probe grid 構築と「リアルタイム」の定義
+
+```cpp
+/// gi/gi_probe_field.h — probe grid の SH 構築 + 補間 (bake / realtime 共用)
+class GIProbeField {
+public:
+    void build(const GIProbeConfig&, const GISceneProxy&,
+               const DirectionalLight&, const std::vector<PointLight>&);
+    void relight(const DirectionalLight&, const std::vector<PointLight>&); // 遮蔽キャッシュ再利用
+    const float* sh_data() const;      // 9×vec4 × probe 数 (upload_probe_data 互換)
+    void sample(const float3& pos, float out_sh[36]) const; // trilinear
+};
+```
+
+- **build**: probe ごとに N 方向 (既定 64、fibonacci sphere) へ遮蔽レイ → 空なら sky +
+  directional、遮蔽ならバウンス面の反射光を推定 → L2 SH へ射影。
+  **方向ごとの遮蔽結果 (hit 距離/ID) をキャッシュする**のが鍵。
+- **relight**: ジオメトリ不変なら遮蔽キャッシュを再利用して SH 再射影のみ —
+  2048 probe × 64 方向で数 ms オーダー。**これが「リアルタイム GI」の phase 1 実体**:
+  ライト (太陽の色/向き、点光源) が毎フレーム変わっても probe が追従し、
+  `upload_probe_data` → GPU で動的オブジェクトにも自然な間接光が乗る。
+- 静的シーン + 動的ライト + 動的オブジェクト、というカジュアルゲームの典型構成を
+  フルカバーする。静的ジオメトリが変わったら `invalidate()` → 再 build。
+
+### 2.4 ベイク vs リアルタイムの役割分担
+
+| データ | ベイク (GIBakeSystem) | リアルタイム (GILightingSystem) |
+|---|---|---|
+| 静的オブジェクトの AO / lightmap / SH | ✅ bake → binary 保存 → `apply()` | 使うだけ (skip 済み) |
+| 動的オブジェクトの間接光 | — | probe field 補間 (phase 1: CPU relight + GPU 補間 or CPU 補間) |
+| 影 | 静的: baked depth | 動的: CSM (phase 2 で実描画) |
+| SSAO | 高サンプル object AO | screen-space (PP 側 / phase 2 compute) |
+
+### 2.5 phase 2 — GPU 配線の骨子
+
+- **`GIGpuExecutor` 新設** (`gi/gi_gpu_executor.h`): `VulkanContext` を受け、compute pipeline
+  (ssao_gen / gi_probe_sample / shadow_map_gen) + descriptor を所有。`GILightingSystem::execute()`
+  は executor が接続されているときだけ実 dispatch する (未接続 = 現状の CPU-only、後方互換)。
+  SRP 上、Vulkan 資源管理を `GILightingSystem` に足さない。
+- **CSM depth は host-driven**: `PostProcessPipeline` と同じ契約で
+  `shadow_render_pass()` / `shadow_framebuffer(cascade)` を公開し、ホストが自分のメッシュを
+  light view-proj で描く (`shadow_depth.vert/frag` 提供済み)。
+- **マテリアル統合**: `pbr.frag` / `lit.frag` に `object_irradiance` SSBO の SH 評価
+  (ambient 項置換) + `shadow.glsl` の CSM サンプル + `ao_output` 乗算を追加。
+  binding 追加はホスト側 descriptor layout 変更を要するため、spec の
+  `setup/integration.md` に移行手順を明記する。
+
+## 3. SSAO の二重定義について
+
+SSAO は (a) PP 近似 (`postprocess-effects-design.md` §2.1、シーン色乗算) と
+(b) GI 統合 (`ssao_gen.comp` → `ao_output` → マテリアルが間接光のみ減衰) の 2 経路を持つ。
+(a) は導入コストゼロで見た目が付く入口、(b) が最終形。両方 enabled の場合は (b) を優先し
+(a) を自動 off にする (二重適用防止、config ブリッジで判定)。
+
+## 4. 実装順序と phase 境界
+
+| 順 | 項目 | phase | 依存 |
+|---|---|---|---|
+| 1 | `GISceneProxy` (AABB プロキシ + 遮蔽クエリ) | 1 | — |
+| 2 | `GIProbeField` (build / relight / sample / SH 射影) | 1 | 1 |
+| 3 | bake 4 種の実装置換 + stats 実値化 | 1 | 1,2 |
+| 4 | `upload_probe_data` 実 GPU 転送 | 1 | — |
+| 5 | headless テスト (遮蔽/SH/relight/bake round-trip) | 1 | 1-4 |
+| 6 | `GIGpuExecutor` + compute dispatch 3 種 | 2 | — |
+| 7 | CSM host-driven 描画契約 | 2 | 6 |
+| 8 | `pbr.frag`/`lit.frag` GI 項 + integration 手順 | 2 | 6,7 |
+| 9 | SSGI / DDGI 風更新 / reflection probe | 3 | 6 |
+
+## 5. phase 1 実装状況 (2026-07-12, `feat/postprocess-gi`)
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| `GISceneProxy` | `include/pictor/gi/gi_scene_proxy.h` + `src/gi/gi_scene_proxy.cpp` | ⬜ |
+| `GIProbeField` | `include/pictor/gi/gi_probe_field.h` + `src/gi/gi_probe_field.cpp` | ⬜ |
+| SH L2 射影/評価ユーティリティ | `include/pictor/gi/gi_sh.h` | ⬜ |
+| bake_ao / bake_shadows / bake_irradiance / bake_lightmap 実装 | `src/gi/gi_bake.cpp` | ⬜ |
+| `upload_probe_data` 実転送 | `src/gi/gi_lighting_system.cpp` | ⬜ |
+| headless テスト | `tests/unit_gi_bake_test.cpp` ほか | ⬜ |
