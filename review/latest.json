@@ -5,20 +5,27 @@
   "style": "game",
   "weighted_score": "B",
   "scores": {
-    "vulnerability": "B",
-    "design_strength": "A",
+    "design_robustness": "A",
     "design_consistency": "B",
     "modularity": "A",
     "code_quality": "B",
-    "data_schema": "A",
-    "sre": "B",
-    "zero_trust": null,
-    "security": "B",
-    "test_strategy": "B",
-    "performance": "B",
+    "code_vulnerability": "B",
+    "cicd_supply_chain": null,
+    "test_coverage": "B",
     "license": "A",
-    "cross_platform": "B",
-    "documentation": "A"
+    "documentation": "A",
+    "llm_security": null,
+    "ai_code_acceptance": null,
+    "client_trust_boundary": null,
+    "anti_cheat": null,
+    "save_monetization_integrity": null,
+    "multiplayer_networking": null,
+    "save_data_design": null,
+    "asset_management": null,
+    "data_driven_design": "A",
+    "game_performance": "B",
+    "platform_compatibility": "B",
+    "accessibility_localization": null
   },
   "critical_count": 0,
   "high_count": 1,
@@ -33,5 +40,5 @@
     "dead_code": 1
   },
   "fix_pr": "https://github.com/LUDIARS/Pictor/pull/98",
-  "note": "設計 + 実装ギャップの追跡診断 (Fable)。vulnerability / sre / security / cross_platform は今回未再査 (前回 2026-06-11 の値を継続)。前回 38 指摘中 10 件が #80/#97 で修正済みを確認、残存 12 件 + 新規 High 1 件 (GIBakeSystem UAF) 含む 25 項目を自動修正 (回帰テスト 1 追加、ctest 19/19)。High 1 = 新規 N-H1 (修正済み)。詳細: review/2026-07-09/REVIEW.md"
+  "note": "設計 + 実装ギャップの追跡診断 (Fable)。vulnerability / sre / security / cross_platform は今回未再査 (前回 2026-06-11 の値を継続)。前回 38 指摘中 10 件が #80/#97 で修正済みを確認、残存 12 件 + 新規 High 1 件 (GIBakeSystem UAF) 含む 25 項目を自動修正 (回帰テスト 1 追加、ctest 19/19)。High 1 = 新規 N-H1 (修正済み)。詳細: review/2026-07-09/REVIEW.md / format_version 2 移行: scores を game 21 観点へ改名マッピング (design_strength→design_robustness, vulnerability→code_vulnerability, test_strategy→test_coverage, data_schema→data_driven_design, performance→game_performance, cross_platform→platform_compatibility)。旧 sre/zero_trust/security は game 体系に対応観点なし。新設観点 (cicd_supply_chain/llm_security/ai_code_acceptance/ゲーム固有 6 観点/accessibility_localization) は未評価のため null。"
 }
