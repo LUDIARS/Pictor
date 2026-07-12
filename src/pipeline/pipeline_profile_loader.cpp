@@ -12,6 +12,9 @@ namespace {
 // Canonical preset name -> hardcoded C++ factory. This is the always-available
 // fallback when the JSON file is missing or malformed.
 PipelineProfileDef cpp_fallback(const std::string& name) {
+    if (name == "Low")        return PipelineProfileManager::create_low_profile();
+    if (name == "Mid")        return PipelineProfileManager::create_mid_profile();
+    if (name == "High")       return PipelineProfileManager::create_high_profile();
     if (name == "Lite")       return PipelineProfileManager::create_lite_profile();
     if (name == "Standard")   return PipelineProfileManager::create_standard_profile();
     if (name == "Ultra")      return PipelineProfileManager::create_ultra_profile();
@@ -38,8 +41,8 @@ std::string preset_file_path(const std::string& dir, const std::string& name) {
     return path;
 }
 
-constexpr std::array<const char*, 5> kBuiltinPresetNames = {
-    "Lite", "Standard", "Ultra", "MobileLow", "MobileHigh"};
+constexpr std::array<const char*, 8> kBuiltinPresetNames = {
+    "Low", "Mid", "High", "Lite", "Standard", "Ultra", "MobileLow", "MobileHigh"};
 
 } // namespace
 

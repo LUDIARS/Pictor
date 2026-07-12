@@ -122,6 +122,24 @@ public:
     /// `output_views` are the new swapchain image views.
     bool resize(uint32_t width, uint32_t height,
                 const std::vector<VkImageView>& output_views);
+
+    /// チェーンの「構造」 をフレーム間で差し替える (パイプライン途中変更)。
+    /// pass の挿入 / 削除 / 配線替え (`insert_post_process_pass()` 等) を
+    /// 反映するときに呼ぶ。 push constant 値だけの変更なら `config_mut()` +
+    /// 毎フレームの `refresh_post_process_chain()` で足りるので不要。
+    ///
+    /// 内部で GPU idle を待ち、 ターゲット / pipeline / descriptor を作り直す
+    /// (render pass / sampler / LUT / layout キャッシュは維持)。 resize と
+    /// 同じく scene ターゲットも再生成されるため、 呼出し後は
+    /// `scene_framebuffer()` / `scene_color_view()` / `scene_depth_view()` を
+    /// 取り直すこと。 `output_views` は現在の swapchain image views。
+    /// 失敗時は false (パイプラインは未初期化状態へ倒れる)。
+    bool rebuild_chain(const PostProcessChain& chain,
+                       const std::vector<VkImageView>& output_views);
+
+    /// 現在のチェーン記述。 コピーして編集 API で組み替え、
+    /// `rebuild_chain()` へ渡す用。
+    const PostProcessChain& chain() const { return chain_; }
 #endif
 
     void shutdown();
@@ -162,7 +180,7 @@ private:
         VkDescriptorSet       desc_set    = VK_NULL_HANDLE;
         uint32_t              input_count = 0;               ///< descriptor binding 数
         int32_t               output_index = -1;             ///< targets_ index / -1=swapchain
-        std::vector<int32_t>  input_indices;                 ///< targets_ index 列
+        std::vector<int32_t>  input_indices;                 ///< targets_ index 列 (-1=LUT / -2=scene depth)
         std::vector<uint8_t>  push_data;
         uint32_t              push_size = 0;
     };
@@ -183,6 +201,9 @@ private:
                                                 uint32_t push_size);
     bool create_pipelines_();
     bool create_output_framebuffers_(const std::vector<VkImageView>& views);
+    /// resize / rebuild_chain 共通のチェーン依存リソース破棄 (targets /
+    /// output framebuffers / pipelines / descriptor pool)。 GPU idle 前提。
+    void destroy_chain_resources_();
     VkShaderModule load_shader_(const std::string& path) const;
     uint32_t find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
     /// 論理ターゲット名 → targets_ index。 不明名は -1。
@@ -212,6 +233,9 @@ private:
     Texture   lut_{};
     bool      lut_loaded_ = false;
     VkSampler sampler_ = VK_NULL_HANDLE;
+    // 深度入力 (__depth__) 用 NEAREST サンプラ。 D32 は LINEAR filter 対応が
+    // 保証されないため color 用の sampler_ と分ける。
+    VkSampler depth_sampler_ = VK_NULL_HANDLE;
 
     VkDescriptorPool desc_pool_ = VK_NULL_HANDLE;
     // input 数 → descriptor set layout。 組み込みチェーンは 1 と 3 を使う。

@@ -8,6 +8,7 @@
 #include "pictor/postprocess/postprocess_effect.h"
 #include "pictor/pipeline/attachment_def.h"
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace pictor {
@@ -132,6 +133,46 @@ struct PipelineProfileDef {
     uint8_t                    msaa_samples         = 0;
 };
 
+// ============================================================
+// パイプライン途中編集 API (§12 拡張)
+// ============================================================
+/// `PipelineProfileDef` の render_passes / post_process_stack を anchor 名
+/// 基準で「途中から」 組み替えるための編集操作。 プリセットをコピーして
+/// pass を差し込む / 抜く → `PictorRenderer::register_custom_profile()` +
+/// `set_profile()` (または active profile を直接編集して
+/// `reload_active_profile()`) で実行時にも反映できる — 再 compile は
+/// `CompiledPathDriver::recompile()` が面倒を見る。
+///
+/// post-process 側のチェーン構造 (`PostProcessChain`) の途中編集は
+/// `postprocess_chain.h` の `insert_post_process_pass()` 系を使う。
+
+/// `pass_name` を持つ render pass の index。 見つからなければ -1。
+int find_render_pass(const PipelineProfileDef& def, std::string_view pass_name);
+
+/// `anchor` の直前 / 直後へ `pass` を挿入する。 anchor 不在または同名 pass
+/// が既に存在する場合は false (プロファイルは不変)。
+bool insert_render_pass_before(PipelineProfileDef& def, std::string_view anchor,
+                               RenderPassDef pass);
+bool insert_render_pass_after(PipelineProfileDef& def, std::string_view anchor,
+                              RenderPassDef pass);
+
+/// `pass_name` を持つ render pass を取り除く。 見つからなければ false。
+bool remove_render_pass(PipelineProfileDef& def, std::string_view pass_name);
+
+/// `name` を持つ post-process エフェクトの index。 見つからなければ -1。
+int find_post_process(const PipelineProfileDef& def, std::string_view name);
+
+/// `anchor` の直前 / 直後へ `effect` を挿入する。 `kind` が UNKNOWN なら
+/// `post_process_kind_from_name()` で補完する。 anchor 不在または同名
+/// エフェクトが既に存在する場合は false。
+bool insert_post_process_before(PipelineProfileDef& def, std::string_view anchor,
+                                PostProcessDef effect);
+bool insert_post_process_after(PipelineProfileDef& def, std::string_view anchor,
+                               PostProcessDef effect);
+
+/// `name` を持つ post-process エフェクトを取り除く。 見つからなければ false。
+bool remove_post_process(PipelineProfileDef& def, std::string_view name);
+
 /// Pipeline profile manager (§8.4, §12).
 /// Provides built-in presets and supports custom profile registration.
 class PipelineProfileManager {
@@ -139,7 +180,7 @@ public:
     PipelineProfileManager();
     ~PipelineProfileManager();
 
-    /// Register built-in profiles (Lite, Standard, Ultra)
+    /// Register built-in profiles (Low/Mid/High + Lite/Standard/Ultra)
     void register_defaults();
 
     /// Register a custom profile (§12)
@@ -149,8 +190,8 @@ public:
     bool set_profile(const std::string& name);
 
     /// Get current profile
-    const PipelineProfileDef& current_profile() const { return *current_; }
-    const std::string& current_profile_name() const { return current_->profile_name; }
+    const PipelineProfileDef& current_profile() const { return profiles_[current_]; }
+    const std::string& current_profile_name() const { return profiles_[current_].profile_name; }
 
     /// Get profile by name
     const PipelineProfileDef* get_profile(const std::string& name) const;
@@ -163,6 +204,16 @@ public:
     static PipelineProfileDef create_standard_profile();
     static PipelineProfileDef create_ultra_profile();
 
+    /// 既定パイプラインの品質 3 段階 (§8.1 拡張)。 途中編集 API で
+    /// Low → Mid → High と段階的に組み上がる (= 差分がそのまま仕様):
+    ///   - Low : FORWARD 最小構成。 post は Tonemapping のみ。
+    ///   - Mid : Low + Shadow/DepthPre pass、 post に Bloom / Vignette。
+    ///   - High: Mid + FORWARD_PLUS 相当 (DepthPre → LightCull → shading) +
+    ///           SSAO、 post に DepthOfField (深度をチェーンへ捩じ込む)。
+    static PipelineProfileDef create_low_profile();
+    static PipelineProfileDef create_mid_profile();
+    static PipelineProfileDef create_high_profile();
+
     /// Mobile presets (§8.1 extension).
     /// MobileLow targets bandwidth-bound tile-based GPUs (no shadows, FORWARD, no MSAA).
     /// MobileHigh targets modern mobile SoCs (FORWARD, 1-cascade PCF shadows, light post-process).
@@ -170,8 +221,12 @@ public:
     static PipelineProfileDef create_mobile_high_profile();
 
 private:
+    static constexpr size_t kNoProfile = static_cast<size_t>(-1);
+
     std::vector<PipelineProfileDef> profiles_;
-    const PipelineProfileDef*       current_ = nullptr;
+    // profiles_ への index。 生ポインタだと register_profile() の push_back
+    // 再確保で dangling するため index で保持する。
+    size_t                          current_ = kNoProfile;
 };
 
 } // namespace pictor

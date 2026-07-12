@@ -17,6 +17,7 @@ set(PICTOR_TESTS
     unit_visus_instantiator_test
     unit_shader_registry_test
     unit_pipeline_profile_serializer_test
+    unit_pipeline_tiers_test
     unit_postprocess_chain_test
     unit_attachment_def_test
     unit_pipeline_registries_test
