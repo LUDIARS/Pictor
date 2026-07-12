@@ -105,6 +105,11 @@ const char* post_process_kind_to_str(PostProcessKind k) {
         case PostProcessKind::VIGNETTE:       return "Vignette";
         case PostProcessKind::COLOR_GRADING:  return "ColorGrading";
         case PostProcessKind::DEPTH_OF_FIELD: return "DepthOfField";
+        case PostProcessKind::SSAO:           return "SSAO";
+        case PostProcessKind::MOTION_BLUR:    return "MotionBlur";
+        case PostProcessKind::FXAA:           return "FXAA";
+        case PostProcessKind::CHROMATIC_ABERRATION: return "ChromaticAberration";
+        case PostProcessKind::FILM_GRAIN:     return "FilmGrain";
     }
     return "Unknown";
 }
@@ -121,6 +126,16 @@ PostProcessKind post_process_kind_from_str(std::string_view s, PostProcessKind f
         s == "Grade")          return PostProcessKind::COLOR_GRADING;
     if (s == "DepthOfField" || s == "depth_of_field" || s == "DoF")
                                return PostProcessKind::DEPTH_OF_FIELD;
+    if (s == "SSAO" || s == "ssao" || s == "AmbientOcclusion")
+                               return PostProcessKind::SSAO;
+    if (s == "MotionBlur" || s == "motion_blur")
+                               return PostProcessKind::MOTION_BLUR;
+    if (s == "FXAA" || s == "fxaa")
+                               return PostProcessKind::FXAA;
+    if (s == "ChromaticAberration" || s == "chromatic_aberration")
+                               return PostProcessKind::CHROMATIC_ABERRATION;
+    if (s == "FilmGrain" || s == "film_grain" || s == "Grain")
+                               return PostProcessKind::FILM_GRAIN;
     if (s == "Unknown")        return PostProcessKind::UNKNOWN;
     return fallback;
 }
@@ -756,6 +771,65 @@ bool parse_depth_of_field_config(Parser& pr, DepthOfFieldConfig& out) {
     });
 }
 
+bool parse_ssao_config(Parser& pr, SSAOPostConfig& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")        return p.parse_bool(out.enabled);
+        else if (key == "sample_count") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.sample_count = static_cast<uint32_t>(v); return true;
+        }
+        else if (key == "radius")    return p.parse_float_field(out.radius);
+        else if (key == "bias")      return p.parse_float_field(out.bias);
+        else if (key == "range")     return p.parse_float_field(out.range);
+        else if (key == "intensity") return p.parse_float_field(out.intensity);
+        else if (key == "power")     return p.parse_float_field(out.power);
+        return p.skip_value();
+    });
+}
+
+bool parse_motion_blur_config(Parser& pr, MotionBlurConfig& out) {
+    // reproj_matrix / matrix_valid はランタイムデータ — JSON では扱わない。
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")           return p.parse_bool(out.enabled);
+        else if (key == "intensity")    return p.parse_float_field(out.intensity);
+        else if (key == "sample_count") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.sample_count = static_cast<uint32_t>(v); return true;
+        }
+        else if (key == "max_velocity") return p.parse_float_field(out.max_velocity);
+        return p.skip_value();
+    });
+}
+
+bool parse_fxaa_config(Parser& pr, FXAAConfig& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")                 return p.parse_bool(out.enabled);
+        else if (key == "edge_threshold")     return p.parse_float_field(out.edge_threshold);
+        else if (key == "edge_threshold_min") return p.parse_float_field(out.edge_threshold_min);
+        else if (key == "subpix_quality")     return p.parse_float_field(out.subpix_quality);
+        return p.skip_value();
+    });
+}
+
+bool parse_chromatic_aberration_config(Parser& pr, ChromaticAberrationConfig& out) {
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")           return p.parse_bool(out.enabled);
+        else if (key == "intensity")    return p.parse_float_field(out.intensity);
+        else if (key == "start_radius") return p.parse_float_field(out.start_radius);
+        return p.skip_value();
+    });
+}
+
+bool parse_film_grain_config(Parser& pr, FilmGrainConfig& out) {
+    // seed はランタイムデータ (毎フレーム進む) — JSON では扱わない。
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")        return p.parse_bool(out.enabled);
+        else if (key == "intensity") return p.parse_float_field(out.intensity);
+        else if (key == "response")  return p.parse_float_field(out.response);
+        return p.skip_value();
+    });
+}
+
 bool parse_post_process(Parser& pr, PostProcessDef& out) {
     bool kind_explicit = false;
     bool ok = parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
@@ -779,6 +853,16 @@ bool parse_post_process(Parser& pr, PostProcessDef& out) {
             return parse_color_grading_config(p, out.color_grading);
         } else if (key == "depth_of_field") {
             return parse_depth_of_field_config(p, out.depth_of_field);
+        } else if (key == "ssao") {
+            return parse_ssao_config(p, out.ssao);
+        } else if (key == "motion_blur") {
+            return parse_motion_blur_config(p, out.motion_blur);
+        } else if (key == "fxaa") {
+            return parse_fxaa_config(p, out.fxaa);
+        } else if (key == "chromatic_aberration") {
+            return parse_chromatic_aberration_config(p, out.chromatic_aberration);
+        } else if (key == "film_grain") {
+            return parse_film_grain_config(p, out.film_grain);
         }
         // Unknown keys are skipped (forward-compat, spec §2).
         return p.skip_value();
@@ -1234,6 +1318,59 @@ std::string to_pipeline_profile_json(const PipelineProfileDef& def) {
                     pad(out, 4); out += "\"far_start\":      "; emit_float(out, d.far_start); out += ",\n";
                     pad(out, 4); out += "\"far_end\":        "; emit_float(out, d.far_end); out += ",\n";
                     pad(out, 4); out += "\"sample_count\":   "; emit_uint(out, d.sample_count); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::SSAO: {
+                    const auto& s = pp.ssao;
+                    out += ",\n";
+                    pad(out, 3); out += "\"ssao\": {\n";
+                    pad(out, 4); out += "\"sample_count\": "; emit_uint(out, s.sample_count); out += ",\n";
+                    pad(out, 4); out += "\"radius\":       "; emit_float(out, s.radius); out += ",\n";
+                    pad(out, 4); out += "\"bias\":         "; emit_float(out, s.bias); out += ",\n";
+                    pad(out, 4); out += "\"range\":        "; emit_float(out, s.range); out += ",\n";
+                    pad(out, 4); out += "\"intensity\":    "; emit_float(out, s.intensity); out += ",\n";
+                    pad(out, 4); out += "\"power\":        "; emit_float(out, s.power); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::MOTION_BLUR: {
+                    // reproj_matrix / matrix_valid はランタイムデータ — 出さない。
+                    const auto& m = pp.motion_blur;
+                    out += ",\n";
+                    pad(out, 3); out += "\"motion_blur\": {\n";
+                    pad(out, 4); out += "\"intensity\":    "; emit_float(out, m.intensity); out += ",\n";
+                    pad(out, 4); out += "\"sample_count\": "; emit_uint(out, m.sample_count); out += ",\n";
+                    pad(out, 4); out += "\"max_velocity\": "; emit_float(out, m.max_velocity); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::FXAA: {
+                    const auto& f = pp.fxaa;
+                    out += ",\n";
+                    pad(out, 3); out += "\"fxaa\": {\n";
+                    pad(out, 4); out += "\"edge_threshold\":     "; emit_float(out, f.edge_threshold); out += ",\n";
+                    pad(out, 4); out += "\"edge_threshold_min\": "; emit_float(out, f.edge_threshold_min); out += ",\n";
+                    pad(out, 4); out += "\"subpix_quality\":     "; emit_float(out, f.subpix_quality); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::CHROMATIC_ABERRATION: {
+                    const auto& c = pp.chromatic_aberration;
+                    out += ",\n";
+                    pad(out, 3); out += "\"chromatic_aberration\": {\n";
+                    pad(out, 4); out += "\"intensity\":    "; emit_float(out, c.intensity); out += ",\n";
+                    pad(out, 4); out += "\"start_radius\": "; emit_float(out, c.start_radius); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::FILM_GRAIN: {
+                    // seed はランタイムデータ — 出さない。
+                    const auto& g = pp.film_grain;
+                    out += ",\n";
+                    pad(out, 3); out += "\"film_grain\": {\n";
+                    pad(out, 4); out += "\"intensity\": "; emit_float(out, g.intensity); out += ",\n";
+                    pad(out, 4); out += "\"response\":  "; emit_float(out, g.response); out += "\n";
                     pad(out, 3); out += "}\n";
                     break;
                 }

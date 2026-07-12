@@ -111,6 +111,8 @@ add_library(pictor STATIC
     # Global Illumination
     src/gi/gi_lighting_system.cpp
     src/gi/gi_bake.cpp
+    src/gi/gi_scene_proxy.cpp
+    src/gi/gi_probe_field.cpp
 
     # Post-Process (host-driven, real Vulkan)
     src/postprocess/postprocess_pipeline.cpp
@@ -534,6 +536,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_blur.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/color_grade.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/dof.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssao_apply.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/motion_blur.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/fxaa.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp

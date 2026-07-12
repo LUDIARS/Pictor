@@ -14,10 +14,13 @@ const char* const kPostProcessDepthTarget  = "__depth__";
 
 namespace {
 
-// 組み込みチェーンの中間ターゲット論理名 (ping-pong / DoF 出力)。
-constexpr const char* kPingTarget = "pp_ping";
-constexpr const char* kPongTarget = "pp_pong";
-constexpr const char* kDofTarget  = "pp_dof";
+// 組み込みチェーンの中間ターゲット論理名 (ping-pong / 途中挿入 pass の出力)。
+constexpr const char* kPingTarget  = "pp_ping";
+constexpr const char* kPongTarget  = "pp_pong";
+constexpr const char* kDofTarget   = "pp_dof";
+constexpr const char* kSsaoTarget  = "pp_ssao";
+constexpr const char* kMBlurTarget = "pp_mblur";
+constexpr const char* kLdrTarget   = "pp_ldr";
 
 // 旧 PostProcessPipeline の push constant 構造体と同一レイアウト。
 // build_post_process_chain() / refresh_post_process_chain() はこの構造体を
@@ -31,6 +34,12 @@ struct GradePC {
     float    vignette_intensity, vignette_radius, vignette_softness;
     float    lut_intensity, lut_size;
     float    vig_r, vig_g, vig_b;
+    // 2026-07 拡張 (spec/feature/postprocess-effects-design.md §2.1):
+    // 色収差 + フィルムグレインは独立 pass を増やさず grade へ統合する。
+    // 既存 14 フィールドの前方レイアウトは不変 — 旧シェーダとの
+    // push constant 互換を保ったまま末尾追加のみ。
+    float    ca_intensity, ca_start_radius;
+    float    grain_intensity, grain_response, grain_seed;
 };
 // dof.frag の push constant (shaders/postprocess/dof.frag と同一レイアウト)。
 struct DofPC {
@@ -38,6 +47,26 @@ struct DofPC {
     float    near_start, near_end, far_start, far_end;
     uint32_t sample_count;
     float    texel_x, texel_y, pad0, pad1;
+};
+// ssao_apply.frag の push constant。
+struct SsaoPC {
+    float    radius_px, bias, range, intensity;
+    float    power, texel_x, texel_y;
+    uint32_t sample_count;
+};
+// motion_blur.frag の push constant。 reproj = prevVP * inverse(currVP) を
+// 1 枚に畳むことで push 128B 制限内に収める (行列 2 枚は入らない)。
+struct MotionBlurPC {
+    float    reproj[16];
+    float    intensity, max_velocity;
+    uint32_t sample_count;
+    uint32_t valid;          // 0 = 素通し (初回フレーム / カメラワープ)
+};
+// fxaa.frag の push constant。
+struct FxaaPC {
+    float texel_x, texel_y;
+    float edge_threshold, edge_threshold_min;
+    float subpix_quality, pad0, pad1, pad2;
 };
 
 // 構造体を push_data バイト列へ詰める。
@@ -83,6 +112,45 @@ DofPC make_dof_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
     return pc;
 }
 
+SsaoPC make_ssao_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
+    const auto& ao = cfg.ssao;
+    SsaoPC pc{};
+    pc.radius_px    = ao.radius;
+    pc.bias         = ao.bias;
+    pc.range        = ao.range;
+    // disabled → intensity 0 で恒等へ縮退 (pass 構造は維持、 refresh 用)。
+    pc.intensity    = ao.enabled ? ao.intensity : 0.0f;
+    pc.power        = ao.power;
+    pc.texel_x      = 1.0f / static_cast<float>(w ? w : 1);
+    pc.texel_y      = 1.0f / static_cast<float>(h ? h : 1);
+    pc.sample_count = ao.sample_count;
+    return pc;
+}
+
+MotionBlurPC make_motion_blur_pc(const PostProcessConfig& cfg) {
+    const auto& mb = cfg.motion_blur;
+    MotionBlurPC pc{};
+    std::memcpy(pc.reproj, mb.reproj_matrix, sizeof(pc.reproj));
+    pc.intensity    = mb.intensity;
+    pc.max_velocity = mb.max_velocity;
+    pc.sample_count = mb.sample_count;
+    // disabled / 行列未確定 → valid 0 で素通し (恒等縮退)。
+    pc.valid        = (mb.enabled && mb.matrix_valid) ? 1u : 0u;
+    return pc;
+}
+
+FxaaPC make_fxaa_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
+    const auto& fx = cfg.fxaa;
+    FxaaPC pc{};
+    pc.texel_x = 1.0f / static_cast<float>(w ? w : 1);
+    pc.texel_y = 1.0f / static_cast<float>(h ? h : 1);
+    // disabled → コントラスト閾値を超えるエッジが存在しなくなり素通し。
+    pc.edge_threshold     = fx.enabled ? fx.edge_threshold : 1.0e9f;
+    pc.edge_threshold_min = fx.enabled ? fx.edge_threshold_min : 1.0e9f;
+    pc.subpix_quality     = fx.enabled ? fx.subpix_quality : 0.0f;
+    return pc;
+}
+
 GradePC make_grade_pc(const PostProcessConfig& cfg, bool output_is_srgb,
                       bool lut_loaded) {
     const auto& bloom = cfg.bloom;
@@ -106,6 +174,14 @@ GradePC make_grade_pc(const PostProcessConfig& cfg, bool output_is_srgb,
     pc.vig_r = vig.color[0];
     pc.vig_g = vig.color[1];
     pc.vig_b = vig.color[2];
+
+    const auto& ca    = cfg.chromatic_aberration;
+    const auto& grain = cfg.film_grain;
+    pc.ca_intensity    = ca.enabled ? ca.intensity : 0.0f;
+    pc.ca_start_radius = ca.start_radius;
+    pc.grain_intensity = grain.enabled ? grain.intensity : 0.0f;
+    pc.grain_response  = grain.response;
+    pc.grain_seed      = grain.seed;
     return pc;
 }
 
@@ -142,6 +218,43 @@ std::vector<PushFieldDesc> dof_layout() {
         {"_pad1",          PushFieldType::FLOAT, 44},
     };
 }
+std::vector<PushFieldDesc> ssao_layout() {
+    return {
+        {"radius_px",    PushFieldType::FLOAT, 0},
+        {"bias",         PushFieldType::FLOAT, 4},
+        {"range",        PushFieldType::FLOAT, 8},
+        {"intensity",    PushFieldType::FLOAT, 12},
+        {"power",        PushFieldType::FLOAT, 16},
+        {"texel_x",      PushFieldType::FLOAT, 20},
+        {"texel_y",      PushFieldType::FLOAT, 24},
+        {"sample_count", PushFieldType::UINT,  28},
+    };
+}
+std::vector<PushFieldDesc> motion_blur_layout() {
+    std::vector<PushFieldDesc> fields;
+    fields.reserve(20);
+    for (uint32_t i = 0; i < 16; ++i) {
+        fields.push_back({"reproj[" + std::to_string(i) + "]",
+                          PushFieldType::FLOAT, i * 4});
+    }
+    fields.push_back({"intensity",    PushFieldType::FLOAT, 64});
+    fields.push_back({"max_velocity", PushFieldType::FLOAT, 68});
+    fields.push_back({"sample_count", PushFieldType::UINT,  72});
+    fields.push_back({"valid",        PushFieldType::UINT,  76});
+    return fields;
+}
+std::vector<PushFieldDesc> fxaa_layout() {
+    return {
+        {"texel_x",            PushFieldType::FLOAT, 0},
+        {"texel_y",            PushFieldType::FLOAT, 4},
+        {"edge_threshold",     PushFieldType::FLOAT, 8},
+        {"edge_threshold_min", PushFieldType::FLOAT, 12},
+        {"subpix_quality",     PushFieldType::FLOAT, 16},
+        {"_pad0",              PushFieldType::FLOAT, 20},
+        {"_pad1",              PushFieldType::FLOAT, 24},
+        {"_pad2",              PushFieldType::FLOAT, 28},
+    };
+}
 std::vector<PushFieldDesc> grade_layout() {
     return {
         {"bloom_intensity",    PushFieldType::FLOAT, 0},
@@ -158,6 +271,11 @@ std::vector<PushFieldDesc> grade_layout() {
         {"vig_r",              PushFieldType::FLOAT, 44},
         {"vig_g",              PushFieldType::FLOAT, 48},
         {"vig_b",              PushFieldType::FLOAT, 52},
+        {"ca_intensity",       PushFieldType::FLOAT, 56},
+        {"ca_start_radius",    PushFieldType::FLOAT, 60},
+        {"grain_intensity",    PushFieldType::FLOAT, 64},
+        {"grain_response",     PushFieldType::FLOAT, 68},
+        {"grain_seed",         PushFieldType::FLOAT, 72},
     };
 }
 
@@ -198,6 +316,38 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         scene_src = kDofTarget;
     }
 
+    // Pass 0b (optional): SSAO (PP 近似)  scene + depth → pp_ssao
+    //   深度差から遮蔽を推定してシーン色へ乗算する。 bloom より前に置き、
+    //   AO の掛かった色が bloom 抽出 / 合成の入力になるようにする。
+    if (cfg.ssao.enabled) {
+        PostProcessPassDef p;
+        p.name        = "ssao_apply";
+        p.vert_spv    = fs_vert;
+        p.frag_spv    = shader_dir + "/ssao_apply.frag.spv";
+        p.inputs      = {scene_src, kPostProcessDepthTarget};
+        p.output      = kSsaoTarget;
+        p.push_layout = ssao_layout();
+        store_pc(p.push_data, make_ssao_pc(cfg, extent_w, extent_h));
+        chain.passes.push_back(std::move(p));
+        scene_src = kSsaoTarget;
+    }
+
+    // Pass 0c (optional): camera motion blur  scene + depth → pp_mblur
+    //   深度から再構築した NDC を reproj (prevVP * inv currVP) で前フレームへ
+    //   再投影し、 速度ベクトルに沿ってサンプルする。 HDR 空間 (tonemap 前)。
+    if (cfg.motion_blur.enabled) {
+        PostProcessPassDef p;
+        p.name        = "motion_blur";
+        p.vert_spv    = fs_vert;
+        p.frag_spv    = shader_dir + "/motion_blur.frag.spv";
+        p.inputs      = {scene_src, kPostProcessDepthTarget};
+        p.output      = kMBlurTarget;
+        p.push_layout = motion_blur_layout();
+        store_pc(p.push_data, make_motion_blur_pc(cfg));
+        chain.passes.push_back(std::move(p));
+        scene_src = kMBlurTarget;
+    }
+
     // Pass 1: bright-pass extraction  scene → ping
     {
         PostProcessPassDef p;
@@ -234,20 +384,37 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         store_pc(p.push_data, make_blur_v_pc(cfg, extent_h));
         chain.passes.push_back(std::move(p));
     }
-    // Pass 4: final composite (bloom + tonemap + LUT + vignette)  scene+ping+lut → output
+    // Pass 4: final composite (bloom + tonemap + LUT + vignette + CA + grain)
+    //   scene+ping+lut → output (FXAA 有効時は pp_ldr へ差し替え)
     {
         PostProcessPassDef p;
         p.name        = "color_grade";
         p.vert_spv    = fs_vert;
         p.frag_spv    = shader_dir + "/color_grade.frag.spv";
         p.inputs      = {scene_src, kPingTarget, kPostProcessLutTarget};
-        p.output      = kPostProcessOutputTarget;
+        p.output      = cfg.fxaa.enabled ? kLdrTarget
+                                         : kPostProcessOutputTarget;
         p.push_layout = grade_layout();
         store_pc(p.push_data, make_grade_pc(cfg, output_is_srgb, lut_loaded));
         chain.passes.push_back(std::move(p));
     }
 
-    // ── 任意追加 pass (SSAO / FXAA 等)。 現状 KS は空で呼ぶ ──────────────
+    // Pass 5 (optional): FXAA  pp_ldr → output
+    //   トーンマップ後の LDR で走る。 grade が輝度を alpha へ書くため
+    //   シェーダ側の luma 計算は alpha 読みで済む。
+    if (cfg.fxaa.enabled) {
+        PostProcessPassDef p;
+        p.name        = "fxaa";
+        p.vert_spv    = fs_vert;
+        p.frag_spv    = shader_dir + "/fxaa.frag.spv";
+        p.inputs      = {kLdrTarget};
+        p.output      = kPostProcessOutputTarget;
+        p.push_layout = fxaa_layout();
+        store_pc(p.push_data, make_fxaa_pc(cfg, extent_w, extent_h));
+        chain.passes.push_back(std::move(p));
+    }
+
+    // ── 任意追加 pass (ホスト定義)。 現状 KS は空で呼ぶ ──────────────────
     for (const auto& e : extra) chain.passes.push_back(e);
 
     // 中間ターゲット (予約名を除く) を pass の入出力から収集する。
@@ -277,6 +444,12 @@ void refresh_post_process_chain(PostProcessChain&        chain,
             store_pc(p.push_data, make_grade_pc(cfg, output_is_srgb, lut_loaded));
         } else if (p.name == "dof") {
             store_pc(p.push_data, make_dof_pc(cfg, extent_w, extent_h));
+        } else if (p.name == "ssao_apply") {
+            store_pc(p.push_data, make_ssao_pc(cfg, extent_w, extent_h));
+        } else if (p.name == "motion_blur") {
+            store_pc(p.push_data, make_motion_blur_pc(cfg));
+        } else if (p.name == "fxaa") {
+            store_pc(p.push_data, make_fxaa_pc(cfg, extent_w, extent_h));
         }
     }
 }

@@ -1,15 +1,21 @@
 // Pictor — Post-Process Final Composite
 // One fullscreen pass that performs, in order:
+//   0. chromatic aberration (radial RGB shift on the scene fetch)
 //   1. additive bloom composite (HDR)
 //   2. exposure + tone mapping (HDR -> LDR)
 //   3. saturation
 //   4. LUT color grading (neutral LUT strip)
 //   5. vignette
 //   6. gamma correction
+//   7. film grain (post-gamma, luminance-weighted)
 //
 // set 0 binding 0: scene HDR color
 // set 0 binding 1: blurred bloom texture
 // set 0 binding 2: LUT strip (RGBA8, lut_size tall x lut_size*lut_size wide)
+//
+// alpha には最終輝度を書く — 後段 FXAA (fxaa.frag) が luma 計算を
+// alpha 読みで済ませるため (grain 適用前の値。 grain はノイズなので
+// エッジ検出へ混ぜない)。
 
 #version 450
 
@@ -35,7 +41,17 @@ layout(push_constant) uniform Params {
     float vig_r;
     float vig_g;
     float vig_b;
+    float ca_intensity;      // 色収差の最大ずらし量 (0 = 無効)
+    float ca_start_radius;   // 効き始めの正規化半径
+    float grain_intensity;   // フィルムグレイン強度 (0 = 無効)
+    float grain_response;    // 輝度依存 (明部で弱める) 0..1
+    float grain_seed;        // 毎フレーム進むシード (静止ノイズ防止)
 };
+
+// 画面座標 + シードから決定的な擬似乱数を得る (定番の sin-fract ハッシュ)。
+float grainHash(vec2 uv, float seed) {
+    return fract(sin(dot(uv + seed, vec2(12.9898, 78.233))) * 43758.5453);
+}
 
 // ---- Tone mapping operators ----
 vec3 toneMapACES(vec3 c) {
@@ -81,6 +97,20 @@ void main() {
     vec3 scene = texture(sceneColor, inUV).rgb;
     vec3 bloom = texture(bloomTex, inUV).rgb;
 
+    // 0. chromatic aberration — R/B を放射方向へ逆向きにずらして再サンプル。
+    //    中心 (ca_start_radius 以内) は効かせない。 bloom はずらさない。
+    if (ca_intensity > 0.0) {
+        vec2 fromCenter = inUV - 0.5;
+        float radius = length(fromCenter) * 1.41421356;
+        float amount = smoothstep(ca_start_radius, 1.0, radius)
+                       * ca_intensity * 0.01;   // UV 単位へスケール
+        if (amount > 0.0) {
+            vec2 dir = fromCenter * amount;
+            scene.r = texture(sceneColor, inUV + dir).r;
+            scene.b = texture(sceneColor, inUV - dir).b;
+        }
+    }
+
     // 1. additive bloom composite (HDR space)
     vec3 color = scene + bloom * bloom_intensity;
 
@@ -117,5 +147,16 @@ void main() {
     // 6. gamma correction (linear -> display)
     color = pow(max(color, 0.0), vec3(1.0 / gamma));
 
-    outColor = vec4(color, 1.0);
+    // FXAA 用の輝度 (grain 適用前 — ノイズをエッジ検出へ混ぜない)。
+    float outLuma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+
+    // 7. film grain — 輝度依存の減衰付きで加算 (post-gamma)。
+    if (grain_intensity > 0.0) {
+        float noise = grainHash(inUV, grain_seed) - 0.5;
+        float lumaWeight = 1.0 - outLuma * grain_response;
+        color += noise * grain_intensity * 0.1 * lumaWeight;
+        color = clamp(color, 0.0, 1.0);
+    }
+
+    outColor = vec4(color, outLuma);
 }

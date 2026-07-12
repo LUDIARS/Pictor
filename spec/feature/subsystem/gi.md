@@ -1,15 +1,21 @@
 # GI — グローバルイルミネーション (影 / AO / プローブ)
 
-> 実装: `include/pictor/gi/` (2), `src/gi/`
+> 実装: `include/pictor/gi/` (5), `src/gi/`
+> 設計: [`../gi-bake-realtime-design.md`](../gi-bake-realtime-design.md) (phase 分割と実装状況の正本)
 
 影 (CSM) + 環境遮蔽 (SSAO) + 間接光 (irradiance probe) のランタイム + オフライン bake。
+**phase 1 (CPU 経路) 実装済み** — bake 実演算と probe grid の CPU relight / 補間が動く。
+GPU dispatch (compute / CSM 実描画) は phase 2 (`GIGpuExecutor`) の領分で未実装。
 
 ## 構成
 
 | クラス | 役割 |
 |---|---|
-| `GILightingSystem` | ランタイム GI パス統括。可視カリング後に shadow / SSAO / probe sampling の 3 前パスを実行、cascade uniform と GPU binding を管理 |
-| `GIBakeSystem` | Static プール向けの高品質オフライン事前計算 → GPU SSBO にキャッシュ |
+| `GILightingSystem` | ランタイム GI パス統括。可視カリング後に shadow / SSAO / probe sampling の 3 前パスを実行、cascade uniform と GPU binding を管理。probe SH の CPU 保持と dynamic pool の per-object 補間 (`dynamic_object_irradiance()`) |
+| `GIBakeSystem` | Static プール向けの高品質オフライン事前計算 (CPU レイキャスト実演算) → binary 永続化 |
+| `GISceneProxy` | AABB プロキシへの遮蔽クエリ (slab 法 any-hit / closest-hit)。bake / probe 構築の共通基盤 |
+| `GIProbeField` | probe grid の SH 構築 + 遮蔽キャッシュ + `relight()` (動的ライト追従 = phase 1 のリアルタイム GI) + trilinear 補間 |
+| `gi_sh.h` | SH L2 射影 / irradiance 評価 / fibonacci sphere (純関数) |
 
 設定: `GIConfig` (shadows+SSAO+probes 統合) / `ShadowMapConfig` (cascade 数/解像度/PCF・PCSS/bias) / `SSAOConfig` / `GIProbeConfig` (grid 原点/間隔/寸法)。bake は `GIBakeConfig` + `BakeTarget` enum (SHADOW_MAP / AMBIENT_OCCLUSION / PROBE_IRRADIANCE / LIGHTMAP)。
 

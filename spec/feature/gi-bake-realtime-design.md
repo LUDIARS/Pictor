@@ -146,13 +146,20 @@ SSAO は (a) PP 近似 (`postprocess-effects-design.md` §2.1、シーン色乗�
 | 8 | `pbr.frag`/`lit.frag` GI 項 + integration 手順 | 2 | 6,7 |
 | 9 | SSGI / DDGI 風更新 / reflection probe | 3 | 6 |
 
-## 5. phase 1 実装状況 (2026-07-12, `feat/postprocess-gi`)
+## 5. phase 1 実装状況 (2026-07-13, `feat/postprocess-gi`)
 
 | 項目 | 実体 | 状態 |
 |---|---|---|
-| `GISceneProxy` | `include/pictor/gi/gi_scene_proxy.h` + `src/gi/gi_scene_proxy.cpp` | ⬜ |
-| `GIProbeField` | `include/pictor/gi/gi_probe_field.h` + `src/gi/gi_probe_field.cpp` | ⬜ |
-| SH L2 射影/評価ユーティリティ | `include/pictor/gi/gi_sh.h` | ⬜ |
-| bake_ao / bake_shadows / bake_irradiance / bake_lightmap 実装 | `src/gi/gi_bake.cpp` | ⬜ |
-| `upload_probe_data` 実転送 | `src/gi/gi_lighting_system.cpp` | ⬜ |
-| headless テスト | `tests/unit_gi_bake_test.cpp` ほか | ⬜ |
+| `GISceneProxy` | `include/pictor/gi/gi_scene_proxy.h` + `src/gi/gi_scene_proxy.cpp` (slab 法 any-hit / closest-hit、self-ignore) | ✅ |
+| `GIProbeField` | `include/pictor/gi/gi_probe_field.h` + `src/gi/gi_probe_field.cpp` (遮蔽キャッシュ + relight + trilinear `sample_probe_grid`) | ✅ |
+| SH L2 射影/評価ユーティリティ | `include/pictor/gi/gi_sh.h` (`sh_add_radiance` / `sh_eval_irradiance` / fibonacci sphere) | ✅ |
+| bake_ao / bake_shadows / bake_irradiance / bake_lightmap 実装 | `src/gi/gi_bake.cpp` (`prepare_bake_scene` + 4 パス実演算、progress キャンセル対応) | ✅ |
+| probe データ保持 + per-object 補間 | `gi_lighting_system.cpp`: `upload_probe_data` が CPU 保持、`execute_gi_probe_pass` が dynamic pool を毎フレーム trilinear 補間 (`dynamic_object_irradiance()` で公開)。**実 GPU 転送は phase 2 (`GIGpuExecutor`) へ** — `GpuAllocation` は現状アカウンティングのみで実 VkBuffer を持たないため、この層で「転送した」と偽らない | ✅ (CPU 経路) |
+| headless テスト | `tests/unit_gi_probe_field_test.cpp` (SH/proxy/field/relight/include_direct) + `tests/unit_gi_bake_test.cpp` (幾何反映/決定性/round-trip/キャンセル) | ✅ |
+
+設計判断の追記:
+- **probe SH は既定で間接光 (空 + 1 次バウンス) のみ**を持つ。 直接光はマテリアル
+  シェーダが解析的に評価するため、 probe に畳むと二重計上になる
+  (`GIProbeField::BuildParams::include_direct` で opt-in 可)。
+- `BakedShadow::depths` の意味を「静的太陽可視率 (soft shadow factor)」 と定義。
+  cascade 割当はカメラ依存でありベイク時に決められないため flags は全立て。

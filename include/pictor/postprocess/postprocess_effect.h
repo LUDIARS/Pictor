@@ -93,16 +93,79 @@ struct ColorGradingConfig {
     uint32_t    lut_size      = 16;    ///< LUT cube edge (strip = size x size*size)
 };
 
+/// FXAA 3.11 (quality) — LDR (トーンマップ後) で走るスクリーンスペース AA。
+/// 有効時は grade の出力が中間ターゲットへ差し替わる構造変更を伴う
+/// (`build_post_process_chain()` — 切替は rebuild_chain() が必要)。
+struct FXAAConfig {
+    bool  enabled            = false;
+    float edge_threshold     = 0.166f;   ///< 相対輝度コントラスト閾値
+    float edge_threshold_min = 0.0833f;  ///< 暗部の絶対輝度閾値
+    float subpix_quality     = 0.75f;    ///< サブピクセル AA 強度 0..1
+};
+
+/// SSAO (post-process 近似) — 深度差から遮蔽を推定しシーン色へ乗算する。
+/// 直接光まで減衰する近似 (カジュアル用途向け)。ライティング項別の正確な
+/// 適用 (間接光のみ減衰) は GI 側の責務
+/// (`spec/feature/gi-bake-realtime-design.md` §3)。
+struct SSAOPostConfig {
+    bool     enabled      = false;
+    uint32_t sample_count = 12;      ///< spiral kernel タップ数 (シェーダ側上限 32)
+    float    radius       = 8.0f;    ///< サンプル半径 (ピクセル)
+    float    bias         = 0.01f;   ///< 無視する深度差の下限 (自己遮蔽防止)
+    float    range        = 0.05f;   ///< 遮蔽とみなす深度差の上限 (depth 単位)
+    float    intensity    = 1.0f;    ///< 遮蔽の効き 0..1
+    float    power        = 1.5f;    ///< AO カーブ (大きいほど締まる)
+};
+
+/// カメラ再投影 Motion Blur。 per-object velocity buffer は将来 (phase 3)。
+struct MotionBlurConfig {
+    bool     enabled      = false;
+    float    intensity    = 1.0f;    ///< ブラー長スケール
+    uint32_t sample_count = 8;       ///< 速度ベクトルに沿うタップ数 (上限 16)
+    float    max_velocity = 0.05f;   ///< NDC 単位の速度クランプ
+    /// prevVP * inverse(currVP) — ホストが毎フレーム更新し
+    /// `refresh_post_process_chain()` が push constant へ詰め直す。
+    /// レイアウトは float4x4::m と同一 (row-major 添字 m[row][col] を平坦化)。
+    float    reproj_matrix[16] = {1.0f, 0.0f, 0.0f, 0.0f,
+                                  0.0f, 1.0f, 0.0f, 0.0f,
+                                  0.0f, 0.0f, 1.0f, 0.0f,
+                                  0.0f, 0.0f, 0.0f, 1.0f};
+    /// 初回フレーム / カメラワープ直後は false にする (そのフレームは素通し)。
+    bool     matrix_valid = false;
+};
+
+/// 色収差 — 画面端で RGB を放射方向にずらす (grade pass へ統合)。
+struct ChromaticAberrationConfig {
+    bool  enabled      = false;
+    float intensity    = 0.5f;   ///< 最大ずらし量 (画面幅比のスケール 0..1)
+    float start_radius = 0.3f;   ///< 効き始めの正規化半径 (中心 0 .. 角 ~1)
+};
+
+/// フィルムグレイン (grade pass へ統合)。 seed は毎フレーム進める
+/// (`refresh_post_process_chain()` が config の値を転記するだけ —
+/// 進行はホスト責務。固定なら静止ノイズになる)。
+struct FilmGrainConfig {
+    bool  enabled   = false;
+    float intensity = 0.35f;
+    float response  = 0.8f;   ///< 輝度依存 (明部でグレインを弱める) 0..1
+    float seed      = 0.0f;
+};
+
 /// Aggregated post-process stack configuration.
 /// Determines which effects are active and their parameters.
 struct PostProcessConfig {
-    HDRConfig            hdr;
-    BloomConfig          bloom;
-    DepthOfFieldConfig   depth_of_field;
-    GaussianBlurConfig   gaussian_blur;
-    ToneMappingConfig    tone_mapping;
-    VignetteConfig       vignette;
-    ColorGradingConfig   color_grading;
+    HDRConfig                 hdr;
+    BloomConfig               bloom;
+    DepthOfFieldConfig        depth_of_field;
+    GaussianBlurConfig        gaussian_blur;
+    ToneMappingConfig         tone_mapping;
+    VignetteConfig            vignette;
+    ColorGradingConfig        color_grading;
+    SSAOPostConfig            ssao;
+    MotionBlurConfig          motion_blur;
+    FXAAConfig                fxaa;
+    ChromaticAberrationConfig chromatic_aberration;
+    FilmGrainConfig           film_grain;
 };
 
 } // namespace pictor

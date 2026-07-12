@@ -26,6 +26,24 @@ struct GradePC {
     float    vignette_intensity, vignette_radius, vignette_softness;
     float    lut_intensity, lut_size;
     float    vig_r, vig_g, vig_b;
+    float    ca_intensity, ca_start_radius;
+    float    grain_intensity, grain_response, grain_seed;
+};
+struct SsaoPC {
+    float    radius_px, bias, range, intensity;
+    float    power, texel_x, texel_y;
+    uint32_t sample_count;
+};
+struct MotionBlurPC {
+    float    reproj[16];
+    float    intensity, max_velocity;
+    uint32_t sample_count;
+    uint32_t valid;
+};
+struct FxaaPC {
+    float texel_x, texel_y;
+    float edge_threshold, edge_threshold_min;
+    float subpix_quality, pad0, pad1, pad2;
 };
 
 template <typename T>
@@ -343,6 +361,152 @@ int main() {
 
         PT_ASSERT(!remove_post_process_pass(chain, "ssao"),
                   "chain edit: double removal rejected");
+    }
+
+    // 9. SSAO 有効 — scene 直後 (bloom 前) に挿入され、 後段が pp_ssao を読む。
+    {
+        PostProcessConfig cfg;
+        cfg.ssao.enabled      = true;
+        cfg.ssao.radius       = 10.0f;
+        cfg.ssao.sample_count = 16;
+        cfg.ssao.intensity    = 0.8f;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1920, 1080, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{5}, "ssao chain: 5 passes");
+        PT_ASSERT(chain.passes[0].name == "ssao_apply", "ssao chain: ssao first");
+        PT_ASSERT(chain.passes[0].inputs[0] == kPostProcessSceneTarget,
+                  "ssao chain: reads scene");
+        PT_ASSERT(chain.passes[0].inputs[1] == kPostProcessDepthTarget,
+                  "ssao chain: reads depth");
+        PT_ASSERT(chain.passes[0].output == "pp_ssao", "ssao chain: -> pp_ssao");
+        PT_ASSERT(chain.passes[1].inputs[0] == "pp_ssao",
+                  "ssao chain: extract rewired");
+        PT_ASSERT(chain.passes[4].inputs[0] == "pp_ssao",
+                  "ssao chain: grade rewired");
+
+        SsaoPC pc = read_pc<SsaoPC>(chain.passes[0]);
+        PT_ASSERT(feq(pc.radius_px, 10.0f),   "ssao pc: radius");
+        PT_ASSERT(feq(pc.intensity, 0.8f),    "ssao pc: intensity");
+        PT_ASSERT_OP(pc.sample_count, ==, uint32_t{16}, "ssao pc: samples");
+        PT_ASSERT(feq(pc.texel_x, 1.0f / 1920.0f), "ssao pc: texel x");
+
+        // refresh で intensity が更新される。 disabled にすると恒等 (0)。
+        cfg.ssao.intensity = 0.0f;
+        refresh_post_process_chain(chain, cfg, 1920, 1080, false, false);
+        pc = read_pc<SsaoPC>(chain.passes[0]);
+        PT_ASSERT(feq(pc.intensity, 0.0f), "ssao pc: refresh updates intensity");
+    }
+
+    // 10. Motion blur — 行列未確定 (matrix_valid=false) は valid=0 で素通し、
+    //     refresh がホスト更新の行列を毎フレーム詰め直す。
+    {
+        PostProcessConfig cfg;
+        cfg.motion_blur.enabled = true;   // まだ matrix_valid = false
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 800, 600, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{5}, "mblur chain: 5 passes");
+        PT_ASSERT(chain.passes[0].name == "motion_blur", "mblur chain: first");
+        PT_ASSERT(chain.passes[0].output == "pp_mblur", "mblur chain: -> pp_mblur");
+
+        MotionBlurPC pc = read_pc<MotionBlurPC>(chain.passes[0]);
+        PT_ASSERT_OP(pc.valid, ==, uint32_t{0}, "mblur pc: invalid until host sets matrix");
+        PT_ASSERT(feq(pc.reproj[0], 1.0f), "mblur pc: identity default");
+
+        cfg.motion_blur.matrix_valid = true;
+        cfg.motion_blur.reproj_matrix[12] = 0.25f;   // 平行移動成分
+        refresh_post_process_chain(chain, cfg, 800, 600, false, false);
+        pc = read_pc<MotionBlurPC>(chain.passes[0]);
+        PT_ASSERT_OP(pc.valid, ==, uint32_t{1}, "mblur pc: valid after host update");
+        PT_ASSERT(feq(pc.reproj[12], 0.25f), "mblur pc: refresh carries matrix");
+    }
+
+    // 11. FXAA — grade の出力が pp_ldr へ差し替わり、 fxaa が末尾で
+    //     pp_ldr → __output__ を張る (LDR で走る)。
+    {
+        PostProcessConfig cfg;
+        cfg.fxaa.enabled = true;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1280, 720, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{5}, "fxaa chain: 5 passes");
+        const PostProcessPassDef* gr = find_pass(chain, "color_grade");
+        PT_ASSERT(gr != nullptr && gr->output == "pp_ldr",
+                  "fxaa chain: grade -> pp_ldr");
+        PT_ASSERT(chain.passes[4].name == "fxaa", "fxaa chain: fxaa last");
+        PT_ASSERT(chain.passes[4].inputs[0] == "pp_ldr",
+                  "fxaa chain: fxaa reads pp_ldr");
+        PT_ASSERT(chain.passes[4].output == kPostProcessOutputTarget,
+                  "fxaa chain: fxaa writes swapchain");
+
+        FxaaPC pc = read_pc<FxaaPC>(chain.passes[4]);
+        PT_ASSERT(feq(pc.edge_threshold, 0.166f), "fxaa pc: edge threshold");
+        PT_ASSERT(feq(pc.subpix_quality, 0.75f),  "fxaa pc: subpix quality");
+    }
+
+    // 12. CA / film grain は grade へ統合 (pass を増やさない)。
+    //     無効時は 0 へ縮退、 refresh が grain seed を運ぶ。
+    {
+        PostProcessConfig cfg;
+        cfg.chromatic_aberration.enabled   = true;
+        cfg.chromatic_aberration.intensity = 0.6f;
+        cfg.film_grain.enabled   = true;
+        cfg.film_grain.intensity = 0.4f;
+        cfg.film_grain.seed      = 7.0f;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 800, 600, false, false);
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{4},
+                     "ca/grain: no extra pass");
+
+        GradePC gr = read_pc<GradePC>(chain.passes[3]);
+        PT_ASSERT(feq(gr.ca_intensity, 0.6f),    "grade pc: ca intensity");
+        PT_ASSERT(feq(gr.grain_intensity, 0.4f), "grade pc: grain intensity");
+        PT_ASSERT(feq(gr.grain_seed, 7.0f),      "grade pc: grain seed");
+
+        cfg.film_grain.seed = 8.0f;
+        cfg.chromatic_aberration.enabled = false;
+        refresh_post_process_chain(chain, cfg, 800, 600, false, false);
+        gr = read_pc<GradePC>(chain.passes[3]);
+        PT_ASSERT(feq(gr.grain_seed, 8.0f),   "grade pc: seed advances via refresh");
+        PT_ASSERT(feq(gr.ca_intensity, 0.0f), "grade pc: ca off -> 0");
+    }
+
+    // 13. 全部盛り — 設計書 §2.1 の順序:
+    //     dof → ssao → mblur → extract → blurH → blurV → grade → fxaa。
+    {
+        PostProcessConfig cfg;
+        cfg.depth_of_field.enabled = true;
+        cfg.ssao.enabled           = true;
+        cfg.motion_blur.enabled    = true;
+        cfg.fxaa.enabled           = true;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1920, 1080, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{8}, "full chain: 8 passes");
+        PT_ASSERT(chain.passes[0].name == "dof",          "full chain order 0");
+        PT_ASSERT(chain.passes[1].name == "ssao_apply",   "full chain order 1");
+        PT_ASSERT(chain.passes[2].name == "motion_blur",  "full chain order 2");
+        PT_ASSERT(chain.passes[3].name == "bloom_extract","full chain order 3");
+        PT_ASSERT(chain.passes[7].name == "fxaa",         "full chain order 7");
+
+        // 配線: dof → ssao → mblur と数珠つなぎ、 extract / grade は最後の
+        // 挿入 pass (pp_mblur) を読む。
+        PT_ASSERT(chain.passes[1].inputs[0] == "pp_dof",   "full: ssao reads dof");
+        PT_ASSERT(chain.passes[2].inputs[0] == "pp_ssao",  "full: mblur reads ssao");
+        PT_ASSERT(chain.passes[3].inputs[0] == "pp_mblur", "full: extract reads mblur");
+        const PostProcessPassDef* gr = find_pass(chain, "color_grade");
+        PT_ASSERT(gr != nullptr && gr->inputs[0] == "pp_mblur",
+                  "full: grade reads mblur");
+
+        // 中間ターゲット: dof/ssao/mblur/ping/pong/ldr = 6。
+        PT_ASSERT_OP(chain.intermediate_names.size(), ==, size_t{6},
+                     "full chain: 6 intermediates");
     }
 
     return report("unit_postprocess_chain_test");

@@ -156,13 +156,17 @@ hit 失敗はフォールバック無し (黒 fade)。
 | 7 | SSR (深度再構築版) / mip-chain bloom / DoF 仕上げ | 2 | — |
 | 8 | Lens Flare / Volumetric Fog / velocity buffer | 3 | 5 |
 
-## 5. phase 1 実装状況 (2026-07-12, `feat/postprocess-gi`)
+## 5. phase 1 実装状況 (2026-07-13, `feat/postprocess-gi`)
 
 | 項目 | 実体 | 状態 |
 |---|---|---|
-| 設定構造体 5 種 + `PostProcessConfig` 拡張 | `postprocess_effect.h` | ⬜ |
-| chain builder: ssao_apply / motion_blur / fxaa 挿入 + grade CA/grain | `postprocess_chain.cpp` | ⬜ |
-| シェーダ 3 本新規 + grade 拡張 | `shaders/postprocess/` | ⬜ |
-| refresh: 再投影行列 / grain seed の毎フレーム更新 | `postprocess_chain.cpp` | ⬜ |
-| headless テスト | `tests/unit_postprocess_chain_test.cpp` | ⬜ |
-| profile JSON ブリッジ | `postprocess_config_bridge.cpp` | ⬜ |
+| 設定構造体 5 種 + `PostProcessConfig` 拡張 | `postprocess_effect.h` (`FXAAConfig` / `SSAOPostConfig` / `MotionBlurConfig` / `ChromaticAberrationConfig` / `FilmGrainConfig`) | ✅ |
+| chain builder: ssao_apply / motion_blur / fxaa 挿入 + grade CA/grain | `postprocess_chain.cpp` (`make_ssao_pc` / `make_motion_blur_pc` / `make_fxaa_pc`、FXAA 有効時 grade → `pp_ldr` 差替) | ✅ |
+| シェーダ 3 本新規 + grade 拡張 | `shaders/postprocess/fxaa.frag` / `ssao_apply.frag` / `motion_blur.frag`、`color_grade.frag` (CA + grain + 輝度 alpha 出力) | ✅ |
+| refresh: 再投影行列 / grain seed の毎フレーム更新 | `refresh_post_process_chain()` の新 pass 分岐 | ✅ |
+| headless テスト | `tests/unit_postprocess_chain_test.cpp` §9-13 (単独/全部盛りの構造・配線・push 値・refresh) | ✅ |
+| profile JSON ブリッジ | `PostProcessKind` 5 種追加 + `pipeline_profile_serializer.cpp` round-trip + `postprocess_config_bridge.cpp` (motion_blur の行列はランタイムデータとして JSON 対象外) | ✅ |
+
+備考: 無効時の組み込みチェーンは従来どおり 4 pass 構造で恒等縮退するが、
+grade の push constant は CA / grain フィールド分 (56B → 76B) 旧版より長い
+(シェーダと同時更新のため互換問題なし)。

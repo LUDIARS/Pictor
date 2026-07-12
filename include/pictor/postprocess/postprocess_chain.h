@@ -193,12 +193,21 @@ void rebuild_intermediate_targets(PostProcessChain& chain);
 /// disabled なエフェクトは旧実装と同じ「push constant で恒等へ縮退」 する
 /// (Bloom 無効 → threshold 1e9、 tonemap 無効 → LINEAR_CLAMP 等)。
 ///
-/// `cfg.depth_of_field.enabled` のとき、 チェーン先頭へ DoF pass を途中挿入
-/// する (High プリセットの経路):
-///   - dof : scene + __depth__ → pp_dof、 push = DofPC レイアウト
-/// 以降の extract / grade は scene の代わりに pp_dof を読む (配線替え)。
-/// DoF 無効時のチェーンは従来の 4 pass とバイト単位で同一 — 有効 / 無効の
-/// 切替は構造変更なので `PostProcessPipeline::rebuild_chain()` を要する。
+/// enabled なエフェクトに応じて任意 pass を途中挿入する
+/// (`spec/feature/postprocess-effects-design.md` §2.1)。 フル構成:
+///   scene → [dof] → [ssao_apply] → [motion_blur] →
+///     extract → blur H → blur V → grade → [fxaa] → __output__
+///   - dof         : scene + __depth__ → pp_dof (DofPC)
+///   - ssao_apply  : 前段 + __depth__ → pp_ssao (SsaoPC、 深度差 AO を乗算)
+///   - motion_blur : 前段 + __depth__ → pp_mblur (MotionBlurPC、 カメラ再投影)
+///   - fxaa        : pp_ldr → __output__ (FxaaPC、 LDR。 有効時は grade の
+///                   出力が pp_ldr へ差し替わる)
+/// 後段の extract / grade は直前の挿入 pass の出力を読む (配線替え)。
+/// 全て無効時のチェーンは従来どおりの 4 pass 構造で、 各 push 値は恒等へ
+/// 縮退する (grade の push は CA / grain フィールド分だけ旧版より長い)。
+/// 各エフェクトの有効 / 無効切替は構造変更なので
+/// `PostProcessPipeline::rebuild_chain()` を要する
+/// (値だけの変更は `refresh_post_process_chain()`)。
 ///
 /// `shader_dir`        : 組み込みシェーダ SPIR-V のディレクトリ。
 /// `extent_w/extent_h` : blur の texel ステップ計算に使う描画解像度。
