@@ -225,24 +225,28 @@ int main() {
     }
 
     // 6. extra pass は組み込み 4 pass のあとに追加される (任意 pass 挿入)。
+    //    組み込み名 (dof / ssao_apply / motion_blur / fxaa / bloom_* /
+    //    color_grade) は refresh が push_data を管理する予約名なので、
+    //    ホスト独自 pass には使わないこと。
     {
         PostProcessConfig cfg;
-        PostProcessPassDef fxaa;
-        fxaa.name     = "fxaa";
-        fxaa.vert_spv = "shaders/fullscreen_quad.vert.spv";
-        fxaa.frag_spv = "shaders/fxaa.frag.spv";
-        fxaa.inputs   = {kPostProcessOutputTarget};
-        fxaa.output   = kPostProcessOutputTarget;
+        PostProcessPassDef custom;
+        custom.name     = "host_custom_fx";
+        custom.vert_spv = "shaders/fullscreen_quad.vert.spv";
+        custom.frag_spv = "shaders/host_custom_fx.frag.spv";
+        custom.inputs   = {kPostProcessOutputTarget};
+        custom.output   = kPostProcessOutputTarget;
 
         PostProcessChain chain = build_post_process_chain(
-            cfg, "shaders", 800, 600, false, false, /*extra=*/{fxaa});
+            cfg, "shaders", 800, 600, false, false, /*extra=*/{custom});
         PT_ASSERT_OP(chain.passes.size(), ==, size_t{5},
                      "extra pass appended after built-in 4");
-        PT_ASSERT(chain.passes[4].name == "fxaa", "extra pass at the tail");
+        PT_ASSERT(chain.passes[4].name == "host_custom_fx",
+                  "extra pass at the tail");
 
         // refresh は extra pass を触らない (push_data 空のまま)。
         refresh_post_process_chain(chain, cfg, 800, 600, false, false);
-        const PostProcessPassDef* fx = find_pass(chain, "fxaa");
+        const PostProcessPassDef* fx = find_pass(chain, "host_custom_fx");
         PT_ASSERT(fx != nullptr && fx->push_data.empty(),
                   "refresh leaves extra pass push_data untouched");
     }

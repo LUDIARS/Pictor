@@ -215,9 +215,12 @@ void rebuild_intermediate_targets(PostProcessChain& chain);
 ///                       (旧実装の二重ガンマ回避をそのまま踏襲)。
 /// `lut_loaded`        : 実 LUT が読めたか (false なら lut_intensity=0)。
 ///
-/// 戻り値の `passes` には組み込み 4 pass のあと、 将来の任意 pass
+/// 戻り値の `passes` には組み込み pass 列のあと、 ホスト定義の任意 pass
 /// (`extra` 引数) が続く。 `extra` の各 pass は inputs/output を論理名で
-/// 指定でき、 SSAO / FXAA 等の挿入に使う (現状 KS は空で呼ぶ)。
+/// 指定できる (現状 KS は空で呼ぶ)。 組み込み pass 名 (dof / ssao_apply /
+/// motion_blur / fxaa / bloom_extract / bloom_blur_h / bloom_blur_v /
+/// color_grade) は `refresh_post_process_chain()` が push_data を管理する
+/// 予約名 — extra には使わないこと。
 PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
                                           const std::string&       shader_dir,
                                           uint32_t                 extent_w,
