@@ -261,15 +261,16 @@ VkRenderPass PostProcessPipeline::get_or_create_output_render_pass_(VkFormat fmt
 }
 
 bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
-                                         bool with_depth) {
+                                         bool with_depth, VkExtent2D extent) {
     rt.fb_render_pass = rp;
     rt.has_depth      = with_depth;
+    rt.extent         = extent;
 
     // ── color image ──
     VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ic.imageType   = VK_IMAGE_TYPE_2D;
     ic.format      = kHdrFormat;
-    ic.extent      = {extent_.width, extent_.height, 1};
+    ic.extent      = {extent.width, extent.height, 1};
     ic.mipLevels   = 1;
     ic.arrayLayers = 1;
     ic.samples     = VK_SAMPLE_COUNT_1_BIT;
@@ -303,7 +304,7 @@ bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
         VkImageCreateInfo dic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         dic.imageType   = VK_IMAGE_TYPE_2D;
         dic.format      = kDepthFormat;
-        dic.extent      = {extent_.width, extent_.height, 1};
+        dic.extent      = {extent.width, extent.height, 1};
         dic.mipLevels   = 1;
         dic.arrayLayers = 1;
         dic.samples     = VK_SAMPLE_COUNT_1_BIT;
@@ -338,8 +339,8 @@ bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
     fi.renderPass      = rp;
     fi.attachmentCount = with_depth ? 2u : 1u;
     fi.pAttachments    = fb_atts;
-    fi.width           = extent_.width;
-    fi.height          = extent_.height;
+    fi.width           = extent.width;
+    fi.height          = extent.height;
     fi.layers          = 1;
     return vkCreateFramebuffer(device_, &fi, nullptr, &rt.fb) == VK_SUCCESS;
 }
@@ -355,16 +356,22 @@ bool PostProcessPipeline::create_targets_() {
     // index 0: scene HDR ターゲット (color + depth, scene render pass)。
     {
         RenderTarget scene;
-        if (!create_target_(scene, rp_scene_, /*with_depth=*/true)) return false;
+        if (!create_target_(scene, rp_scene_, /*with_depth=*/true, extent_))
+            return false;
         scene_index_ = static_cast<int32_t>(targets_.size());
         target_index_[kPostProcessSceneTarget] = scene_index_;
         targets_.push_back(scene);
         fb_scene_ = scene.fb;
     }
     // chain が宣言する中間ターゲット (ping / pong …)。 depth 無し。
+    // target_divisors 宣言があれば縮小して確保する (mip-chain bloom 用)。
     for (const auto& name : chain_.intermediate_names) {
+        const uint32_t div = post_process_target_divisor(chain_, name);
+        const VkExtent2D ext = {std::max(extent_.width / div, 1u),
+                                std::max(extent_.height / div, 1u)};
         RenderTarget rt;
-        if (!create_target_(rt, rp_inter, /*with_depth=*/false)) return false;
+        if (!create_target_(rt, rp_inter, /*with_depth=*/false, ext))
+            return false;
         target_index_[name] = static_cast<int32_t>(targets_.size());
         targets_.push_back(rt);
     }
@@ -717,10 +724,14 @@ bool PostProcessPipeline::create_history_textures_() {
             return false;
         }
 
+        // history image は source ターゲットと同解像度 (縮小ターゲット対応)。
+        const VkExtent2D src_extent =
+            targets_[static_cast<size_t>(entry.source_index)].extent;
+
         VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ic.imageType     = VK_IMAGE_TYPE_2D;
         ic.format        = kHdrFormat;
-        ic.extent        = {extent_.width, extent_.height, 1};
+        ic.extent        = {src_extent.width, src_extent.height, 1};
         ic.mipLevels     = 1;
         ic.arrayLayers   = 1;
         ic.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -789,7 +800,8 @@ bool PostProcessPipeline::create_history_textures_() {
 void PostProcessPipeline::record_history_copies_(VkCommandBuffer cmd) {
     for (const auto& entry : history_) {
         if (entry.source_index < 0) continue;
-        VkImage src = targets_[static_cast<size_t>(entry.source_index)].image;
+        const auto& src_rt = targets_[static_cast<size_t>(entry.source_index)];
+        VkImage src = src_rt.image;
 
         VkImageMemoryBarrier pre[2]{};
         // source: SHADER_READ_ONLY → TRANSFER_SRC
@@ -815,7 +827,7 @@ void PostProcessPipeline::record_history_copies_(VkCommandBuffer cmd) {
         VkImageCopy region{};
         region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.extent         = {extent_.width, extent_.height, 1};
+        region.extent         = {src_rt.extent.width, src_rt.extent.height, 1};
         vkCmdCopyImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        entry.tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &region);
@@ -1064,11 +1076,15 @@ void PostProcessPipeline::record(VkCommandBuffer cmd, uint32_t output_index,
             fb = targets_[static_cast<size_t>(cp.output_index)].fb;
         }
 
-        // viewport 上書き (exposure_measure の 1x1 等)。 0 = フル解像度。
-        VkExtent2D pass_extent = extent_;
+        // 描画領域: 出力ターゲットの実解像度 (縮小ターゲットは小さい)。
+        // viewport 上書き (exposure_measure の 1x1 等) があればそれが勝つ。
+        VkExtent2D pass_extent =
+            (cp.output_index >= 0)
+                ? targets_[static_cast<size_t>(cp.output_index)].extent
+                : extent_;
         if (cp.viewport_w > 0 && cp.viewport_h > 0) {
-            pass_extent = {std::min(cp.viewport_w, extent_.width),
-                           std::min(cp.viewport_h, extent_.height)};
+            pass_extent = {std::min(cp.viewport_w, pass_extent.width),
+                           std::min(cp.viewport_h, pass_extent.height)};
         }
         VkViewport vp{0.0f, 0.0f, static_cast<float>(pass_extent.width),
                       static_cast<float>(pass_extent.height), 0.0f, 1.0f};

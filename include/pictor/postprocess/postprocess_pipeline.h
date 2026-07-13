@@ -157,6 +157,8 @@ private:
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView    view   = VK_NULL_HANDLE;
         VkFramebuffer  fb     = VK_NULL_HANDLE;
+        /// このターゲットの実解像度 (縮小ターゲットはフル解像度 / divisor)。
+        VkExtent2D     extent = {0, 0};
         // 深度アタッチメント (scene_ のみ使用。 中間ターゲットは VK_NULL_HANDLE)。
         VkImage        depth_image  = VK_NULL_HANDLE;
         VkDeviceMemory depth_memory = VK_NULL_HANDLE;
@@ -204,7 +206,8 @@ private:
     bool create_scene_render_pass_();
     VkRenderPass get_or_create_inter_render_pass_();
     VkRenderPass get_or_create_output_render_pass_(VkFormat output_format);
-    bool create_target_(RenderTarget& rt, VkRenderPass rp, bool with_depth);
+    bool create_target_(RenderTarget& rt, VkRenderPass rp, bool with_depth,
+                        VkExtent2D extent);
     bool create_targets_();
     bool create_samplers_();
     bool upload_lut_(const unsigned char* rgba, int w, int h);

@@ -115,6 +115,7 @@ add_library(pictor STATIC
     src/gi/gi_probe_field.cpp
     src/gi/gi_gpu_executor.cpp
     src/gi/gi_shadow_atlas.cpp
+    src/gi/gi_ssao_compute.cpp
 
     # Post-Process (host-driven, real Vulkan)
     src/postprocess/postprocess_pipeline.cpp
@@ -524,6 +525,7 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/pbr.frag
         ${CMAKE_SOURCE_DIR}/shaders/pbr_gi.frag
         ${CMAKE_SOURCE_DIR}/shaders/gi_probe_sample.comp
+        ${CMAKE_SOURCE_DIR}/shaders/ssao_gen.comp
         ${CMAKE_SOURCE_DIR}/shaders/shadow_depth.vert
         ${CMAKE_SOURCE_DIR}/shaders/shadow_depth.frag
         ${CMAKE_SOURCE_DIR}/shaders/hologram.vert
@@ -551,6 +553,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssr.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/exposure_measure.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/exposure_apply.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_down.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_up.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp

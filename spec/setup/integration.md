@@ -108,3 +108,12 @@ GI (probe grid 間接光 + CSM 実描画) は **opt-in**。既存ホストは `p
 - TAA: 投影行列へ `pictor::taa_jitter()` のジッタを毎フレーム適用し、`PostProcessConfig::taa` の `reproj_matrix` (ジッタ無し prevVP·inv(currVP)) / `jitter_x/y` を更新する。カメラカット・resize・rebuild_chain 後は `history_valid = false`。
 - SSR: `PostProcessConfig::ssr` の `proj_xx / proj_yy / near_plane / far_plane` をカメラと一致させる。
 - auto exposure: `HDRConfig::auto_exposure = true` のみ。適応 dt は `record()` が自動供給する。
+
+### 6.4 SSAO compute (GISsaoCompute)
+
+PP 近似 (`PostProcessConfig::ssao`) の上位互換。両方 enabled にしない (二重適用)。
+
+1. `GISsaoCompute` を初期化 (`gi/gi_ssao_compute.h`): `shader_dir` に `ssao_gen.comp.spv` が必要。
+2. `set_depth_input(pp.scene_depth_view())` — PP の resize / rebuild_chain 後は再結線 (GPU idle 中)。
+3. 毎フレーム `update_camera(proj, inv_proj)` (逆行列はホスト算出、pictor::float4x4 を生渡し) → depth prepass 後に `record(cmd)`。
+4. `ao_view()` + `ao_sampler()` をマテリアルへ結線し、間接光項に乗算する。

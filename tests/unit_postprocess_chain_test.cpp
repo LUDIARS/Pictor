@@ -659,5 +659,98 @@ int main() {
         PT_ASSERT(feq(apc.key, 0.0f), "apply key collapses to 0 when off");
     }
 
+    // 18. mip-chain bloom (opt-in) — extract → down… → up… の縮小チェーン、
+    //     grade は最上位 upsample を読む。 従来方式が既定のまま。
+    {
+        PostProcessConfig cfg;
+        cfg.bloom.mip_chain  = true;
+        cfg.bloom.mip_levels = 4;
+        cfg.bloom.scatter    = 0.6f;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1920, 1080, false, false);
+
+        // extract + down×3 + up×3 + grade = 8 passes。
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{8},
+                     "mip bloom: 8 passes (4 mips)");
+        PT_ASSERT(chain.passes[0].name == "bloom_extract", "mip: extract first");
+        PT_ASSERT(chain.passes[0].output == "pp_bloom_d0",
+                  "mip: extract -> d0");
+        PT_ASSERT(chain.passes[1].name == "bloom_down_1", "mip: down 1");
+        PT_ASSERT(chain.passes[3].name == "bloom_down_3", "mip: down 3");
+        PT_ASSERT(chain.passes[4].name == "bloom_up_2",   "mip: up 2 first");
+        PT_ASSERT(chain.passes[4].inputs[0] == "pp_bloom_d3",
+                  "mip: up2 reads lowest down");
+        PT_ASSERT(chain.passes[4].inputs[1] == "pp_bloom_d2",
+                  "mip: up2 skip = d2");
+        PT_ASSERT(chain.passes[6].name == "bloom_up_0",   "mip: up 0 last");
+        const PostProcessPassDef* gr = find_pass(chain, "color_grade");
+        PT_ASSERT(gr != nullptr && gr->inputs[1] == "pp_bloom_u0",
+                  "mip: grade reads u0");
+
+        // 縮小宣言: d0=2, d1=4, d2=8, d3=16, u2=8, u1=4, u0=2。
+        PT_ASSERT_OP(post_process_target_divisor(chain, "pp_bloom_d0"), ==, 2u,
+                     "mip: d0 divisor 2");
+        PT_ASSERT_OP(post_process_target_divisor(chain, "pp_bloom_d3"), ==, 16u,
+                     "mip: d3 divisor 16");
+        PT_ASSERT_OP(post_process_target_divisor(chain, "pp_bloom_u0"), ==, 2u,
+                     "mip: u0 divisor 2");
+        PT_ASSERT_OP(post_process_target_divisor(chain, "pp_ping"), ==, 1u,
+                     "undeclared target divisor = 1");
+
+        // push: down_1 のソース (d0 = 1/2) texel、 up_0 の下位 (1/4) texel。
+        struct BloomDownPC { float texel_x, texel_y, pad0, pad1; };
+        struct BloomUpPC   { float texel_x, texel_y, scatter, pad0; };
+        BloomDownPC d1 = read_pc<BloomDownPC>(chain.passes[1]);
+        PT_ASSERT(feq(d1.texel_x, 2.0f / 1920.0f), "mip: down1 src texel");
+        BloomUpPC u0 = read_pc<BloomUpPC>(chain.passes[6]);
+        PT_ASSERT(feq(u0.texel_x, 4.0f / 1920.0f), "mip: up0 lower texel");
+        PT_ASSERT(feq(u0.scatter, 0.6f),           "mip: scatter carried");
+
+        // refresh が動的名 (bloom_down_k / bloom_up_k) を詰め直す。
+        cfg.bloom.scatter = 0.3f;
+        refresh_post_process_chain(chain, cfg, 1920, 1080, false, false);
+        u0 = read_pc<BloomUpPC>(chain.passes[6]);
+        PT_ASSERT(feq(u0.scatter, 0.3f), "mip: refresh updates scatter");
+
+        // 低解像度では mip 数が自動短縮される (min 128px >> 4 = 8 は OK、
+        // 64px は 3 mips へ)。
+        PostProcessChain small = build_post_process_chain(
+            cfg, "shaders", 64, 64, false, false);
+        int downs = 0;
+        for (const auto& p : small.passes)
+            if (p.name.rfind("bloom_down_", 0) == 0) ++downs;
+        PT_ASSERT_OP(downs, ==, 2, "mip: 64px clamps to 3 mips (2 downs)");
+    }
+
+    // 19. DoF 深度線形化 — near/far はランタイムフィールドとして push へ乗る。
+    {
+        PostProcessConfig cfg;
+        cfg.depth_of_field.enabled    = true;
+        cfg.depth_of_field.near_plane = 0.1f;
+        cfg.depth_of_field.far_plane  = 500.0f;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 800, 600, false, false);
+        struct DofPC {
+            float    focus_distance, focus_range, bokeh_radius;
+            float    near_start, near_end, far_start, far_end;
+            uint32_t sample_count;
+            float    texel_x, texel_y, near_plane, far_plane;
+        };
+        DofPC pc = read_pc<DofPC>(chain.passes[0]);
+        PT_ASSERT(feq(pc.near_plane, 0.1f),  "dof: near plane carried");
+        PT_ASSERT(feq(pc.far_plane, 500.0f), "dof: far plane carried");
+
+        // 既定 (0/0) はレガシー動作 = 線形化なし。
+        PostProcessConfig legacy;
+        legacy.depth_of_field.enabled = true;
+        PostProcessChain lc = build_post_process_chain(
+            legacy, "shaders", 800, 600, false, false);
+        pc = read_pc<DofPC>(lc.passes[0]);
+        PT_ASSERT(feq(pc.near_plane, 0.0f) && feq(pc.far_plane, 0.0f),
+                  "dof: legacy default = no linearization");
+    }
+
     return report("unit_postprocess_chain_test");
 }

@@ -167,10 +167,12 @@ hit 失敗はフォールバック無し (黒 fade)。
 | SSR (深度再構築版) | `SSRConfig` + `ssr.frag` (view 再構築 + 深度勾配法線 + スクリーンスペース march + Schlick フレネル + 画面端フェード) | ✅ |
 | 系統A 配線 | `PostProcessKind::TAA/SSR` + serializer round-trip + bridge (ランタイムフィールドは JSON 対象外) | ✅ |
 | headless テスト | `unit_postprocess_chain_test.cpp` §14-17 | ✅ |
-| mip-chain bloom / DoF 仕上げ / velocity buffer | — | ⬜ (残: phase 2 続き / phase 3) |
+| mip-chain bloom | `BloomConfig::mip_chain` (opt-in — 既定は従来 separable blur で既存ホスト非破壊)。 縮小ターゲット基盤 (`PostProcessChain::target_divisors` + `RenderTarget::extent`) + `bloom_down.frag` / `bloom_up.frag` (4-tap box down / tent up + scatter skip 合成)。 mip 数は解像度で自動短縮 (最小 8px) | ✅ |
+| DoF 仕上げ | `DepthOfFieldConfig::near_plane/far_plane` (ランタイム) — 深度バッファ値を view 距離へ線形化して focus 距離と正しく比較する。 0/0 (既定) は旧挙動 (線形化なし) | ✅ |
+| velocity buffer (per-object motion blur / TAA 動体) | — | ⬜ (phase 3 — scene pass の MRT 化を要する) |
 
 チェーン全部盛り (phase 2 後):
-`scene → [dof] → [ssao] → [ssr] → [mblur] → [taa] → [exposure_measure/apply] → extract → blurH → blurV → grade → [fxaa*] → out` (*TAA 無効時のみ)
+`scene → [dof] → [ssao] → [ssr] → [mblur] → [taa] → [exposure_measure/apply] → extract → (blurH → blurV | down… → up…) → grade → [fxaa*] → out` (*TAA 無効時のみ)
 
 ## 5. phase 1 実装状況 (2026-07-13, `feat/postprocess-gi`)
 

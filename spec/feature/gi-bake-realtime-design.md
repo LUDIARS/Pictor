@@ -172,7 +172,8 @@ SSAO は (a) PP 近似 (`postprocess-effects-design.md` §2.1、シーン色乗�
 | CSM host-driven 描画契約 | `gi/gi_shadow_atlas.{h,cpp}`。 D32 array (cascade layer) + depth-only render pass (CLEAR → SHADER_READ_ONLY) + per-cascade framebuffer + PCF compare sampler。 描画はホスト責務 (`shadow_depth.vert/.frag` 提供) | ✅ |
 | マテリアル GI 項 | `shaders/gi.glsl` (set 2 binding 2/3、 per-pixel probe 補間 + SH irradiance) + `pbr_main.glsl` 分割 + **`pbr_gi.frag` (opt-in バリアント — 既存 `pbr.frag` は無変更でホスト非破壊)** | ✅ |
 | 移行手順 | `spec/setup/integration.md` §6 (バインディング表 + ホスト契約) | ✅ |
-| GILightingSystem からの一体駆動 / SSAO compute (`ssao_gen.comp`、 法線バッファ要) | — | ⬜ (phase 2 続き — 法線供給の設計が先) |
+| SSAO compute | `gi/gi_ssao_compute.{h,cpp}` + `ssao_gen.comp` 書き換え — **法線バッファ要求を撤廃** (深度差分から 5-tap 再構築、 ノイズはシェーダ内ハッシュ)。 R8 AO image + カーネル (`generate_ssao_kernel()`、 決定的) + compute dispatch を自己所有。 depth はホスト供給 (`set_depth_input()`)。 PP 近似 `ssao_apply` の上位互換 — 両方 enabled にしない (§3) | ✅ |
+| GILightingSystem からの一体駆動 (executor 群の自動配線) | — | ⬜ (phase 3 — host-driven 原則との整理が先) |
 
 備考: `shadow.glsl` の GLSL 予約語バグ (`sample` 引数名) を修正 — pbr.frag 系を
 初めてビルド対象にしたことで露見 (従来はホスト側コンパイル頼みで未検証だった)。

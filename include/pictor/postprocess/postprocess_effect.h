@@ -42,17 +42,29 @@ enum class ToneMapOperator : uint8_t {
 };
 
 /// Bloom effect configuration.
+///
+/// mip_chain = true で progressive downsample/upsample 方式 (縮小ターゲット
+/// チェーン、 広く柔らかい bloom) に切り替わる。 false (既定) は従来の
+/// フルレス separable blur — 既存ホストの見た目を変えない opt-in。
+/// 切替はチェーン構造変更なので `PostProcessPipeline::rebuild_chain()` 要。
 struct BloomConfig {
     bool     enabled         = true;
     float    threshold       = 1.0f;     ///< Brightness threshold for bloom extraction
     float    soft_threshold  = 0.5f;     ///< Soft knee transition width
     float    intensity       = 0.8f;     ///< Bloom intensity multiplier
-    float    radius          = 5.0f;     ///< Bloom blur radius (in pixels at half-res)
-    uint32_t mip_levels      = 5;        ///< Number of downsampling steps (blur quality)
-    float    scatter         = 0.7f;     ///< Mip-level scatter weight (progressive contribution)
+    float    radius          = 5.0f;     ///< Bloom blur radius (separable blur 時のみ)
+    uint32_t mip_levels      = 5;        ///< mip チェーン段数 (2..6、 解像度で自動短縮)
+    float    scatter         = 0.7f;     ///< upsample 時の下位 mip 寄与率
+    bool     mip_chain       = false;    ///< progressive down/up チェーンを使う
 };
 
 /// Depth of Field configuration.
+///
+/// near_plane / far_plane (カメラのクリップ面、 ホストが設定するランタイム
+/// データ) が両方 > 0 のとき、 シェーダは深度バッファ値を view 距離へ
+/// 線形化してから focus_distance 等の world 距離と比較する (正しい挙動)。
+/// 両方 0 (既定) は従来どおり生の深度値をそのまま距離として扱う
+/// (レガシー互換 — 線形深度を書くホスト用)。
 struct DepthOfFieldConfig {
     bool     enabled         = false;
     float    focus_distance  = 10.0f;    ///< Distance to the focal plane (world units)
@@ -63,6 +75,8 @@ struct DepthOfFieldConfig {
     float    far_start       = 15.0f;    ///< Far DoF start distance
     float    far_end         = 50.0f;    ///< Far DoF end distance (fully blurred)
     uint32_t sample_count    = 16;       ///< Bokeh disc sample count
+    float    near_plane      = 0.0f;     ///< カメラ near (0 = 線形化しない)
+    float    far_plane       = 0.0f;     ///< カメラ far (0 = 線形化しない)
 };
 
 /// Gaussian blur configuration.

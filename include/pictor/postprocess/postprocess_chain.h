@@ -154,8 +154,18 @@ struct PostProcessChain {
     std::vector<PostProcessPassDef> passes;
     std::vector<std::string>        intermediate_names;
 
+    /// 中間ターゲットの解像度除数の宣言 (name, divisor)。 未宣言 = 1
+    /// (フル解像度)。 mip-chain bloom の縮小ターゲット (1/2, 1/4, …) 用。
+    /// `rebuild_intermediate_targets()` は names を作り直すがこの宣言は
+    /// 保持する (参照されなくなった宣言は無害)。
+    std::vector<std::pair<std::string, uint32_t>> target_divisors;
+
     bool empty() const { return passes.empty(); }
 };
+
+/// `name` の宣言済み解像度除数を返す (未宣言は 1)。
+uint32_t post_process_target_divisor(const PostProcessChain& chain,
+                                     std::string_view name);
 
 // ============================================================
 // チェーン途中編集 API — anchor pass 名基準の挿入 / 削除

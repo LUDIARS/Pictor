@@ -6,6 +6,7 @@
 #include "pictor/gi/gi_probe_field.h"
 #include "pictor/gi/gi_scene_proxy.h"
 #include "pictor/gi/gi_sh.h"
+#include "pictor/gi/gi_ssao_compute.h"
 #include "test_common.h"
 
 #include <cmath>
@@ -205,6 +206,36 @@ int main() {
             field.sample_irradiance({0, 0, 0}, {0, 1, 0});
         PT_ASSERT(with_direct.x > 0.1f,
                   "include_direct folds sun into probes");
+    }
+
+    // 8. SSAO 半球カーネル生成 — +Z 半球 / 単位方向 / スケール範囲 / 決定性。
+    {
+        constexpr uint32_t N = 32;
+        float kernel[N * 4];
+        generate_ssao_kernel(N, kernel);
+
+        bool all_upper = true, all_unit = true, scale_ok = true;
+        for (uint32_t i = 0; i < N; ++i) {
+            const float x = kernel[i * 4 + 0];
+            const float y = kernel[i * 4 + 1];
+            const float z = kernel[i * 4 + 2];
+            const float w = kernel[i * 4 + 3];
+            if (z < 0.0f) all_upper = false;
+            const float len = std::sqrt(x * x + y * y + z * z);
+            if (!feq(len, 1.0f, 1e-3f)) all_unit = false;
+            if (w < 0.1f - 1e-4f || w > 1.0f + 1e-4f) scale_ok = false;
+        }
+        PT_ASSERT(all_upper, "ssao kernel: +Z hemisphere");
+        PT_ASSERT(all_unit,  "ssao kernel: unit directions");
+        PT_ASSERT(scale_ok,  "ssao kernel: scale in [0.1, 1.0]");
+
+        float again[N * 4];
+        generate_ssao_kernel(N, again);
+        PT_ASSERT(std::memcmp(kernel, again, sizeof(kernel)) == 0,
+                  "ssao kernel: deterministic");
+        // スケールは近距離 (先頭) が小さく遠距離 (末尾) が大きい。
+        PT_ASSERT(kernel[3] < again[(N - 1) * 4 + 3],
+                  "ssao kernel: scale grows toward the tail");
     }
 
     return report("unit_gi_probe_field_test");

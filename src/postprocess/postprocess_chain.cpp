@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace pictor {
@@ -65,11 +66,12 @@ struct GradePC {
     float    grain_intensity, grain_response, grain_seed;
 };
 // dof.frag の push constant (shaders/postprocess/dof.frag と同一レイアウト)。
+// 旧 pad0/pad1 は near/far クリップ面に転用 (0 = 深度線形化なし = 旧挙動)。
 struct DofPC {
     float    focus_distance, focus_range, bokeh_radius;
     float    near_start, near_end, far_start, far_end;
     uint32_t sample_count;
-    float    texel_x, texel_y, pad0, pad1;
+    float    texel_x, texel_y, near_plane, far_plane;
 };
 // ssao_apply.frag の push constant。
 struct SsaoPC {
@@ -114,6 +116,13 @@ struct ExposureMeasurePC {
 struct ExposureApplyPC {
     float key, pad0, pad1, pad2;      // key <= 0 で素通し
 };
+// bloom_down.frag / bloom_up.frag の push constant (mip チェーン)。
+struct BloomDownPC {
+    float texel_x, texel_y, pad0, pad1;   // texel = ソース mip のもの
+};
+struct BloomUpPC {
+    float texel_x, texel_y, scatter, pad0; // texel = 下位 mip のもの
+};
 
 // 構造体を push_data バイト列へ詰める。
 template <typename T>
@@ -141,6 +150,35 @@ BlurPC make_blur_v_pc(const PostProcessConfig& cfg, uint32_t h) {
     return BlurPC{0.0f, 1.0f / static_cast<float>(h ? h : 1), radius, 0.0f};
 }
 
+/// mip チェーン段数 — config を [2,6] にクランプし、 最小 mip が 8px を
+/// 下回らないよう解像度で自動短縮する。
+uint32_t bloom_mip_count(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
+    uint32_t mips = std::clamp(cfg.bloom.mip_levels, 2u, 6u);
+    const uint32_t min_dim = std::max(std::min(w, h), 16u);
+    while (mips > 2 && (min_dim >> mips) < 8u) --mips;
+    return mips;
+}
+
+BloomDownPC make_bloom_down_pc(uint32_t level, uint32_t w, uint32_t h) {
+    // down_k のソースは d(k-1) (divisor 2^k)。
+    const float sx = static_cast<float>(1u << level);
+    BloomDownPC pc{};
+    pc.texel_x = sx / static_cast<float>(w ? w : 1);
+    pc.texel_y = sx / static_cast<float>(h ? h : 1);
+    return pc;
+}
+
+BloomUpPC make_bloom_up_pc(const PostProcessConfig& cfg, uint32_t level,
+                           uint32_t w, uint32_t h) {
+    // up_k の下位入力は divisor 2^(k+2) (u(k+1) または d(M-1))。
+    const float sx = static_cast<float>(1u << (level + 2));
+    BloomUpPC pc{};
+    pc.texel_x = sx / static_cast<float>(w ? w : 1);
+    pc.texel_y = sx / static_cast<float>(h ? h : 1);
+    pc.scatter = cfg.bloom.enabled ? cfg.bloom.scatter : 0.0f;
+    return pc;
+}
+
 DofPC make_dof_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
     const auto& dof = cfg.depth_of_field;
     DofPC pc{};
@@ -155,6 +193,8 @@ DofPC make_dof_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
     pc.sample_count   = dof.sample_count;
     pc.texel_x        = 1.0f / static_cast<float>(w ? w : 1);
     pc.texel_y        = 1.0f / static_cast<float>(h ? h : 1);
+    pc.near_plane     = dof.near_plane;
+    pc.far_plane      = dof.far_plane;
     return pc;
 }
 
@@ -300,6 +340,22 @@ std::vector<PushFieldDesc> blur_layout() {
         {"_pad0",  PushFieldType::FLOAT, 12},
     };
 }
+std::vector<PushFieldDesc> bloom_down_layout() {
+    return {
+        {"texel_x", PushFieldType::FLOAT, 0},
+        {"texel_y", PushFieldType::FLOAT, 4},
+        {"_pad0",   PushFieldType::FLOAT, 8},
+        {"_pad1",   PushFieldType::FLOAT, 12},
+    };
+}
+std::vector<PushFieldDesc> bloom_up_layout() {
+    return {
+        {"texel_x", PushFieldType::FLOAT, 0},
+        {"texel_y", PushFieldType::FLOAT, 4},
+        {"scatter", PushFieldType::FLOAT, 8},
+        {"_pad0",   PushFieldType::FLOAT, 12},
+    };
+}
 std::vector<PushFieldDesc> dof_layout() {
     return {
         {"focus_distance", PushFieldType::FLOAT, 0},
@@ -312,8 +368,8 @@ std::vector<PushFieldDesc> dof_layout() {
         {"sample_count",   PushFieldType::UINT,  28},
         {"texel_x",        PushFieldType::FLOAT, 32},
         {"texel_y",        PushFieldType::FLOAT, 36},
-        {"_pad0",          PushFieldType::FLOAT, 40},
-        {"_pad1",          PushFieldType::FLOAT, 44},
+        {"near_plane",     PushFieldType::FLOAT, 40},
+        {"far_plane",      PushFieldType::FLOAT, 44},
     };
 }
 std::vector<PushFieldDesc> ssao_layout() {
@@ -559,41 +615,102 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         }
     }
 
-    // Pass 1: bright-pass extraction  scene → ping
-    {
-        PostProcessPassDef p;
-        p.name        = "bloom_extract";
-        p.vert_spv    = fs_vert;
-        p.frag_spv    = shader_dir + "/bloom_extract.frag.spv";
-        p.inputs      = {scene_src};
-        p.output      = kPingTarget;
-        p.push_layout = extract_layout();
-        store_pc(p.push_data, make_extract_pc(cfg));
-        chain.passes.push_back(std::move(p));
-    }
-    // Pass 2: horizontal blur  ping → pong
-    {
-        PostProcessPassDef p;
-        p.name        = "bloom_blur_h";
-        p.vert_spv    = fs_vert;
-        p.frag_spv    = shader_dir + "/bloom_blur.frag.spv";
-        p.inputs      = {kPingTarget};
-        p.output      = kPongTarget;
-        p.push_layout = blur_layout();
-        store_pc(p.push_data, make_blur_h_pc(cfg, extent_w));
-        chain.passes.push_back(std::move(p));
-    }
-    // Pass 3: vertical blur  pong → ping
-    {
-        PostProcessPassDef p;
-        p.name        = "bloom_blur_v";
-        p.vert_spv    = fs_vert;
-        p.frag_spv    = shader_dir + "/bloom_blur.frag.spv";
-        p.inputs      = {kPongTarget};
-        p.output      = kPingTarget;
-        p.push_layout = blur_layout();
-        store_pc(p.push_data, make_blur_v_pc(cfg, extent_h));
-        chain.passes.push_back(std::move(p));
+    // grade が bloom として読む論理名 (方式で異なる)。
+    std::string bloom_src = kPingTarget;
+
+    if (cfg.bloom.mip_chain) {
+        // ── mip チェーン方式: extract(1/2) → down… → up… (縮小ターゲット) ──
+        //    広く柔らかい bloom。 ターゲットは target_divisors で縮小宣言する。
+        const uint32_t mips = bloom_mip_count(cfg, extent_w, extent_h);
+        auto down_name = [](uint32_t k) {
+            return "pp_bloom_d" + std::to_string(k);
+        };
+        auto up_name = [](uint32_t k) {
+            return "pp_bloom_u" + std::to_string(k);
+        };
+
+        // Pass 1: bright-pass extraction  scene → d0 (1/2)
+        {
+            PostProcessPassDef p;
+            p.name        = "bloom_extract";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/bloom_extract.frag.spv";
+            p.inputs      = {scene_src};
+            p.output      = down_name(0);
+            p.push_layout = extract_layout();
+            store_pc(p.push_data, make_extract_pc(cfg));
+            chain.passes.push_back(std::move(p));
+            chain.target_divisors.push_back({down_name(0), 2u});
+        }
+        // Pass 2..M: downsample  d(k-1) → d(k)
+        for (uint32_t k = 1; k < mips; ++k) {
+            PostProcessPassDef p;
+            p.name        = "bloom_down_" + std::to_string(k);
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/bloom_down.frag.spv";
+            p.inputs      = {down_name(k - 1)};
+            p.output      = down_name(k);
+            p.push_layout = bloom_down_layout();
+            store_pc(p.push_data, make_bloom_down_pc(k, extent_w, extent_h));
+            chain.passes.push_back(std::move(p));
+            chain.target_divisors.push_back({down_name(k), 1u << (k + 1)});
+        }
+        // Pass M+1..: upsample  (下位 mip + skip 接続) → u(k)。 k = M-2 .. 0。
+        for (uint32_t i = 0; i < mips - 1; ++i) {
+            const uint32_t k = mips - 2 - i;
+            const std::string lower =
+                (k == mips - 2) ? down_name(mips - 1) : up_name(k + 1);
+            PostProcessPassDef p;
+            p.name        = "bloom_up_" + std::to_string(k);
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/bloom_up.frag.spv";
+            p.inputs      = {lower, down_name(k)};
+            p.output      = up_name(k);
+            p.push_layout = bloom_up_layout();
+            store_pc(p.push_data, make_bloom_up_pc(cfg, k, extent_w, extent_h));
+            chain.passes.push_back(std::move(p));
+            chain.target_divisors.push_back({up_name(k), 1u << (k + 1)});
+        }
+        // grade は最上位 upsample (1/2 解像度) を bilinear で読む。
+        bloom_src = up_name(0);
+    } else {
+        // ── 従来方式: extract → blur H → blur V (フルレス separable) ──
+        // Pass 1: bright-pass extraction  scene → ping
+        {
+            PostProcessPassDef p;
+            p.name        = "bloom_extract";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/bloom_extract.frag.spv";
+            p.inputs      = {scene_src};
+            p.output      = kPingTarget;
+            p.push_layout = extract_layout();
+            store_pc(p.push_data, make_extract_pc(cfg));
+            chain.passes.push_back(std::move(p));
+        }
+        // Pass 2: horizontal blur  ping → pong
+        {
+            PostProcessPassDef p;
+            p.name        = "bloom_blur_h";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/bloom_blur.frag.spv";
+            p.inputs      = {kPingTarget};
+            p.output      = kPongTarget;
+            p.push_layout = blur_layout();
+            store_pc(p.push_data, make_blur_h_pc(cfg, extent_w));
+            chain.passes.push_back(std::move(p));
+        }
+        // Pass 3: vertical blur  pong → ping
+        {
+            PostProcessPassDef p;
+            p.name        = "bloom_blur_v";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/bloom_blur.frag.spv";
+            p.inputs      = {kPongTarget};
+            p.output      = kPingTarget;
+            p.push_layout = blur_layout();
+            store_pc(p.push_data, make_blur_v_pc(cfg, extent_h));
+            chain.passes.push_back(std::move(p));
+        }
     }
     // TAA 有効時は FXAA を外す (二重 AA 防止 — TAA 優先、 spec §3.2)。
     const bool fxaa_on = cfg.fxaa.enabled && !cfg.taa.enabled;
@@ -605,7 +722,7 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         p.name        = "color_grade";
         p.vert_spv    = fs_vert;
         p.frag_spv    = shader_dir + "/color_grade.frag.spv";
-        p.inputs      = {scene_src, kPingTarget, kPostProcessLutTarget};
+        p.inputs      = {scene_src, bloom_src, kPostProcessLutTarget};
         p.output      = fxaa_on ? kLdrTarget
                                 : kPostProcessOutputTarget;
         p.push_layout = grade_layout();
@@ -672,6 +789,15 @@ void refresh_post_process_chain(PostProcessChain&        chain,
             store_pc(p.push_data, make_exposure_measure_pc(cfg));
         } else if (p.name == "exposure_apply") {
             store_pc(p.push_data, make_exposure_apply_pc(cfg));
+        } else if (p.name.rfind("bloom_down_", 0) == 0) {
+            const uint32_t k = static_cast<uint32_t>(
+                std::strtoul(p.name.c_str() + 11, nullptr, 10));
+            store_pc(p.push_data, make_bloom_down_pc(k, extent_w, extent_h));
+        } else if (p.name.rfind("bloom_up_", 0) == 0) {
+            const uint32_t k = static_cast<uint32_t>(
+                std::strtoul(p.name.c_str() + 9, nullptr, 10));
+            store_pc(p.push_data,
+                     make_bloom_up_pc(cfg, k, extent_w, extent_h));
         }
     }
 }
@@ -679,6 +805,14 @@ void refresh_post_process_chain(PostProcessChain&        chain,
 // ============================================================
 // チェーン途中編集 API
 // ============================================================
+
+uint32_t post_process_target_divisor(const PostProcessChain& chain,
+                                     std::string_view name) {
+    for (const auto& [n, div] : chain.target_divisors) {
+        if (n == name) return div > 0 ? div : 1;
+    }
+    return 1;
+}
 
 int find_post_process_pass(const PostProcessChain& chain, std::string_view name) {
     for (size_t i = 0; i < chain.passes.size(); ++i) {
