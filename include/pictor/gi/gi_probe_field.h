@@ -48,11 +48,14 @@ public:
     };
 
     /// probe grid を構築する — 遮蔽レイをキャッシュし、 初回の relight まで行う。
-    /// (デフォルト引数は GCC が `= {}` を NSDMI 付き集成体の参照へ変換できない
-    ///  ため明示コンストラクタ形で書く)
+    /// (BuildParams のデフォルト引数はクラス定義内では書けない — GCC は
+    ///  NSDMI 完了前の `BuildParams{}` を拒否するためオーバーロードで分ける)
+    void build(const GIProbeConfig& config, const GISceneProxy& proxy,
+               const DirectionalLight& sun,
+               const std::vector<PointLight>& points);
     void build(const GIProbeConfig& config, const GISceneProxy& proxy,
                const DirectionalLight& sun, const std::vector<PointLight>& points,
-               const BuildParams& params = BuildParams{});
+               const BuildParams& params);
 
     /// ライトのみ変更時の再射影。 遮蔽キャッシュを再利用するため
     /// レイ数は probe 数 × (1 + 点光源数) に収まる (毎フレーム呼べる規模)。

@@ -94,6 +94,12 @@ float3 GIProbeField::probe_position(uint32_t x, uint32_t y, uint32_t z) const {
 
 void GIProbeField::build(const GIProbeConfig& config, const GISceneProxy& proxy,
                          const DirectionalLight& sun,
+                         const std::vector<PointLight>& points) {
+    build(config, proxy, sun, points, BuildParams{});
+}
+
+void GIProbeField::build(const GIProbeConfig& config, const GISceneProxy& proxy,
+                         const DirectionalLight& sun,
                          const std::vector<PointLight>& points,
                          const BuildParams& params) {
     config_ = config;
