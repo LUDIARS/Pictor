@@ -10,11 +10,12 @@
 namespace pictor {
 
 // 予約済み論理ターゲット名。
-const char* const kPostProcessOutputTarget  = "__output__";
-const char* const kPostProcessSceneTarget   = "__scene__";
-const char* const kPostProcessLutTarget     = "__lut__";
-const char* const kPostProcessDepthTarget   = "__depth__";
-const char* const kPostProcessHistoryPrefix = "__history:";
+const char* const kPostProcessOutputTarget   = "__output__";
+const char* const kPostProcessSceneTarget    = "__scene__";
+const char* const kPostProcessLutTarget      = "__lut__";
+const char* const kPostProcessDepthTarget    = "__depth__";
+const char* const kPostProcessVelocityTarget = "__velocity__";
+const char* const kPostProcessHistoryPrefix  = "__history:";
 
 std::string history_input_name(std::string_view target) {
     std::string s(kPostProcessHistoryPrefix);
@@ -45,6 +46,10 @@ constexpr const char* kTaaTarget      = "pp_taa";
 constexpr const char* kExposureTarget = "pp_exposure";
 constexpr const char* kExposedTarget  = "pp_exposed";
 constexpr const char* kLdrTarget      = "pp_ldr";
+constexpr const char* kSsgiTarget     = "pp_ssgi";
+constexpr const char* kSsgiOutTarget  = "pp_ssgi_out";
+constexpr const char* kFogTarget      = "pp_fog";
+constexpr const char* kFlareTarget    = "pp_flare";
 
 // 旧 PostProcessPipeline の push constant 構造体と同一レイアウト。
 // build_post_process_chain() / refresh_post_process_chain() はこの構造体を
@@ -122,6 +127,48 @@ struct BloomDownPC {
 };
 struct BloomUpPC {
     float texel_x, texel_y, scatter, pad0; // texel = 下位 mip のもの
+};
+// motion_blur_velocity.frag の push constant (velocity buffer 方式 —
+// 再投影行列が不要になる)。
+struct MotionBlurVelocityPC {
+    float    intensity, max_velocity;
+    uint32_t sample_count, valid;
+};
+// taa_velocity.frag の push constant (velocity buffer 方式)。
+struct TaaVelocityPC {
+    float    feedback_min, feedback_max;
+    float    jitter_x, jitter_y;
+    float    texel_x, texel_y;
+    uint32_t valid, pad0;
+};
+// lens_flare.frag の push constant。
+struct LensFlarePC {
+    float    intensity, ghost_spacing, halo_radius, halo_intensity;
+    uint32_t ghost_count;
+    float    texel_x, texel_y, pad0;
+};
+// volumetric_fog.frag の push constant (128B ちょうど — push 上限)。
+struct FogPC {
+    float    cam_pos[3];   float density;
+    float    cam_fwd[3];   float height_falloff;
+    float    cam_right[3]; float base_height;
+    float    cam_up[3];    float start_dist;
+    float    sun_dir[3];   float phase_g;
+    float    sun_color[3]; float sun_scatter;
+    float    fog_color[3]; float near_plane;
+    float    far_plane, tan_x, tan_y;
+    uint32_t valid;
+};
+static_assert(sizeof(FogPC) == 128, "FogPC must fit the 128B push limit");
+// ssgi_gather.frag / ssgi_apply.frag の push constant。
+struct SsgiGatherPC {
+    float    proj_xx, proj_yy, near_plane, far_plane;
+    float    radius_px, feedback, texel_x, texel_y;
+    uint32_t sample_count;
+    float    pad0, pad1, pad2;
+};
+struct SsgiApplyPC {
+    float intensity, pad0, pad1, pad2;
 };
 
 // 構造体を push_data バイト列へ詰める。
@@ -286,6 +333,94 @@ ExposureApplyPC make_exposure_apply_pc(const PostProcessConfig& cfg) {
     ExposureApplyPC pc{};
     // disabled → key 0 で素通し (シェーダ側の恒等縮退)。
     pc.key = cfg.hdr.auto_exposure ? cfg.hdr.key : 0.0f;
+    return pc;
+}
+
+MotionBlurVelocityPC make_motion_blur_velocity_pc(const PostProcessConfig& cfg) {
+    const auto& mb = cfg.motion_blur;
+    MotionBlurVelocityPC pc{};
+    pc.intensity    = mb.intensity;
+    pc.max_velocity = mb.max_velocity;
+    pc.sample_count = mb.sample_count;
+    pc.valid        = mb.enabled ? 1u : 0u;   // 行列不要 — enabled のみ
+    return pc;
+}
+
+TaaVelocityPC make_taa_velocity_pc(const PostProcessConfig& cfg,
+                                   uint32_t w, uint32_t h) {
+    const auto& taa = cfg.taa;
+    TaaVelocityPC pc{};
+    pc.feedback_min = taa.feedback_min;
+    pc.feedback_max = taa.feedback_max;
+    pc.jitter_x     = taa.jitter_x;
+    pc.jitter_y     = taa.jitter_y;
+    pc.texel_x      = 1.0f / static_cast<float>(w ? w : 1);
+    pc.texel_y      = 1.0f / static_cast<float>(h ? h : 1);
+    // velocity 方式は行列不要 — history だけで駆動。
+    pc.valid = (taa.enabled && taa.history_valid) ? 1u : 0u;
+    return pc;
+}
+
+LensFlarePC make_lens_flare_pc(const PostProcessConfig& cfg,
+                               uint32_t w, uint32_t h) {
+    const auto& lf = cfg.lens_flare;
+    LensFlarePC pc{};
+    pc.intensity      = lf.enabled ? lf.intensity : 0.0f;
+    pc.ghost_spacing  = lf.ghost_spacing;
+    pc.halo_radius    = lf.halo_radius;
+    pc.halo_intensity = lf.halo_intensity;
+    pc.ghost_count    = std::min(lf.ghost_count, 8u);
+    pc.texel_x        = 1.0f / static_cast<float>(w ? w : 1);
+    pc.texel_y        = 1.0f / static_cast<float>(h ? h : 1);
+    return pc;
+}
+
+FogPC make_fog_pc(const PostProcessConfig& cfg) {
+    const auto& fog = cfg.volumetric_fog;
+    FogPC pc{};
+    std::memcpy(pc.cam_pos,   fog.camera_pos,     sizeof(pc.cam_pos));
+    std::memcpy(pc.cam_fwd,   fog.camera_forward, sizeof(pc.cam_fwd));
+    std::memcpy(pc.cam_right, fog.camera_right,   sizeof(pc.cam_right));
+    std::memcpy(pc.cam_up,    fog.camera_up,      sizeof(pc.cam_up));
+    std::memcpy(pc.sun_dir,   fog.sun_dir,        sizeof(pc.sun_dir));
+    std::memcpy(pc.sun_color, fog.sun_color,      sizeof(pc.sun_color));
+    std::memcpy(pc.fog_color, fog.color,          sizeof(pc.fog_color));
+    // disabled → density 0 で恒等縮退。 カメラ未設定フレームは valid 0。
+    pc.density        = fog.enabled ? fog.density : 0.0f;
+    pc.height_falloff = fog.height_falloff;
+    pc.base_height    = fog.base_height;
+    pc.start_dist     = fog.start_distance;
+    pc.phase_g        = fog.phase_g;
+    pc.sun_scatter    = fog.sun_scatter;
+    pc.near_plane     = fog.near_plane;
+    pc.far_plane      = fog.far_plane;
+    pc.tan_x          = fog.tan_half_fov_x;
+    pc.tan_y          = fog.tan_half_fov_y;
+    pc.valid          = (fog.enabled && fog.camera_valid) ? 1u : 0u;
+    return pc;
+}
+
+SsgiGatherPC make_ssgi_gather_pc(const PostProcessConfig& cfg,
+                                 uint32_t w, uint32_t h) {
+    const auto& gi = cfg.ssgi;
+    SsgiGatherPC pc{};
+    pc.proj_xx      = gi.proj_xx;
+    pc.proj_yy      = gi.proj_yy;
+    pc.near_plane   = gi.near_plane;
+    pc.far_plane    = gi.far_plane;
+    pc.radius_px    = gi.radius_px;
+    pc.feedback     = gi.feedback;
+    // gather は half-res で走る — texel はフル解像度基準で渡し、 シェーダが
+    // UV 空間で扱う (UV は解像度非依存)。
+    pc.texel_x      = 1.0f / static_cast<float>(w ? w : 1);
+    pc.texel_y      = 1.0f / static_cast<float>(h ? h : 1);
+    pc.sample_count = std::min(gi.sample_count, 16u);
+    return pc;
+}
+
+SsgiApplyPC make_ssgi_apply_pc(const PostProcessConfig& cfg) {
+    SsgiApplyPC pc{};
+    pc.intensity = cfg.ssgi.enabled ? cfg.ssgi.intensity : 0.0f;
     return pc;
 }
 
@@ -458,6 +593,80 @@ std::vector<PushFieldDesc> exposure_apply_layout() {
         {"_pad2", PushFieldType::FLOAT, 12},
     };
 }
+std::vector<PushFieldDesc> motion_blur_velocity_layout() {
+    return {
+        {"intensity",    PushFieldType::FLOAT, 0},
+        {"max_velocity", PushFieldType::FLOAT, 4},
+        {"sample_count", PushFieldType::UINT,  8},
+        {"valid",        PushFieldType::UINT,  12},
+    };
+}
+std::vector<PushFieldDesc> taa_velocity_layout() {
+    return {
+        {"feedback_min", PushFieldType::FLOAT, 0},
+        {"feedback_max", PushFieldType::FLOAT, 4},
+        {"jitter_x",     PushFieldType::FLOAT, 8},
+        {"jitter_y",     PushFieldType::FLOAT, 12},
+        {"texel_x",      PushFieldType::FLOAT, 16},
+        {"texel_y",      PushFieldType::FLOAT, 20},
+        {"valid",        PushFieldType::UINT,  24},
+        {"_pad0",        PushFieldType::UINT,  28},
+    };
+}
+std::vector<PushFieldDesc> lens_flare_layout() {
+    return {
+        {"intensity",      PushFieldType::FLOAT, 0},
+        {"ghost_spacing",  PushFieldType::FLOAT, 4},
+        {"halo_radius",    PushFieldType::FLOAT, 8},
+        {"halo_intensity", PushFieldType::FLOAT, 12},
+        {"ghost_count",    PushFieldType::UINT,  16},
+        {"texel_x",        PushFieldType::FLOAT, 20},
+        {"texel_y",        PushFieldType::FLOAT, 24},
+        {"_pad0",          PushFieldType::FLOAT, 28},
+    };
+}
+std::vector<PushFieldDesc> fog_layout() {
+    // vec3 + スカラーの 16B 行 × 8 (128B)。 名前は行単位でまとめる。
+    std::vector<PushFieldDesc> fields;
+    const char* rows[8] = {"cam_pos+density",    "cam_fwd+height_falloff",
+                           "cam_right+base_h",   "cam_up+start_dist",
+                           "sun_dir+phase_g",    "sun_color+sun_scatter",
+                           "fog_color+near",     "far+tan_x+tan_y+valid"};
+    for (uint32_t r = 0; r < 8; ++r) {
+        for (uint32_t c = 0; c < 4; ++c) {
+            const bool is_valid_slot = (r == 7 && c == 3);
+            fields.push_back({std::string(rows[r]) + "[" + std::to_string(c) + "]",
+                              is_valid_slot ? PushFieldType::UINT
+                                            : PushFieldType::FLOAT,
+                              r * 16 + c * 4});
+        }
+    }
+    return fields;
+}
+std::vector<PushFieldDesc> ssgi_gather_layout() {
+    return {
+        {"proj_xx",      PushFieldType::FLOAT, 0},
+        {"proj_yy",      PushFieldType::FLOAT, 4},
+        {"near_plane",   PushFieldType::FLOAT, 8},
+        {"far_plane",    PushFieldType::FLOAT, 12},
+        {"radius_px",    PushFieldType::FLOAT, 16},
+        {"feedback",     PushFieldType::FLOAT, 20},
+        {"texel_x",      PushFieldType::FLOAT, 24},
+        {"texel_y",      PushFieldType::FLOAT, 28},
+        {"sample_count", PushFieldType::UINT,  32},
+        {"_pad0",        PushFieldType::FLOAT, 36},
+        {"_pad1",        PushFieldType::FLOAT, 40},
+        {"_pad2",        PushFieldType::FLOAT, 44},
+    };
+}
+std::vector<PushFieldDesc> ssgi_apply_layout() {
+    return {
+        {"intensity", PushFieldType::FLOAT, 0},
+        {"_pad0",     PushFieldType::FLOAT, 4},
+        {"_pad1",     PushFieldType::FLOAT, 8},
+        {"_pad2",     PushFieldType::FLOAT, 12},
+    };
+}
 std::vector<PushFieldDesc> grade_layout() {
     return {
         {"bloom_intensity",    PushFieldType::FLOAT, 0},
@@ -535,6 +744,36 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         scene_src = kSsaoTarget;
     }
 
+    // Pass 0b2 (optional): SSGI  gather (half-res + 時間フィルタ) → apply
+    //   画面内バウンスを加算する。 AO 適用後・SSR 前 (反射は GI 込みの色を拾う)。
+    if (cfg.ssgi.enabled) {
+        {
+            PostProcessPassDef p;
+            p.name        = "ssgi_gather";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/ssgi_gather.frag.spv";
+            p.inputs      = {scene_src, kPostProcessDepthTarget,
+                             history_input_name(kSsgiTarget)};
+            p.output      = kSsgiTarget;
+            p.push_layout = ssgi_gather_layout();
+            store_pc(p.push_data, make_ssgi_gather_pc(cfg, extent_w, extent_h));
+            chain.passes.push_back(std::move(p));
+            chain.target_divisors.push_back({kSsgiTarget, 2u});   // half-res
+        }
+        {
+            PostProcessPassDef p;
+            p.name        = "ssgi_apply";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/ssgi_apply.frag.spv";
+            p.inputs      = {scene_src, kSsgiTarget};
+            p.output      = kSsgiOutTarget;
+            p.push_layout = ssgi_apply_layout();
+            store_pc(p.push_data, make_ssgi_apply_pc(cfg));
+            chain.passes.push_back(std::move(p));
+            scene_src = kSsgiOutTarget;
+        }
+    }
+
     // Pass 0c (optional): SSR  scene + depth → pp_ssr
     //   深度から view 空間を再構築 (法線は深度勾配) してスクリーンスペースの
     //   レイマーチで反射を合成する。 AO 適用後・motion blur 前。
@@ -551,35 +790,72 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         scene_src = kSsrTarget;
     }
 
-    // Pass 0d (optional): camera motion blur  scene + depth → pp_mblur
-    //   深度から再構築した NDC を reproj (prevVP * inv currVP) で前フレームへ
-    //   再投影し、 速度ベクトルに沿ってサンプルする。 HDR 空間 (tonemap 前)。
-    if (cfg.motion_blur.enabled) {
+    // Pass 0c2 (optional): volumetric fog  scene + depth → pp_fog
+    //   解析的 height fog + 太陽前方散乱。 反射/GI の後、 motion blur 前。
+    if (cfg.volumetric_fog.enabled) {
         PostProcessPassDef p;
-        p.name        = "motion_blur";
+        p.name        = "volumetric_fog";
         p.vert_spv    = fs_vert;
-        p.frag_spv    = shader_dir + "/motion_blur.frag.spv";
+        p.frag_spv    = shader_dir + "/volumetric_fog.frag.spv";
         p.inputs      = {scene_src, kPostProcessDepthTarget};
-        p.output      = kMBlurTarget;
-        p.push_layout = motion_blur_layout();
-        store_pc(p.push_data, make_motion_blur_pc(cfg));
+        p.output      = kFogTarget;
+        p.push_layout = fog_layout();
+        store_pc(p.push_data, make_fog_pc(cfg));
+        chain.passes.push_back(std::move(p));
+        scene_src = kFogTarget;
+    }
+
+    // velocity buffer 方式が使えるか (MRT 有効時のみ)。
+    const bool velocity_ok = cfg.velocity.enabled;
+
+    // Pass 0d (optional): motion blur  → pp_mblur (HDR)
+    //   velocity buffer 方式 (per_object、 要 MRT) はスクリーン速度を直接読む。
+    //   それ以外は深度 + カメラ再投影 (prevVP * inv currVP) 方式。
+    if (cfg.motion_blur.enabled) {
+        const bool per_object = cfg.motion_blur.per_object && velocity_ok;
+        PostProcessPassDef p;
+        p.name     = "motion_blur";
+        p.vert_spv = fs_vert;
+        if (per_object) {
+            p.frag_spv    = shader_dir + "/motion_blur_velocity.frag.spv";
+            p.inputs      = {scene_src, kPostProcessVelocityTarget};
+            p.push_layout = motion_blur_velocity_layout();
+            store_pc(p.push_data, make_motion_blur_velocity_pc(cfg));
+        } else {
+            p.frag_spv    = shader_dir + "/motion_blur.frag.spv";
+            p.inputs      = {scene_src, kPostProcessDepthTarget};
+            p.push_layout = motion_blur_layout();
+            store_pc(p.push_data, make_motion_blur_pc(cfg));
+        }
+        p.output = kMBlurTarget;
         chain.passes.push_back(std::move(p));
         scene_src = kMBlurTarget;
     }
 
-    // Pass 0e (optional): TAA  scene + depth + history → pp_taa (HDR)
+    // Pass 0e (optional): TAA  → pp_taa (HDR)
     //   history buffer (`__history:pp_taa__`) は前フレームの pp_taa。
     //   pipeline がフレーム末尾に pp_taa → history のコピーを記録する。
+    //   velocity buffer 方式 (use_velocity、 要 MRT) は動体を正確に追跡する。
     if (cfg.taa.enabled) {
+        const bool use_velocity = cfg.taa.use_velocity && velocity_ok;
         PostProcessPassDef p;
-        p.name        = "taa";
-        p.vert_spv    = fs_vert;
-        p.frag_spv    = shader_dir + "/taa.frag.spv";
-        p.inputs      = {scene_src, kPostProcessDepthTarget,
-                         history_input_name(kTaaTarget)};
-        p.output      = kTaaTarget;
-        p.push_layout = taa_layout();
-        store_pc(p.push_data, make_taa_pc(cfg, extent_w, extent_h));
+        p.name     = "taa";
+        p.vert_spv = fs_vert;
+        if (use_velocity) {
+            p.frag_spv    = shader_dir + "/taa_velocity.frag.spv";
+            p.inputs      = {scene_src, kPostProcessDepthTarget,
+                             history_input_name(kTaaTarget),
+                             kPostProcessVelocityTarget};
+            p.push_layout = taa_velocity_layout();
+            store_pc(p.push_data, make_taa_velocity_pc(cfg, extent_w, extent_h));
+        } else {
+            p.frag_spv    = shader_dir + "/taa.frag.spv";
+            p.inputs      = {scene_src, kPostProcessDepthTarget,
+                             history_input_name(kTaaTarget)};
+            p.push_layout = taa_layout();
+            store_pc(p.push_data, make_taa_pc(cfg, extent_w, extent_h));
+        }
+        p.output = kTaaTarget;
         chain.passes.push_back(std::move(p));
         scene_src = kTaaTarget;
     }
@@ -712,6 +988,27 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
             chain.passes.push_back(std::move(p));
         }
     }
+    // Pass 4b (optional): lens flare — bloom 抽出結果へ ghost + halo を
+    //   加算した pp_flare を作り、 grade の bloom 入力を差し替える
+    //   (grade 自体は無変更 — bloom 経路への割り込み)。
+    if (cfg.lens_flare.enabled) {
+        PostProcessPassDef p;
+        p.name        = "lens_flare";
+        p.vert_spv    = fs_vert;
+        p.frag_spv    = shader_dir + "/lens_flare.frag.spv";
+        p.inputs      = {bloom_src};
+        p.output      = kFlareTarget;
+        p.push_layout = lens_flare_layout();
+        store_pc(p.push_data, make_lens_flare_pc(cfg, extent_w, extent_h));
+        chain.passes.push_back(std::move(p));
+        // flare 出力は bloom と同解像度 (mip チェーン時は 1/2)。
+        const uint32_t bloom_div = post_process_target_divisor(chain, bloom_src);
+        if (bloom_div > 1) {
+            chain.target_divisors.push_back({kFlareTarget, bloom_div});
+        }
+        bloom_src = kFlareTarget;
+    }
+
     // TAA 有効時は FXAA を外す (二重 AA 防止 — TAA 優先、 spec §3.2)。
     const bool fxaa_on = cfg.fxaa.enabled && !cfg.taa.enabled;
 
@@ -778,13 +1075,31 @@ void refresh_post_process_chain(PostProcessChain&        chain,
         } else if (p.name == "ssao_apply") {
             store_pc(p.push_data, make_ssao_pc(cfg, extent_w, extent_h));
         } else if (p.name == "motion_blur") {
-            store_pc(p.push_data, make_motion_blur_pc(cfg));
+            // velocity 方式かは構築時のシェーダで決まる — push サイズで判別。
+            if (p.push_data.size() == sizeof(MotionBlurVelocityPC)) {
+                store_pc(p.push_data, make_motion_blur_velocity_pc(cfg));
+            } else {
+                store_pc(p.push_data, make_motion_blur_pc(cfg));
+            }
         } else if (p.name == "fxaa") {
             store_pc(p.push_data, make_fxaa_pc(cfg, extent_w, extent_h));
         } else if (p.name == "ssr") {
             store_pc(p.push_data, make_ssr_pc(cfg, extent_w, extent_h));
         } else if (p.name == "taa") {
-            store_pc(p.push_data, make_taa_pc(cfg, extent_w, extent_h));
+            if (p.push_data.size() == sizeof(TaaVelocityPC)) {
+                store_pc(p.push_data,
+                         make_taa_velocity_pc(cfg, extent_w, extent_h));
+            } else {
+                store_pc(p.push_data, make_taa_pc(cfg, extent_w, extent_h));
+            }
+        } else if (p.name == "volumetric_fog") {
+            store_pc(p.push_data, make_fog_pc(cfg));
+        } else if (p.name == "lens_flare") {
+            store_pc(p.push_data, make_lens_flare_pc(cfg, extent_w, extent_h));
+        } else if (p.name == "ssgi_gather") {
+            store_pc(p.push_data, make_ssgi_gather_pc(cfg, extent_w, extent_h));
+        } else if (p.name == "ssgi_apply") {
+            store_pc(p.push_data, make_ssgi_apply_pc(cfg));
         } else if (p.name == "exposure_measure") {
             store_pc(p.push_data, make_exposure_measure_pc(cfg));
         } else if (p.name == "exposure_apply") {
@@ -866,6 +1181,7 @@ void rebuild_intermediate_targets(PostProcessChain& chain) {
     auto is_reserved = [](const std::string& n) {
         return n == kPostProcessSceneTarget || n == kPostProcessOutputTarget ||
                n == kPostProcessLutTarget   || n == kPostProcessDepthTarget ||
+               n == kPostProcessVelocityTarget ||
                // history 入力 (__history:<target>__) は persistent image に
                // 解決される — 中間ターゲットとして数えない。
                !parse_history_input(n).empty();

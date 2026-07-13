@@ -16,10 +16,12 @@ GPU dispatch (compute / CSM 実描画) は phase 2 (`GIGpuExecutor`) の領分�
 | `GISceneProxy` | AABB プロキシへの遮蔽クエリ (slab 法 any-hit / closest-hit)。bake / probe 構築の共通基盤 |
 | `GIProbeField` | probe grid の SH 構築 + 遮蔽キャッシュ + `relight()` (動的ライト追従 = phase 1 のリアルタイム GI) + trilinear 補間 |
 | `gi_sh.h` | SH L2 射影 / irradiance 評価 / fibonacci sphere (純関数) |
-| `GIGpuExecutor` | phase 2: 実 VkBuffer + `gi_probe_sample.comp` compute dispatch。マテリアル結線用バッファ (`params_buffer()` / `probe_sh_buffer()` / `object_irradiance_buffer()`) を公開 |
+| `GIGpuExecutor` | phase 2: 実 VkBuffer + `gi_probe_sample.comp` compute dispatch。マテリアル結線用バッファ (`params_buffer()` / `probe_sh_buffer()` / `object_irradiance_buffer()`) を公開。phase 3 で環境反射パラメータ (`set_env_params()`) を追加 |
 | `GIShadowAtlas` | phase 2: CSM depth array + render pass + per-cascade framebuffer + PCF compare sampler (描画はホスト責務、`spec/setup/integration.md` §6.2) |
+| `GISsaoCompute` | phase 2: 深度のみ SSAO compute (`ssao_gen.comp`)。R8 AO image + 決定的カーネル所有 (`integration.md` §6.4) |
+| `GIReflectionProbe` | phase 3: mip 付き cubemap の host-driven キャプチャ契約 + blit mip 生成 + 1x1 黒 fallback (`integration.md` §7.3) |
 
-シェーダ側: `gi.glsl` (per-pixel probe 補間) を `pbr_gi.frag` (opt-in バリアント) が include。既存 `pbr.frag` は無変更。
+シェーダ側: `gi.glsl` (per-pixel probe 補間 + 環境スペキュラ `sampleGIEnvSpecular`) を `pbr_gi.frag` (opt-in バリアント) が include。既存 `pbr.frag` は無変更。probe の動的追従は `GIProbeField::update_budgeted()` (DDGI 風 round-robin、`integration.md` §7.4)。
 
 設定: `GIConfig` (shadows+SSAO+probes 統合) / `ShadowMapConfig` (cascade 数/解像度/PCF・PCSS/bias) / `SSAOConfig` / `GIProbeConfig` (grid 原点/間隔/寸法)。bake は `GIBakeConfig` + `BakeTarget` enum (SHADOW_MAP / AMBIENT_OCCLUSION / PROBE_IRRADIANCE / LIGHTMAP)。
 

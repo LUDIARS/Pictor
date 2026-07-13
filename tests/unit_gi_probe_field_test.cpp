@@ -208,6 +208,45 @@ int main() {
                   "include_direct folds sun into probes");
     }
 
+    // 7b. update_budgeted (DDGI 風) — proxy の中身が変わった後、 予算更新で
+    //     probe が新しいジオメトリに追従する (round-robin で全数一巡)。
+    {
+        // 最初は空 → 天井を追加して遮蔽が生まれる。
+        std::vector<AABB> boxes;
+        std::vector<ObjectId> ids;
+        GISceneProxy proxy;
+        proxy.build(boxes.data(), ids.data(), 0);
+
+        GIProbeConfig cfg;
+        cfg.grid_origin  = {0, 0, 0};
+        cfg.grid_spacing = {2, 2, 2};
+        cfg.grid_x = 2; cfg.grid_y = 1; cfg.grid_z = 2;   // 4 probes
+
+        DirectionalLight sun;
+        sun.direction = {0.0f, -1.0f, 0.0f};
+        sun.intensity = 1.0f;
+        sun.color     = {1, 1, 1};
+
+        GIProbeField field;
+        field.build(cfg, proxy, sun, {});
+        const float3 open_irr =
+            field.sample_irradiance({1, 0, 1}, {0, 1, 0});
+        PT_ASSERT(open_irr.x > 0.0f, "budgeted: open sky lights probes");
+
+        // 天井を追加 (probe の真上を覆う) — proxy の中身を更新。
+        boxes.push_back(box(1, 5, 1, 10.0f, 0.5f, 10.0f));
+        ids.push_back(42);
+        proxy.build(boxes.data(), ids.data(), 1);
+
+        // 予算 2 × 2 回で 4 probe が一巡する。
+        field.update_budgeted(sun, {}, 2);
+        field.update_budgeted(sun, {}, 2);
+        const float3 covered_irr =
+            field.sample_irradiance({1, 0, 1}, {0, 1, 0});
+        PT_ASSERT(covered_irr.x < open_irr.x,
+                  "budgeted: probes track new geometry (sky blocked)");
+    }
+
     // 8. SSAO 半球カーネル生成 — +Z 半球 / 単位方向 / スケール範囲 / 決定性。
     {
         constexpr uint32_t N = 32;

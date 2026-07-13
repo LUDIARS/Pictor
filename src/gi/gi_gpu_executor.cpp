@@ -20,7 +20,10 @@ GIGpuExecutor::~GIGpuExecutor() {
 
 namespace {
 
-/// gi_probe_sample.comp の GIProbeParams UBO と同一レイアウト (std140)。
+/// gi_probe_sample.comp / gi.glsl の GIProbeParams UBO と同一レイアウト
+/// (std140)。 末尾 16B は環境反射 (reflection probe) 用の拡張 —
+/// compute 側は先頭 64B の block を宣言しており、 バッファが大きい分には
+/// 互換 (共通プレフィクスのオフセットは一致)。
 struct GIProbeParamsGpu {
     float    grid_origin[4];
     float    grid_spacing[4];
@@ -29,9 +32,12 @@ struct GIProbeParamsGpu {
     uint32_t probe_count;
     float    gi_intensity;
     float    max_probe_distance;
+    float    env_intensity;        // 環境反射の強度 (0 = 無効)
+    float    env_mip_count;        // reflection probe の mip 数
+    float    pad0, pad1;
 };
-static_assert(sizeof(GIProbeParamsGpu) == 64,
-              "GIProbeParamsGpu must match the shader UBO (64 bytes)");
+static_assert(sizeof(GIProbeParamsGpu) == 80,
+              "GIProbeParamsGpu must match the shader UBO (80 bytes)");
 
 VkShaderModule load_shader_module(VkDevice device, const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -118,7 +124,15 @@ void GIGpuExecutor::write_params_() {
     p.probe_count        = probe_count_;
     p.gi_intensity       = config_.gi_intensity;
     p.max_probe_distance = config_.max_probe_distance;
+    p.env_intensity      = env_intensity_;
+    p.env_mip_count      = static_cast<float>(env_mip_count_);
     std::memcpy(params_.mapped, &p, sizeof(p));
+}
+
+void GIGpuExecutor::set_env_params(float intensity, uint32_t mip_count) {
+    env_intensity_ = intensity;
+    env_mip_count_ = mip_count;
+    if (initialized_) write_params_();
 }
 
 bool GIGpuExecutor::initialize(VulkanContext& vk, const std::string& shader_dir,

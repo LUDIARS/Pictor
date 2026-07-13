@@ -63,6 +63,25 @@ void GISceneProxy::build(const ObjectPool& static_pool) {
     }
 }
 
+void GISceneProxy::build(const ObjectPool& pool_a, const ObjectPool& pool_b) {
+    const uint32_t ca = pool_a.count();
+    const uint32_t cb = pool_b.count();
+    boxes_.resize(static_cast<size_t>(ca) + cb);
+    ids_.resize(static_cast<size_t>(ca) + cb);
+    const auto& ba = pool_a.bounds();
+    const auto& ia = pool_a.object_ids();
+    for (uint32_t i = 0; i < ca; ++i) {
+        boxes_[i] = ba[i];
+        ids_[i]   = ia[i];
+    }
+    const auto& bb = pool_b.bounds();
+    const auto& ib = pool_b.object_ids();
+    for (uint32_t i = 0; i < cb; ++i) {
+        boxes_[ca + i] = bb[i];
+        ids_[ca + i]   = ib[i];
+    }
+}
+
 bool GISceneProxy::occluded(const float3& from, const float3& dir,
                             float max_dist, ObjectId ignore) const {
     const float3 inv_dir = safe_inverse(dir);

@@ -34,6 +34,10 @@ public:
     /// static pool の bounds / object_ids から構築する。
     void build(const ObjectPool& static_pool);
 
+    /// 2 プール (static + dynamic) を結合して構築する — 動的オブジェクトを
+    /// 遮蔽物として probe 更新に含めたいとき (phase 3、 DDGI 風予算更新)。
+    void build(const ObjectPool& pool_a, const ObjectPool& pool_b);
+
     /// `from` から `dir` (正規化済み) 方向 `max_dist` 以内に遮蔽物があるか。
     /// `ignore` の ObjectId は自己遮蔽防止のためスキップする。 any-hit。
     bool occluded(const float3& from, const float3& dir,

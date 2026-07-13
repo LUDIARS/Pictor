@@ -116,6 +116,12 @@ extern const char* const kPostProcessLutTarget;      // "__lut__"
 /// 入力専用 — `output` には使えない。
 extern const char* const kPostProcessDepthTarget;    // "__depth__"
 
+/// スクリーン速度 (RG16F、 UV 差分) を指す予約済みターゲット名。
+/// `PostProcessConfig::velocity.enabled` (scene pass MRT 化) のときだけ
+/// 解決できる。 per-object motion blur / TAA 動体対応 (phase 3) 用。
+/// 入力専用 — `output` には使えない。
+extern const char* const kPostProcessVelocityTarget; // "__velocity__"
+
 // ============================================================
 // history buffer — 寿命 >1 フレームの持ち越し入力 (phase 2)
 // ============================================================

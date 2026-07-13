@@ -752,5 +752,120 @@ int main() {
                   "dof: legacy default = no linearization");
     }
 
+    // 20. phase 3 — velocity buffer 方式の motion blur / TAA。
+    //     velocity.enabled が無いとカメラ再投影方式へ倒れる。
+    {
+        PostProcessConfig cfg;
+        cfg.velocity.enabled       = true;
+        cfg.motion_blur.enabled    = true;
+        cfg.motion_blur.per_object = true;
+        cfg.taa.enabled            = true;
+        cfg.taa.use_velocity       = true;
+        cfg.taa.history_valid      = true;   // velocity 方式は行列不要
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1280, 720, false, false);
+
+        const PostProcessPassDef* mb = find_pass(chain, "motion_blur");
+        PT_ASSERT(mb != nullptr &&
+                  mb->frag_spv.find("motion_blur_velocity") != std::string::npos,
+                  "velocity: mblur uses velocity shader");
+        PT_ASSERT(mb->inputs[1] == kPostProcessVelocityTarget,
+                  "velocity: mblur reads __velocity__");
+        struct MotionBlurVelocityPC {
+            float intensity, max_velocity; uint32_t sample_count, valid;
+        };
+        MotionBlurVelocityPC mpc = read_pc<MotionBlurVelocityPC>(*mb);
+        PT_ASSERT_OP(mpc.valid, ==, uint32_t{1},
+                     "velocity mblur: valid without matrix");
+
+        const PostProcessPassDef* ta = find_pass(chain, "taa");
+        PT_ASSERT(ta != nullptr &&
+                  ta->frag_spv.find("taa_velocity") != std::string::npos,
+                  "velocity: taa uses velocity shader");
+        PT_ASSERT_OP(ta->inputs.size(), ==, size_t{4},
+                     "velocity taa: 4 inputs (+velocity)");
+        PT_ASSERT(ta->inputs[3] == kPostProcessVelocityTarget,
+                  "velocity taa: reads __velocity__");
+
+        // velocity buffer 無効 → カメラ再投影方式へ (per_object は無視)。
+        cfg.velocity.enabled = false;
+        PostProcessChain fallback = build_post_process_chain(
+            cfg, "shaders", 1280, 720, false, false);
+        const PostProcessPassDef* fb_mb = find_pass(fallback, "motion_blur");
+        PT_ASSERT(fb_mb != nullptr &&
+                  fb_mb->frag_spv.find("motion_blur_velocity") == std::string::npos,
+                  "no velocity buffer: falls back to camera reprojection");
+    }
+
+    // 21. phase 3 — lens flare は bloom 経路へ割り込み、 grade の bloom 入力を
+    //     pp_flare へ差し替える (grade 無変更)。
+    {
+        PostProcessConfig cfg;
+        cfg.lens_flare.enabled   = true;
+        cfg.lens_flare.intensity = 0.5f;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 800, 600, false, false);
+
+        const PostProcessPassDef* lf = find_pass(chain, "lens_flare");
+        PT_ASSERT(lf != nullptr, "flare pass inserted");
+        PT_ASSERT(lf->inputs[0] == "pp_ping", "flare reads blur result");
+        PT_ASSERT(lf->output == "pp_flare",   "flare -> pp_flare");
+        const PostProcessPassDef* gr = find_pass(chain, "color_grade");
+        PT_ASSERT(gr != nullptr && gr->inputs[1] == "pp_flare",
+                  "grade bloom input rebound to flare");
+
+        // mip チェーンと併用時は 1/2 解像度の u0 を読み、 flare も 1/2。
+        cfg.bloom.mip_chain = true;
+        PostProcessChain mip = build_post_process_chain(
+            cfg, "shaders", 800, 600, false, false);
+        const PostProcessPassDef* mlf = find_pass(mip, "lens_flare");
+        PT_ASSERT(mlf != nullptr && mlf->inputs[0] == "pp_bloom_u0",
+                  "flare reads mip bloom");
+        PT_ASSERT_OP(post_process_target_divisor(mip, "pp_flare"), ==, 2u,
+                     "flare target matches bloom divisor");
+    }
+
+    // 22. phase 3 — volumetric fog: カメラ未設定は valid 0、 SSGI は
+    //     half-res gather + apply の 2 pass + history。
+    {
+        PostProcessConfig cfg;
+        cfg.volumetric_fog.enabled = true;
+        cfg.ssgi.enabled           = true;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1920, 1080, false, false);
+
+        // 順序: ssgi_gather → ssgi_apply → fog → extract …
+        PT_ASSERT(chain.passes[0].name == "ssgi_gather", "order: ssgi first");
+        PT_ASSERT(chain.passes[1].name == "ssgi_apply",  "order: apply second");
+        PT_ASSERT(chain.passes[2].name == "volumetric_fog", "order: fog third");
+        PT_ASSERT(chain.passes[0].inputs[2] == "__history:pp_ssgi__",
+                  "ssgi gather reads its history");
+        PT_ASSERT_OP(post_process_target_divisor(chain, "pp_ssgi"), ==, 2u,
+                     "ssgi gathers at half-res");
+        PT_ASSERT(chain.passes[2].inputs[0] == "pp_ssgi_out",
+                  "fog reads ssgi output");
+
+        struct FogPCHead { float cam_pos[3]; float density; };
+        FogPCHead fpc = read_pc<FogPCHead>(chain.passes[2]);
+        PT_ASSERT(feq(fpc.density, 0.02f), "fog: density carried");
+        // valid は末尾 (offset 124)。 camera_valid=false → 0。
+        const auto& fog_pass = chain.passes[2];
+        uint32_t fog_valid = 0;
+        std::memcpy(&fog_valid, fog_pass.push_data.data() + 124, 4);
+        PT_ASSERT_OP(fog_valid, ==, uint32_t{0},
+                     "fog: invalid until host sets camera");
+        PT_ASSERT_OP(fog_pass.push_data.size(), ==, size_t{128},
+                     "fog: push exactly 128B");
+
+        // ホストがカメラを設定 → refresh で valid 1。
+        cfg.volumetric_fog.camera_valid = true;
+        refresh_post_process_chain(chain, cfg, 1920, 1080, false, false);
+        std::memcpy(&fog_valid, chain.passes[2].push_data.data() + 124, 4);
+        PT_ASSERT_OP(fog_valid, ==, uint32_t{1}, "fog: valid after camera set");
+    }
+
     return report("unit_postprocess_chain_test");
 }

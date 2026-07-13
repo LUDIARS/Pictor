@@ -17,11 +17,19 @@ layout(set = 2, binding = 2) uniform GIProbeParams {
     uint  giProbeCount;
     float giIntensity;         // 0 = GI 無効 (バッファ結線は維持)
     float giMaxProbeDistance;
+    float giEnvIntensity;      // 環境反射の強度 (0 = 無効)
+    float giEnvMipCount;       // reflection probe の mip 数
+    float giPad0;
+    float giPad1;
 };
 
 layout(std430, set = 2, binding = 3) readonly buffer GIProbeIrradiance {
     vec4 gi_probe_sh[];        // [probeIdx * 9 + coeff]
 };
+
+// 環境反射 cubemap (GIReflectionProbe::cube_view()、 キャプチャ無しホストは
+// initialize_fallback() の 1x1 黒を結線する)。
+layout(set = 2, binding = 4) uniform samplerCube giEnvMap;
 
 // 8 probe の trilinear 補間 SH を得る (grid 外はクランプ)。
 void giInterpolateProbes(vec3 worldPos, out vec4 sh[9]) {
@@ -86,4 +94,11 @@ vec3 sampleGIIrradiance(vec3 worldPos, vec3 normal) {
     vec4 sh[9];
     giInterpolateProbes(worldPos, sh);
     return giEvalIrradiance(sh, normal) * giIntensity;
+}
+
+// 環境反射 (reflection probe)。 roughness → mip LOD の粗い prefilter 近似。
+vec3 sampleGIEnvSpecular(vec3 reflectDir, float roughness) {
+    if (giEnvIntensity <= 0.0) return vec3(0.0);
+    float lod = roughness * max(giEnvMipCount - 1.0, 0.0);
+    return textureLod(giEnvMap, reflectDir, lod).rgb * giEnvIntensity;
 }

@@ -112,29 +112,49 @@ void GIProbeField::build(const GIProbeConfig& config, const GISceneProxy& proxy,
     const float3 extent = {config.grid_spacing.x * static_cast<float>(gx),
                            config.grid_spacing.y * static_cast<float>(gy),
                            config.grid_spacing.z * static_cast<float>(gz)};
-    const float ray_len = std::max(1.0f, length3(extent));
+    ray_length_ = std::max(1.0f, length3(extent));
 
     ray_hit_dist_.assign(static_cast<size_t>(probe_count_) * rays, -1.0f);
-    for (uint32_t z = 0; z < gz; ++z) {
-        for (uint32_t y = 0; y < gy; ++y) {
-            for (uint32_t x = 0; x < gx; ++x) {
-                const uint32_t p = x + gx * (y + gy * z);
-                const float3 pos = probe_position(x, y, z);
-                float* dist = ray_hit_dist_.data()
-                            + static_cast<size_t>(p) * rays;
-                for (uint32_t r = 0; r < rays; ++r) {
-                    const float3 dir = fibonacci_sphere_dir(r, rays);
-                    const auto hit = proxy.closest_hit(pos, dir, ray_len);
-                    dist[r] = hit.hit ? hit.distance : -1.0f;
-                }
-            }
-        }
+    for (uint32_t p = 0; p < probe_count_; ++p) {
+        recast_probe(p);
     }
 
     sh_.assign(static_cast<size_t>(probe_count_) * kSHFloatCount, 0.0f);
+    update_cursor_ = 0;
     built_ = true;
 
     relight(sun, points);
+}
+
+void GIProbeField::recast_probe(uint32_t index) {
+    const uint32_t gx = std::max(config_.grid_x, 1u);
+    const uint32_t gy = std::max(config_.grid_y, 1u);
+    const uint32_t x = index % gx;
+    const uint32_t y = (index / gx) % gy;
+    const uint32_t z = index / (gx * gy);
+    const float3 pos = probe_position(x, y, z);
+
+    const uint32_t rays = std::max(params_.rays_per_probe, 8u);
+    float* dist = ray_hit_dist_.data() + static_cast<size_t>(index) * rays;
+    for (uint32_t r = 0; r < rays; ++r) {
+        const float3 dir = fibonacci_sphere_dir(r, rays);
+        const auto hit = proxy_->closest_hit(pos, dir, ray_length_);
+        dist[r] = hit.hit ? hit.distance : -1.0f;
+    }
+}
+
+void GIProbeField::update_budgeted(const DirectionalLight& sun,
+                                   const std::vector<PointLight>& points,
+                                   uint32_t probe_budget) {
+    if (!built_ || proxy_ == nullptr || probe_count_ == 0) return;
+
+    const uint32_t budget = std::min(probe_budget, probe_count_);
+    for (uint32_t i = 0; i < budget; ++i) {
+        const uint32_t p = update_cursor_;
+        update_cursor_ = (update_cursor_ + 1) % probe_count_;
+        recast_probe(p);
+        relight_probe(p, sun, points);
+    }
 }
 
 void GIProbeField::relight(const DirectionalLight& sun,

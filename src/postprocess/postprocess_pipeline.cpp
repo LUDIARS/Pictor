@@ -45,6 +45,11 @@ VkImageView PostProcessPipeline::scene_color_view() const {
     return targets_[static_cast<size_t>(scene_index_)].view;
 }
 
+VkImageView PostProcessPipeline::scene_velocity_view() const {
+    if (scene_index_ < 0) return VK_NULL_HANDLE;
+    return targets_[static_cast<size_t>(scene_index_)].velocity_view;
+}
+
 VkImageView PostProcessPipeline::scene_depth_view() const {
     if (scene_index_ < 0) return VK_NULL_HANDLE;
     return targets_[static_cast<size_t>(scene_index_)].depth_view;
@@ -98,30 +103,53 @@ VkShaderModule PostProcessPipeline::load_shader_(const std::string& path) const 
 // ── scene render pass: color (RGBA16F) + depth (D32_SFLOAT), CLEAR ──────────
 //    旧実装の rp_scene_ と同一。 DecalSystem 等が color/depth をサンプルする。
 bool PostProcessPipeline::create_scene_render_pass_() {
-    VkAttachmentDescription atts[2]{};
-    atts[0].format         = kHdrFormat;
-    atts[0].samples        = VK_SAMPLE_COUNT_1_BIT;
-    atts[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    atts[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    atts[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    atts[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    atts[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    atts[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    atts[1].format         = kDepthFormat;
-    atts[1].samples        = VK_SAMPLE_COUNT_1_BIT;
-    atts[1].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    atts[1].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    atts[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    atts[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    atts[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    atts[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    // velocity buffer 有効時は color(0) / velocity(1) / depth(2) の MRT。
+    // フラグが変わったら作り直す (rebuild_chain 経由の構造変更)。
+    const bool want_velocity = config_.velocity.enabled;
+    if (rp_scene_ != VK_NULL_HANDLE) {
+        if (scene_rp_has_velocity_ == want_velocity) return true;
+        vkDestroyRenderPass(device_, rp_scene_, nullptr);
+        rp_scene_ = VK_NULL_HANDLE;
+    }
+    scene_rp_has_velocity_ = want_velocity;
 
-    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkAttachmentDescription atts[3]{};
+    uint32_t att_count = 0;
+    const uint32_t color_idx = att_count++;
+    atts[color_idx].format         = kHdrFormat;
+    atts[color_idx].samples        = VK_SAMPLE_COUNT_1_BIT;
+    atts[color_idx].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    atts[color_idx].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[color_idx].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    atts[color_idx].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[color_idx].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    atts[color_idx].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    uint32_t velocity_idx = 0;
+    if (want_velocity) {
+        velocity_idx = att_count++;
+        atts[velocity_idx] = atts[color_idx];
+        atts[velocity_idx].format = VK_FORMAT_R16G16_SFLOAT;
+    }
+    const uint32_t depth_idx = att_count++;
+    atts[depth_idx].format         = kDepthFormat;
+    atts[depth_idx].samples        = VK_SAMPLE_COUNT_1_BIT;
+    atts[depth_idx].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    atts[depth_idx].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[depth_idx].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    atts[depth_idx].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[depth_idx].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    atts[depth_idx].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRefs[2] = {
+        {color_idx, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        {velocity_idx, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+    };
+    VkAttachmentReference depthRef{depth_idx,
+                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub{};
     sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sub.colorAttachmentCount    = 1;
-    sub.pColorAttachments       = &colorRef;
+    sub.colorAttachmentCount    = want_velocity ? 2u : 1u;
+    sub.pColorAttachments       = colorRefs;
     sub.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency deps[2]{};
@@ -145,7 +173,7 @@ bool PostProcessPipeline::create_scene_render_pass_() {
     deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    rp.attachmentCount = 2;
+    rp.attachmentCount = att_count;
     rp.pAttachments    = atts;
     rp.subpassCount    = 1;
     rp.pSubpasses      = &sub;
@@ -333,11 +361,53 @@ bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
             return false;
     }
 
+    // ── velocity image (scene + velocity.enabled のみ、 RG16F) ──
+    //    render pass の attachment 順は color(0) / velocity(1) / depth(2)。
+    const bool with_velocity = with_depth && config_.velocity.enabled;
+    if (with_velocity) {
+        VkImageCreateInfo vic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        vic.imageType     = VK_IMAGE_TYPE_2D;
+        vic.format        = VK_FORMAT_R16G16_SFLOAT;
+        vic.extent        = {extent.width, extent.height, 1};
+        vic.mipLevels     = 1;
+        vic.arrayLayers   = 1;
+        vic.samples       = VK_SAMPLE_COUNT_1_BIT;
+        vic.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        vic.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                            VK_IMAGE_USAGE_SAMPLED_BIT;
+        vic.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        vic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device_, &vic, nullptr, &rt.velocity_image) !=
+            VK_SUCCESS)
+            return false;
+        vkGetImageMemoryRequirements(device_, rt.velocity_image, &mr);
+        ai.allocationSize  = mr.size;
+        ai.memoryTypeIndex = find_memory_type_(mr.memoryTypeBits,
+                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device_, &ai, nullptr, &rt.velocity_memory) !=
+            VK_SUCCESS)
+            return false;
+        vkBindImageMemory(device_, rt.velocity_image, rt.velocity_memory, 0);
+
+        VkImageViewCreateInfo vvi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vvi.image    = rt.velocity_image;
+        vvi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vvi.format   = VK_FORMAT_R16G16_SFLOAT;
+        vvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &vvi, nullptr, &rt.velocity_view) !=
+            VK_SUCCESS)
+            return false;
+    }
+
     // ── framebuffer ──
-    VkImageView fb_atts[2] = {rt.view, rt.depth_view};
+    VkImageView fb_atts[3];
+    uint32_t fb_count = 0;
+    fb_atts[fb_count++] = rt.view;
+    if (with_velocity) fb_atts[fb_count++] = rt.velocity_view;
+    if (with_depth)    fb_atts[fb_count++] = rt.depth_view;
     VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     fi.renderPass      = rp;
-    fi.attachmentCount = with_depth ? 2u : 1u;
+    fi.attachmentCount = fb_count;
     fi.pAttachments    = fb_atts;
     fi.width           = extent.width;
     fi.height          = extent.height;
@@ -583,7 +653,8 @@ void PostProcessPipeline::write_descriptor_sets_() {
         for (uint32_t i = 0; i < cp.input_count; ++i) {
             // 入力 index >= 0 は targets_、 -1 は LUT (専用 Texture)、
             // -2 は scene 深度 (__depth__、 NEAREST サンプラ)、
-            // -3-n は history_[n] (persistent image)。
+            // -3 は scene velocity (__velocity__)、
+            // -4-n は history_[n] (persistent image)。
             const int32_t idx = cp.input_indices[i];
             if (idx >= 0) {
                 infos[i].sampler     = sampler_;
@@ -600,8 +671,12 @@ void PostProcessPipeline::write_descriptor_sets_() {
                 infos[i].imageView   = scene_depth_view();
                 infos[i].imageLayout =
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            } else if (idx == -3) {
+                infos[i].sampler     = sampler_;
+                infos[i].imageView   = scene_velocity_view();
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             } else {
-                const size_t h = static_cast<size_t>(-3 - idx);
+                const size_t h = static_cast<size_t>(-4 - idx);
                 infos[i].sampler     = sampler_;
                 infos[i].imageView   = history_[h].tex.view;
                 infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -903,6 +978,18 @@ bool PostProcessPipeline::build_from_chain_(
                 cp.input_indices.push_back(-2);  // scene 深度ビュー
                 continue;
             }
+            if (in_name == kPostProcessVelocityTarget) {
+                if (!config_.velocity.enabled) {
+                    // 前提の欠落 — 黙って縮退しない (RULE_CODE §7.1)。
+                    std::fprintf(stderr,
+                                 "[postprocess] pass '%s': __velocity__ requires "
+                                 "PostProcessConfig::velocity.enabled\n",
+                                 def.name.c_str());
+                    return false;
+                }
+                cp.input_indices.push_back(-3);  // scene velocity ビュー
+                continue;
+            }
             const std::string hist_src = parse_history_input(in_name);
             if (!hist_src.empty()) {
                 int32_t hidx = -1;
@@ -918,7 +1005,7 @@ bool PostProcessPipeline::build_from_chain_(
                                  def.name.c_str(), in_name.c_str());
                     return false;
                 }
-                cp.input_indices.push_back(-3 - hidx);  // history_[hidx]
+                cp.input_indices.push_back(-4 - hidx);  // history_[hidx]
                 continue;
             }
             int32_t idx = resolve_target_(in_name);
@@ -1175,6 +1262,12 @@ void PostProcessPipeline::destroy_chain_resources_() {
         if (rt.depth_view)   vkDestroyImageView(device_, rt.depth_view, nullptr);
         if (rt.depth_image)  vkDestroyImage(device_, rt.depth_image, nullptr);
         if (rt.depth_memory) vkFreeMemory(device_, rt.depth_memory, nullptr);
+        if (rt.velocity_view)
+            vkDestroyImageView(device_, rt.velocity_view, nullptr);
+        if (rt.velocity_image)
+            vkDestroyImage(device_, rt.velocity_image, nullptr);
+        if (rt.velocity_memory)
+            vkFreeMemory(device_, rt.velocity_memory, nullptr);
     };
     for (VkFramebuffer fb : output_fbs_)
         if (fb) vkDestroyFramebuffer(device_, fb, nullptr);

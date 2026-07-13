@@ -116,6 +116,7 @@ add_library(pictor STATIC
     src/gi/gi_gpu_executor.cpp
     src/gi/gi_shadow_atlas.cpp
     src/gi/gi_ssao_compute.cpp
+    src/gi/gi_reflection_probe.cpp
 
     # Post-Process (host-driven, real Vulkan)
     src/postprocess/postprocess_pipeline.cpp
@@ -555,6 +556,12 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/exposure_apply.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_down.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_up.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/motion_blur_velocity.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/taa_velocity.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/lens_flare.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/volumetric_fog.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssgi_gather.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssgi_apply.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp

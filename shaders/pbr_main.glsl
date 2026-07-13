@@ -181,11 +181,15 @@ void main() {
     vec3 kS = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     vec3 kD = (1.0 - kS) * (1.0 - metallic);
 #ifdef PICTOR_GI
-    // probe grid の間接光 (空 + バウンス) を定数 ambient に加算する。
+    // probe grid の間接光 (空 + バウンス) を定数 ambient に加算し、
+    // 環境反射 (reflection probe、 roughness → mip LOD) をスペキュラ項へ。
     // AO は間接光にのみ効かせる (直接光は shadow が受け持つ)。
     vec3 giIrradiance = sampleGIIrradiance(fragWorldPos, N);
-    vec3 ambient = (kD * albedo + kS * 0.03)
-                 * (ambientColor.rgb * ambientColor.a + giIrradiance) * ao;
+    vec3 giSpecular   = sampleGIEnvSpecular(reflect(-V, N), roughness);
+    vec3 ambient = (kD * albedo)
+                     * (ambientColor.rgb * ambientColor.a + giIrradiance) * ao
+                 + kS * (ambientColor.rgb * ambientColor.a * 0.03
+                         + giSpecular) * ao;
 #else
     vec3 ambient = (kD * albedo + kS * 0.03) * ambientColor.rgb * ambientColor.a * ao;
 #endif

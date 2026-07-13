@@ -173,7 +173,16 @@ SSAO は (a) PP 近似 (`postprocess-effects-design.md` §2.1、シーン色乗�
 | マテリアル GI 項 | `shaders/gi.glsl` (set 2 binding 2/3、 per-pixel probe 補間 + SH irradiance) + `pbr_main.glsl` 分割 + **`pbr_gi.frag` (opt-in バリアント — 既存 `pbr.frag` は無変更でホスト非破壊)** | ✅ |
 | 移行手順 | `spec/setup/integration.md` §6 (バインディング表 + ホスト契約) | ✅ |
 | SSAO compute | `gi/gi_ssao_compute.{h,cpp}` + `ssao_gen.comp` 書き換え — **法線バッファ要求を撤廃** (深度差分から 5-tap 再構築、 ノイズはシェーダ内ハッシュ)。 R8 AO image + カーネル (`generate_ssao_kernel()`、 決定的) + compute dispatch を自己所有。 depth はホスト供給 (`set_depth_input()`)。 PP 近似 `ssao_apply` の上位互換 — 両方 enabled にしない (§3) | ✅ |
-| GILightingSystem からの一体駆動 (executor 群の自動配線) | — | ⬜ (phase 3 — host-driven 原則との整理が先) |
+
+## 7. phase 3 実装状況 (2026-07-13, `feat/postprocess-gi`)
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| DDGI 風 probe 自動更新 | `GIProbeField::update_budgeted()` — round-robin で毎フレーム `probe_budget` 個だけ遮蔽レイを撃ち直し + 再射影。 数フレームで全 probe が一巡し**動いたジオメトリに間接光が追従**する。 動的オブジェクトを遮蔽物に含める `GISceneProxy::build(static, dynamic)` 追加 | ✅ |
+| Reflection probe | `gi/gi_reflection_probe.{h,cpp}` — mip 付き RGBA16F cubemap + face 描画契約 (host-driven、 GIShadowAtlas と同型) + blit mip 生成。 キャプチャ無しホスト用の 1x1 黒 fallback (`initialize_fallback()`) | ✅ |
+| 環境スペキュラ | `gi.glsl` に set 2 binding 4 (samplerCube) + `sampleGIEnvSpecular()` (roughness → mip LOD の粗い prefilter 近似 — 本式 GGX prefilter はしない)。 `pbr_gi.frag` の ambient スペキュラ項が読む。 強度/mip は `GIGpuExecutor::set_env_params()` (UBO 64→80B 拡張、 compute 側は先頭 64B 宣言のまま互換) | ✅ |
+| SSGI (screen-space GI) | postprocess 側で実装 — `postprocess-effects-design.md` §7 参照 (half-res + history 時間フィルタ)。 probe GI の補助 | ✅ |
+| GILightingSystem からの一体駆動 (executor 群の自動配線) | — | ⬜ (将来 — host-driven 原則との整理が先) |
 
 備考: `shadow.glsl` の GLSL 予約語バグ (`sample` 引数名) を修正 — pbr.frag 系を
 初めてビルド対象にしたことで露見 (従来はホスト側コンパイル頼みで未検証だった)。

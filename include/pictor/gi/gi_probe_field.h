@@ -57,6 +57,16 @@ public:
     /// build() 前に呼んだ場合は何もしない。
     void relight(const DirectionalLight& sun, const std::vector<PointLight>& points);
 
+    /// DDGI 風の予算更新 (phase 3) — round-robin カーソルから `probe_budget`
+    /// 個の probe だけ遮蔽レイを撃ち直して再射影する。 数フレームかけて
+    /// 全 probe が一巡し、 **動いたジオメトリ**に間接光が追従する。
+    /// ホストは proxy の内容 (build() に渡したオブジェクト) を動的プールを
+    /// 含めて更新してから呼ぶ (`GISceneProxy::build(static, dynamic)`)。
+    /// 一巡あたりのコスト = probe_budget × rays_per_probe レイ / フレーム。
+    void update_budgeted(const DirectionalLight& sun,
+                         const std::vector<PointLight>& points,
+                         uint32_t probe_budget);
+
     bool     built() const { return built_; }
     uint32_t probe_count() const { return probe_count_; }
 
@@ -76,6 +86,8 @@ private:
     float3 probe_position(uint32_t x, uint32_t y, uint32_t z) const;
     void   relight_probe(uint32_t index, const DirectionalLight& sun,
                          const std::vector<PointLight>& points);
+    /// index 番 probe の遮蔽レイを撃ち直す (update_budgeted 用)。
+    void   recast_probe(uint32_t index);
 
     GIProbeConfig config_{};
     BuildParams   params_{};
@@ -91,6 +103,10 @@ private:
 
     // SH 出力 (probe_count × 36)。
     std::vector<float> sh_;
+
+    // update_budgeted の round-robin カーソル + レイ長キャッシュ。
+    uint32_t update_cursor_ = 0;
+    float    ray_length_    = 1.0f;
 };
 
 } // namespace pictor

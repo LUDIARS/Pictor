@@ -55,6 +55,11 @@ public:
     /// init 時のまま — 変えたい場合は再 init)。
     void set_probe_config(const GIProbeConfig& config);
 
+    /// 環境反射 (GIReflectionProbe) のパラメータを UBO へ反映する
+    /// (phase 3 — gi.glsl の sampleGIEnvSpecular が読む)。 intensity 0 で
+    /// 環境反射は無効 (binding は fallback cubemap を維持)。
+    void set_env_params(float intensity, uint32_t mip_count);
+
     /// probe SH (probe_count × 36 float、 `GIProbeField::sh_data()` 互換) を
     /// GPU バッファへ書く。 確保済み probe 数を超える分は切り捨て。
     void upload_probe_sh(const float* sh_data, uint32_t probe_count);
@@ -105,6 +110,8 @@ private:
     uint32_t      max_objects_  = 0;
     uint32_t      probe_count_  = 0;
     uint32_t      object_count_ = 0;
+    float         env_intensity_ = 0.0f;
+    uint32_t      env_mip_count_ = 1;
 
     Buffer params_;             // GIProbeParams UBO (gi_probe_sample.comp / gi.glsl)
     Buffer transforms_;         // mat4 × max_objects

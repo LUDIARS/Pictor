@@ -117,3 +117,25 @@ PP 近似 (`PostProcessConfig::ssao`) の上位互換。両方 enabled にしな
 2. `set_depth_input(pp.scene_depth_view())` — PP の resize / rebuild_chain 後は再結線 (GPU idle 中)。
 3. 毎フレーム `update_camera(proj, inv_proj)` (逆行列はホスト算出、pictor::float4x4 を生渡し) → depth prepass 後に `record(cmd)`。
 4. `ao_view()` + `ao_sampler()` をマテリアルへ結線し、間接光項に乗算する。
+
+## 7. Phase 3 のホスト契約 (velocity / fog / reflection probe)
+
+### 7.1 velocity buffer (per-object motion blur / TAA 動体)
+
+1. `PostProcessConfig::velocity.enabled = true` で初期化 (scene pass が MRT 化: color(0)/velocity(1)/depth(2)、clearValueCount=3、velocity のクリア {0,0})。
+2. シーンシェーダの location 1 へ `shaders/velocity.glsl` の `pictor_encode_velocity(clipNow, clipPrev)` を書く (前フレームの model/VP はホスト保持。TAA 併用時はジッタ無し行列で)。
+3. `motion_blur.per_object = true` / `taa.use_velocity = true` で velocity 方式のパスが構築される (velocity 無効のままだとカメラ再投影方式で構築)。
+
+### 7.2 volumetric fog
+
+`VolumetricFogConfig` のカメラ基底 (pos/forward/right/up、tan(fov/2)) と太陽 (dir/color) を毎フレーム更新し `camera_valid = true`。解析的 height fog + 太陽前方散乱 — シャドウは評価しない。
+
+### 7.3 reflection probe / 環境スペキュラ
+
+1. `GIReflectionProbe::initialize(vk, 256)` — 好きなタイミングで 6 面を `render_pass()` + `framebuffer(face)` へ描き、`record_mip_generation(cmd)`。キャプチャしないホストは `initialize_fallback()` (1x1 黒)。
+2. `cube_view()` + `probe_sampler()` を **set 2 binding 4** へ結線 (pbr_gi.frag は binding 4 を常に要求するようになった — §6.1 の表に追加)。
+3. `GIGpuExecutor::set_env_params(intensity, probe.mip_count())` で有効化 (0 = 無効)。
+
+### 7.4 DDGI 風 probe 自動更新
+
+動的ジオメトリを遮蔽物に含めるなら `GISceneProxy::build(static_pool, dynamic_pool)` で proxy を更新してから毎フレーム `GIProbeField::update_budgeted(sun, points, budget)` (例 budget=32)。数フレームで全 probe が一巡する。

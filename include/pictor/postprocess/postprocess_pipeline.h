@@ -104,6 +104,10 @@ public:
     VkImageView   scene_color_view() const;
     /// シーンの深度ビュー (D32_SFLOAT)。 DecalSystem 等が read する。
     VkImageView   scene_depth_view() const;
+    /// スクリーン速度ビュー (RG16F)。 velocity.enabled 時のみ非 null。
+    /// scene render pass は color(0) / velocity(1) / depth(2) の MRT になり、
+    /// ホストの clearValueCount は 3 (velocity のクリアは {0,0})。
+    VkImageView   scene_velocity_view() const;
     /// シーンカラー HDR の VkImage (RGBA16F)。 KS の Phase 4 wiring が
     /// `AttachmentRegistry::set_external_attachment` で external attachment
     /// として再 expose する用。
@@ -163,6 +167,10 @@ private:
         VkImage        depth_image  = VK_NULL_HANDLE;
         VkDeviceMemory depth_memory = VK_NULL_HANDLE;
         VkImageView    depth_view   = VK_NULL_HANDLE;
+        // velocity アタッチメント (scene_ + velocity.enabled 時のみ、 RG16F)。
+        VkImage        velocity_image  = VK_NULL_HANDLE;
+        VkDeviceMemory velocity_memory = VK_NULL_HANDLE;
+        VkImageView    velocity_view   = VK_NULL_HANDLE;
         // この target を出力先とする pass 用の framebuffer の render pass。
         VkRenderPass   fb_render_pass = VK_NULL_HANDLE;
         bool           has_depth      = false;
@@ -183,7 +191,7 @@ private:
         uint32_t              input_count = 0;               ///< descriptor binding 数
         int32_t               output_index = -1;             ///< targets_ index / -1=swapchain
         /// targets_ index 列。 負値は特殊入力:
-        ///   -1 = LUT / -2 = scene 深度 / -3-n = history_[n]
+        ///   -1 = LUT / -2 = scene 深度 / -3 = velocity / -4-n = history_[n]
         std::vector<int32_t>  input_indices;
         std::vector<uint8_t>  push_data;
         uint32_t              push_size = 0;
@@ -245,6 +253,10 @@ private:
     VkRenderPass rp_scene_  = VK_NULL_HANDLE;  // RGBA16F + D32_SFLOAT, CLEAR
     VkRenderPass rp_inter_  = VK_NULL_HANDLE;  // RGBA16F, DONT_CARE
     VkRenderPass rp_output_ = VK_NULL_HANDLE;  // swapchain format, DONT_CARE
+
+    // scene render pass が velocity attachment 付きで作られているか
+    // (config_.velocity.enabled と不一致なら作り直す)。
+    bool scene_rp_has_velocity_ = false;
 
     // 名前付きターゲット集合。 index 0 = scene、 以降は chain の中間ターゲット。
     std::vector<RenderTarget>                targets_;

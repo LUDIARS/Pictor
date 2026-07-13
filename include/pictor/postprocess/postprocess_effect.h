@@ -141,12 +141,17 @@ struct SSAOPostConfig {
     float    power        = 1.5f;    ///< AO カーブ (大きいほど締まる)
 };
 
-/// カメラ再投影 Motion Blur。 per-object velocity buffer は将来 (phase 3)。
+/// Motion Blur。 既定はカメラ再投影方式。 per_object = true (かつ
+/// `PostProcessConfig::velocity.enabled`) で velocity buffer 方式に切り替わり、
+/// 動くオブジェクトにもブラーが乗る (phase 3 — 切替は構造変更なので
+/// rebuild_chain() 要。 velocity buffer 無効のまま per_object を立てた場合は
+/// カメラ再投影で構築される)。
 struct MotionBlurConfig {
     bool     enabled      = false;
     float    intensity    = 1.0f;    ///< ブラー長スケール
     uint32_t sample_count = 8;       ///< 速度ベクトルに沿うタップ数 (上限 16)
     float    max_velocity = 0.05f;   ///< NDC 単位の速度クランプ
+    bool     per_object   = false;   ///< velocity buffer 方式 (要 velocity.enabled)
     /// prevVP * inverse(currVP) — ホストが毎フレーム更新し
     /// `refresh_post_process_chain()` が push constant へ詰め直す。
     /// レイアウトは float4x4::m と同一 (row-major 添字 m[row][col] を平坦化)。
@@ -181,6 +186,10 @@ struct TAAConfig {
     float    jitter_x      = 0.0f;   ///< 現フレームのジッタ (px、 unjitter 用)
     float    jitter_y      = 0.0f;
     bool     history_valid = false;  ///< false = このフレームは素通し + 再シード
+    /// velocity buffer で再投影する (要 `PostProcessConfig::velocity.enabled`、
+    /// phase 3)。 動体の history 追跡が正確になる。 reproj_matrix は不要になる
+    /// (matrix_valid の代わりに history_valid だけで駆動)。
+    bool     use_velocity  = false;
 };
 
 /// TAA 用カメラジッタ (Halton 2,3 列、 8 フレーム周期)。 ピクセル単位の
@@ -231,6 +240,74 @@ struct FilmGrainConfig {
     float seed      = 0.0f;
 };
 
+/// velocity buffer (phase 3、 opt-in) — scene render pass を MRT 化し、
+/// attachment 1 に RG16F のスクリーン速度 (NDC 差分 × 0.5 = UV 差分) を持つ。
+///
+/// ホスト契約:
+///   - シーンシェーダが location 1 へ velocity を書く
+///     (`shaders/velocity.glsl` の pictor_encode_velocity() 参照)。
+///   - scene pass の clearValueCount は 3 (color / velocity / depth)。
+///     velocity のクリア値は {0,0,0,0} (静止)。
+/// 有効/無効はチェーン構造 + scene render pass の変更なので
+/// rebuild_chain() (または再初期化) を要する。
+struct VelocityBufferConfig {
+    bool enabled = false;
+};
+
+/// 疑似レンズフレア (ghost + halo、 phase 3)。 bloom 抽出結果を反転 UV で
+/// 重ねる標準的なスクリーンスペース近似 — 光源データを要求しない。
+struct LensFlareConfig {
+    bool     enabled        = false;
+    float    intensity      = 0.4f;   ///< フレア全体の強さ
+    uint32_t ghost_count    = 4;      ///< ghost 数 (上限 8)
+    float    ghost_spacing  = 0.3f;   ///< ghost の間隔 (中心対称スケール)
+    float    halo_radius    = 0.45f;  ///< halo リングの正規化半径
+    float    halo_intensity = 0.3f;
+};
+
+/// 解析的 height fog + 太陽前方散乱 (phase 3)。 レイマーチ無しの閉形式
+/// 積分によるカジュアル向け「volumetric 風」フォグ — シャドウボリュームは
+/// 評価しない。 カメラ基底 / 太陽はランタイムデータ (ホストが毎フレーム更新)。
+struct VolumetricFogConfig {
+    bool  enabled        = false;
+    float color[3]       = {0.6f, 0.7f, 0.85f};
+    float density        = 0.02f;   ///< 基準高度での消散係数
+    float height_falloff = 0.1f;    ///< 高度による密度減衰 (大きいほど薄く)
+    float base_height    = 0.0f;    ///< 密度基準の world 高度
+    float start_distance = 5.0f;    ///< フォグ開始距離
+    float phase_g        = 0.6f;    ///< 前方散乱の異方性 (0 = 等方)
+    float sun_scatter    = 1.0f;    ///< 太陽散乱の寄与
+
+    // ---- runtime (ホストが毎フレーム更新) ----
+    float camera_pos[3]     = {0.0f, 0.0f, 0.0f};
+    float camera_forward[3] = {0.0f, 0.0f, 1.0f};
+    float camera_right[3]   = {1.0f, 0.0f, 0.0f};
+    float camera_up[3]      = {0.0f, 1.0f, 0.0f};
+    float tan_half_fov_x    = 1.0f;
+    float tan_half_fov_y    = 1.0f;
+    float sun_dir[3]        = {0.0f, -1.0f, 0.0f};
+    float sun_color[3]      = {1.0f, 1.0f, 1.0f};   ///< intensity 込み
+    float near_plane        = 0.1f;
+    float far_plane         = 1000.0f;
+    bool  camera_valid      = false;   ///< false = 素通し (未設定フレーム)
+};
+
+/// SSGI (screen-space GI、 phase 3) — 画面内の明るい面からの 1 次バウンスを
+/// half-res で集め、 history buffer の時間フィルタでノイズを均して加算する。
+/// 画面外の光は拾えない — probe GI (gi-bake-realtime-design.md) の補助。
+struct SSGIConfig {
+    bool     enabled      = false;
+    float    intensity    = 1.0f;
+    uint32_t sample_count = 8;       ///< spiral タップ数 (上限 16)
+    float    radius_px    = 32.0f;   ///< 集光半径 (フル解像度 px)
+    float    feedback     = 0.8f;    ///< 時間フィルタの history 混合率
+    // ---- runtime (SSR と同じ透視パラメータ、 ホスト供給) ----
+    float    proj_xx      = 1.0f;
+    float    proj_yy      = 1.0f;
+    float    near_plane   = 0.1f;
+    float    far_plane    = 1000.0f;
+};
+
 /// Aggregated post-process stack configuration.
 /// Determines which effects are active and their parameters.
 struct PostProcessConfig {
@@ -248,6 +325,10 @@ struct PostProcessConfig {
     FilmGrainConfig           film_grain;
     TAAConfig                 taa;
     SSRConfig                 ssr;
+    VelocityBufferConfig      velocity;
+    LensFlareConfig           lens_flare;
+    VolumetricFogConfig       volumetric_fog;
+    SSGIConfig                ssgi;
 };
 
 } // namespace pictor

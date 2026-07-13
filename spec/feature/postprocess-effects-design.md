@@ -169,10 +169,22 @@ hit 失敗はフォールバック無し (黒 fade)。
 | headless テスト | `unit_postprocess_chain_test.cpp` §14-17 | ✅ |
 | mip-chain bloom | `BloomConfig::mip_chain` (opt-in — 既定は従来 separable blur で既存ホスト非破壊)。 縮小ターゲット基盤 (`PostProcessChain::target_divisors` + `RenderTarget::extent`) + `bloom_down.frag` / `bloom_up.frag` (4-tap box down / tent up + scatter skip 合成)。 mip 数は解像度で自動短縮 (最小 8px) | ✅ |
 | DoF 仕上げ | `DepthOfFieldConfig::near_plane/far_plane` (ランタイム) — 深度バッファ値を view 距離へ線形化して focus 距離と正しく比較する。 0/0 (既定) は旧挙動 (線形化なし) | ✅ |
-| velocity buffer (per-object motion blur / TAA 動体) | — | ⬜ (phase 3 — scene pass の MRT 化を要する) |
+| velocity buffer (per-object motion blur / TAA 動体) | phase 3 で実装 (§7) | ✅ |
 
-チェーン全部盛り (phase 2 後):
-`scene → [dof] → [ssao] → [ssr] → [mblur] → [taa] → [exposure_measure/apply] → extract → (blurH → blurV | down… → up…) → grade → [fxaa*] → out` (*TAA 無効時のみ)
+## 7. phase 3 実装状況 (2026-07-13, `feat/postprocess-gi`)
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| velocity buffer (scene pass MRT 化、 opt-in) | `VelocityBufferConfig` — scene render pass が color(0)/velocity(1)/depth(2) の MRT に。 ホストは location 1 へ `shaders/velocity.glsl` の `pictor_encode_velocity()` で速度を書く (clearValueCount=3)。 予約入力名 `__velocity__` | ✅ |
+| per-object Motion Blur | `MotionBlurConfig::per_object` + `motion_blur_velocity.frag` — 実速度に沿うブラー。 velocity 無効時はカメラ再投影へ構築時フォールバック (doc 明記) | ✅ |
+| TAA 動体対応 | `TAAConfig::use_velocity` + `taa_velocity.frag` — velocity で history を追跡 (行列不要、 ghosting 減) | ✅ |
+| Lens Flare | `LensFlareConfig` + `lens_flare.frag` (ghost + halo)。 bloom 経路へ割り込み、 grade の bloom 入力を `pp_flare` に差し替え (grade 無変更)。 mip チェーンと併用時は 1/2 解像度 | ✅ |
+| Volumetric Fog | `VolumetricFogConfig` + `volumetric_fog.frag` — **解析的** 指数 height fog (閉形式積分) + Henyey-Greenstein 太陽前方散乱。 レイマーチ / シャドウボリュームは行わないカジュアル近似。 カメラ基底はランタイム供給 (push 128B ちょうど) | ✅ |
+| SSGI | `SSGIConfig` + `ssgi_gather.frag` (half-res、 深度勾配法線、 spiral 集光、 history 時間フィルタ) + `ssgi_apply.frag` (bilinear 合成)。 画面内バウンス限定 — probe GI の補助 | ✅ |
+| headless テスト | `unit_postprocess_chain_test.cpp` §20-22 | ✅ |
+
+チェーン全部盛り (phase 3 後):
+`scene(MRT) → [dof] → [ssao] → [ssgi_gather/apply] → [ssr] → [fog] → [mblur] → [taa] → [exposure] → extract → (blurH→blurV | down…→up…) → [lens_flare] → grade → [fxaa*] → out` (*TAA 無効時のみ)
 
 ## 5. phase 1 実装状況 (2026-07-13, `feat/postprocess-gi`)
 
