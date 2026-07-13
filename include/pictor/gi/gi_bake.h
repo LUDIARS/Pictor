@@ -4,6 +4,8 @@
 #include "pictor/gpu/gpu_buffer_manager.h"
 #include "pictor/scene/scene_registry.h"
 #include "pictor/gi/gi_lighting_system.h"
+#include "pictor/gi/gi_probe_field.h"
+#include "pictor/gi/gi_scene_proxy.h"
 #include <vector>
 #include <string>
 #include <functional>
@@ -65,7 +67,10 @@ struct GIBakeConfig {
 // Bake Result — per-object baked data on CPU
 // ============================================================
 
-/// Per-object baked shadow data
+/// Per-object baked shadow data.
+/// `depths[c]` は静的ジオメトリに対する太陽可視率 (0 = 全遮蔽, 1 = 全可視)。
+/// cascade 割当はカメラ依存のためベイクでは決められない —
+/// `cascade_flags` は全 cascade を立てる (ランタイムが絞る)。
 struct BakedShadow {
     uint32_t cascade_flags = 0;     // bitmask of cascades this object touches
     float    depths[4]     = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -216,20 +221,27 @@ public:
     Stats get_stats() const { return stats_; }
 
 private:
+    /// Build the occlusion proxy / probe field / light list used by the
+    /// bake passes (called once at the start of bake()).
+    void prepare_bake_scene(const ObjectPool& pool);
+
+    // 各 bake パス。 progress が false を返したら中断し false を返す
+    // (result は部分的なまま — 呼び出し側が valid を立てない)。
+
     /// Bake shadow data for static objects
-    void bake_shadows(const ObjectPool& pool, GIBakeResult& result,
+    bool bake_shadows(const ObjectPool& pool, GIBakeResult& result,
                       const BakeProgressCallback& progress);
 
     /// Bake per-object AO for static objects
-    void bake_ao(const ObjectPool& pool, GIBakeResult& result,
+    bool bake_ao(const ObjectPool& pool, GIBakeResult& result,
                  const BakeProgressCallback& progress);
 
     /// Bake irradiance from probe grid
-    void bake_irradiance(const ObjectPool& pool, GIBakeResult& result,
+    bool bake_irradiance(const ObjectPool& pool, GIBakeResult& result,
                          const BakeProgressCallback& progress);
 
     /// Bake combined lightmap
-    void bake_lightmap(const ObjectPool& pool, GIBakeResult& result,
+    bool bake_lightmap(const ObjectPool& pool, GIBakeResult& result,
                        const BakeProgressCallback& progress);
 
     /// Collect static object IDs into the result
@@ -246,6 +258,13 @@ private:
     Stats              stats_;
     bool               baked_ = false;
     bool               dirty_ = false;
+
+    // bake 中だけ使うシーン表現 (prepare_bake_scene が構築)。
+    // メンバとして保持するのは、 probe field を将来 relight 再利用
+    // (invalidate せずライトだけ変えて焼き直す) に開くため。
+    GISceneProxy            bake_proxy_;
+    GIProbeField            bake_probes_;
+    std::vector<PointLight> bake_point_lights_;
 
     // GPU resources for baked data
     GpuAllocation baked_shadow_flags_;

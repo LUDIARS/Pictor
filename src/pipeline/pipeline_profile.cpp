@@ -40,6 +40,19 @@ PostProcessKind post_process_kind_from_name(const std::string& name) {
         n == "lut" || n == "grade")                    return PostProcessKind::COLOR_GRADING;
     if (n == "dof" || n == "depthoffield" ||
         n == "depth_of_field")                         return PostProcessKind::DEPTH_OF_FIELD;
+    if (n == "ssao" || n == "ambientocclusion" ||
+        n == "ambient_occlusion")                      return PostProcessKind::SSAO;
+    if (n == "motionblur" || n == "motion_blur")       return PostProcessKind::MOTION_BLUR;
+    if (n == "fxaa" || n == "antialiasing" ||
+        n == "anti_aliasing")                          return PostProcessKind::FXAA;
+    if (n == "chromaticaberration" ||
+        n == "chromatic_aberration" || n == "ca")      return PostProcessKind::CHROMATIC_ABERRATION;
+    if (n == "filmgrain" || n == "film_grain" ||
+        n == "grain")                                  return PostProcessKind::FILM_GRAIN;
+    if (n == "taa" || n == "temporalaa" ||
+        n == "temporal_aa")                            return PostProcessKind::TAA;
+    if (n == "ssr" || n == "screenspacereflections" ||
+        n == "screen_space_reflections")               return PostProcessKind::SSR;
     return PostProcessKind::UNKNOWN;
 }
 
