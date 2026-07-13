@@ -470,9 +470,6 @@ float4x4 GILightingSystem::compute_light_view_proj(
     float4x4 inv_view_proj = inverse4x4(multiply4x4(camera_view, camera_projection));
 
     // NDC corners: near plane z=0 (Vulkan), far plane z=1
-    float near_ndc = near_split;  // Will be recomputed from projection
-    float far_ndc  = far_split;
-
     // For proper NDC mapping, we need the camera's actual near/far from projection.
     // Use the sub-frustum splits to build a sub-projection.
     // Instead, compute frustum corners in world space directly from inverse VP.
