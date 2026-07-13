@@ -180,9 +180,23 @@ private:
         VkDescriptorSet       desc_set    = VK_NULL_HANDLE;
         uint32_t              input_count = 0;               ///< descriptor binding 数
         int32_t               output_index = -1;             ///< targets_ index / -1=swapchain
-        std::vector<int32_t>  input_indices;                 ///< targets_ index 列 (-1=LUT / -2=scene depth)
+        /// targets_ index 列。 負値は特殊入力:
+        ///   -1 = LUT / -2 = scene 深度 / -3-n = history_[n]
+        std::vector<int32_t>  input_indices;
         std::vector<uint8_t>  push_data;
         uint32_t              push_size = 0;
+        /// viewport / scissor 上書き (0 = フル解像度)。 PostProcessPassDef 由来。
+        uint32_t              viewport_w = 0;
+        uint32_t              viewport_h = 0;
+    };
+
+    /// history buffer 1 本 — 前フレームの論理ターゲット内容を持ち越す
+    /// persistent image (`__history:<source>__` 入力の解決先)。
+    /// record() がフレーム末尾に source → image のコピーを記録する。
+    struct HistoryEntry {
+        std::string source;              ///< 参照元の論理ターゲット名
+        int32_t     source_index = -1;   ///< targets_ index (毎ビルドで解決)
+        Texture     tex;                 ///< persistent image (黒クリア初期化)
     };
 
     bool build_from_chain_(VkFormat output_format,
@@ -201,8 +215,15 @@ private:
                                                 uint32_t push_size);
     bool create_pipelines_();
     bool create_output_framebuffers_(const std::vector<VkImageView>& views);
+    /// chain の `__history:*__` 入力を走査して history image 群を確保する
+    /// (黒クリア + SHADER_READ_ONLY へ遷移済みの状態で返す)。
+    bool create_history_textures_();
+    /// フレーム末尾: 各 history の source ターゲット → history image の
+    /// コピー (barrier 込み) を記録する。
+    void record_history_copies_(VkCommandBuffer cmd);
     /// resize / rebuild_chain 共通のチェーン依存リソース破棄 (targets /
-    /// output framebuffers / pipelines / descriptor pool)。 GPU idle 前提。
+    /// output framebuffers / pipelines / descriptor pool / history)。
+    /// GPU idle 前提。
     void destroy_chain_resources_();
     VkShaderModule load_shader_(const std::string& path) const;
     uint32_t find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
@@ -229,6 +250,9 @@ private:
     VkFramebuffer fb_scene_    = VK_NULL_HANDLE;  // alias of targets_[scene].fb
 
     std::vector<VkFramebuffer> output_fbs_;    // one per swapchain image
+
+    // history buffers (`__history:<target>__` 入力の解決先)。
+    std::vector<HistoryEntry> history_;
 
     Texture   lut_{};
     bool      lut_loaded_ = false;

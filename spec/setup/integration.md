@@ -71,3 +71,40 @@ endif()
 ## 5. シェーダ / アセットの扱い
 
 Pictor のデモシェーダや postprocess シェーダを consumer が流用する場合、consumer 側で SPIR-V を焼く。KS は `${KUZU_PICTOR_DIR}/demo/shaders/` や `${KUZU_PICTOR_DIR}/shaders/postprocess/` を参照してコンパイルする (`../../../KuzuSurvivors/CMakeLists.txt:334-356`)。`PICTOR_BUILD_DEMO=OFF` で取り込んでいても、ソースツリー上のシェーダファイル自体は参照できる。
+
+## 6. GI 経路への移行 (phase 2 — opt-in)
+
+GI (probe grid 間接光 + CSM 実描画) は **opt-in**。既存ホストは `pbr.frag` のまま無変更で動き続ける。有効化する場合:
+
+### 6.1 per-pixel 間接光 (pbr_gi.frag)
+
+1. `GIGpuExecutor` を初期化する (`gi/gi_gpu_executor.h`):
+   ```cpp
+   pictor::GIGpuExecutor gi_gpu;
+   gi_gpu.initialize(vk, shader_dir, max_objects, probe_config);
+   ```
+   `shader_dir` に `gi_probe_sample.comp.spv` が必要 (無ければ即 false — 黙って縮退しない)。
+2. probe SH を供給する。静的シーンなら `GIBakeSystem` の bake 結果、動的ライトなら `GIProbeField::relight()` → `gi_gpu.upload_probe_sh(field.sh_data(), field.probe_count())`。
+3. マテリアルを `pbr_gi.frag.spv` に差し替え、descriptor set 2 へ追加バインドする:
+
+   | set 2 binding | 実体 | 型 |
+   |---|---|---|
+   | 0 | ShadowUniformData (従来どおり) | UBO |
+   | 1 | shadow atlas (従来どおり) | sampler2DArray |
+   | **2** | `gi_gpu.params_buffer()` | UBO (64B) |
+   | **3** | `gi_gpu.probe_sh_buffer()` | SSBO (readonly) |
+
+   `giIntensity` (probe config) を 0 にすればバインドを保ったまま GI を無効化できる。
+4. per-object 消費 (カスタムシェーダ / CPU 側 tinting) は `update_objects()` + `record()` (シーン描画前) → `object_irradiance_buffer()` を読む。
+
+### 6.2 CSM 実描画 (GIShadowAtlas)
+
+1. `GIShadowAtlas` を初期化する (`gi/gi_shadow_atlas.h`): resolution / cascade 数は `ShadowMapConfig` と一致させる。
+2. 毎フレーム `GILightingSystem::execute()` で cascade 行列を更新後、cascade ごとに `render_pass()` + `framebuffer(c)` で depth pass を begin し、影を落とすメッシュを `cascade_view_proj(c)` で描く (`shaders/shadow_depth.vert/.frag` 提供 — pipeline はホストの頂点レイアウトで組む)。
+3. `atlas_view()` + `compare_sampler()` を set 2 binding 1 に、`shadow_uniforms()` を binding 0 に結線する。
+
+### 6.3 TAA / auto exposure のホスト契約 (postprocess)
+
+- TAA: 投影行列へ `pictor::taa_jitter()` のジッタを毎フレーム適用し、`PostProcessConfig::taa` の `reproj_matrix` (ジッタ無し prevVP·inv(currVP)) / `jitter_x/y` を更新する。カメラカット・resize・rebuild_chain 後は `history_valid = false`。
+- SSR: `PostProcessConfig::ssr` の `proj_xx / proj_yy / near_plane / far_plane` をカメラと一致させる。
+- auto exposure: `HDRConfig::auto_exposure = true` のみ。適応 dt は `record()` が自動供給する。

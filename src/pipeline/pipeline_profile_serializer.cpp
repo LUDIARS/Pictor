@@ -110,6 +110,8 @@ const char* post_process_kind_to_str(PostProcessKind k) {
         case PostProcessKind::FXAA:           return "FXAA";
         case PostProcessKind::CHROMATIC_ABERRATION: return "ChromaticAberration";
         case PostProcessKind::FILM_GRAIN:     return "FilmGrain";
+        case PostProcessKind::TAA:            return "TAA";
+        case PostProcessKind::SSR:            return "SSR";
     }
     return "Unknown";
 }
@@ -136,6 +138,10 @@ PostProcessKind post_process_kind_from_str(std::string_view s, PostProcessKind f
                                return PostProcessKind::CHROMATIC_ABERRATION;
     if (s == "FilmGrain" || s == "film_grain" || s == "Grain")
                                return PostProcessKind::FILM_GRAIN;
+    if (s == "TAA" || s == "taa" || s == "TemporalAA")
+                               return PostProcessKind::TAA;
+    if (s == "SSR" || s == "ssr" || s == "ScreenSpaceReflections")
+                               return PostProcessKind::SSR;
     if (s == "Unknown")        return PostProcessKind::UNKNOWN;
     return fallback;
 }
@@ -830,6 +836,31 @@ bool parse_film_grain_config(Parser& pr, FilmGrainConfig& out) {
     });
 }
 
+bool parse_taa_config(Parser& pr, TAAConfig& out) {
+    // reproj_matrix / jitter / valid 類はランタイムデータ — JSON では扱わない。
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")           return p.parse_bool(out.enabled);
+        else if (key == "feedback_min") return p.parse_float_field(out.feedback_min);
+        else if (key == "feedback_max") return p.parse_float_field(out.feedback_max);
+        return p.skip_value();
+    });
+}
+
+bool parse_ssr_config(Parser& pr, SSRConfig& out) {
+    // proj_xx / proj_yy / near / far はランタイムデータ — JSON では扱わない。
+    return parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
+        if (key == "enabled")        return p.parse_bool(out.enabled);
+        else if (key == "intensity") return p.parse_float_field(out.intensity);
+        else if (key == "max_steps") {
+            uint64_t v; if (!p.parse_uint_field(v)) return false;
+            out.max_steps = static_cast<uint32_t>(v); return true;
+        }
+        else if (key == "stride_px") return p.parse_float_field(out.stride_px);
+        else if (key == "thickness") return p.parse_float_field(out.thickness);
+        return p.skip_value();
+    });
+}
+
 bool parse_post_process(Parser& pr, PostProcessDef& out) {
     bool kind_explicit = false;
     bool ok = parse_object(pr, [&](Parser& p, const std::string& key) -> bool {
@@ -863,6 +894,10 @@ bool parse_post_process(Parser& pr, PostProcessDef& out) {
             return parse_chromatic_aberration_config(p, out.chromatic_aberration);
         } else if (key == "film_grain") {
             return parse_film_grain_config(p, out.film_grain);
+        } else if (key == "taa") {
+            return parse_taa_config(p, out.taa);
+        } else if (key == "ssr") {
+            return parse_ssr_config(p, out.ssr);
         }
         // Unknown keys are skipped (forward-compat, spec §2).
         return p.skip_value();
@@ -1371,6 +1406,28 @@ std::string to_pipeline_profile_json(const PipelineProfileDef& def) {
                     pad(out, 3); out += "\"film_grain\": {\n";
                     pad(out, 4); out += "\"intensity\": "; emit_float(out, g.intensity); out += ",\n";
                     pad(out, 4); out += "\"response\":  "; emit_float(out, g.response); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::TAA: {
+                    // ランタイムデータ (行列 / ジッタ / valid) は出さない。
+                    const auto& t = pp.taa;
+                    out += ",\n";
+                    pad(out, 3); out += "\"taa\": {\n";
+                    pad(out, 4); out += "\"feedback_min\": "; emit_float(out, t.feedback_min); out += ",\n";
+                    pad(out, 4); out += "\"feedback_max\": "; emit_float(out, t.feedback_max); out += "\n";
+                    pad(out, 3); out += "}\n";
+                    break;
+                }
+                case PostProcessKind::SSR: {
+                    // proj / near / far はランタイムデータ — 出さない。
+                    const auto& s = pp.ssr;
+                    out += ",\n";
+                    pad(out, 3); out += "\"ssr\": {\n";
+                    pad(out, 4); out += "\"intensity\": "; emit_float(out, s.intensity); out += ",\n";
+                    pad(out, 4); out += "\"max_steps\": "; emit_uint(out, s.max_steps); out += ",\n";
+                    pad(out, 4); out += "\"stride_px\": "; emit_float(out, s.stride_px); out += ",\n";
+                    pad(out, 4); out += "\"thickness\": "; emit_float(out, s.thickness); out += "\n";
                     pad(out, 3); out += "}\n";
                     break;
                 }

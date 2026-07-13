@@ -85,6 +85,12 @@ struct PostProcessPassDef {
     std::vector<PushFieldDesc> push_layout;
     std::vector<uint8_t>       push_data;
 
+    /// viewport / scissor の上書き (0 = フル解像度)。 exposure_measure の
+    /// ような「1 fragment だけ走らせたい」 縮退 pass 用。 出力ターゲット自体
+    /// はフル解像度で確保され、 領域外の内容は未定義。
+    uint32_t viewport_w = 0;
+    uint32_t viewport_h = 0;
+
     /// push constant の総バイト数 (16-byte アラインに切り上げ済み)。
     uint32_t push_size() const {
         return static_cast<uint32_t>(push_data.size());
@@ -109,6 +115,28 @@ extern const char* const kPostProcessLutTarget;      // "__lut__"
 /// DoF / SSAO 等、 深度をパイプライン途中で要求する pass 用。
 /// 入力専用 — `output` には使えない。
 extern const char* const kPostProcessDepthTarget;    // "__depth__"
+
+// ============================================================
+// history buffer — 寿命 >1 フレームの持ち越し入力 (phase 2)
+// ============================================================
+/// `history_input_name("pp_taa")` = "__history:pp_taa__" を inputs に入れると、
+/// その binding は **前フレームの** 論理ターゲット `pp_taa` の内容
+/// (persistent history image) に解決される。 `PostProcessPipeline` は
+/// フレーム末尾に対象ターゲット → history image のコピーを記録する。
+///
+///   - history image は初期化時に黒クリアされる。 最初のフレームや
+///     resize / rebuild_chain 後は黒 (TAA 等は config の history_valid で
+///     素通しし再シードする — ホスト責務)。
+///   - 入力専用 — `output` には使えない。
+///   - `rebuild_intermediate_targets()` は history 名を中間ターゲットとして
+///     数えない (参照元ターゲット側が確保される)。
+extern const char* const kPostProcessHistoryPrefix;  // "__history:"
+
+/// `target` の history 入力名 ("__history:<target>__") を組み立てる。
+std::string history_input_name(std::string_view target);
+
+/// `name` が history 入力名なら参照元ターゲット名を返す。 違えば空文字。
+std::string parse_history_input(std::string_view name);
 
 // ============================================================
 // PostProcessChain — pass 列 + 中間ターゲット集合

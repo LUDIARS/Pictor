@@ -9,6 +9,7 @@
 #include "pictor/postprocess/postprocess_chain.h"
 #include "test_common.h"
 
+#include <cmath>
 #include <cstring>
 
 using namespace pictor;
@@ -45,6 +46,26 @@ struct FxaaPC {
     float edge_threshold, edge_threshold_min;
     float subpix_quality, pad0, pad1, pad2;
 };
+struct TaaPC {
+    float    reproj[16];
+    float    feedback_min, feedback_max;
+    float    jitter_x, jitter_y;
+    float    texel_x, texel_y;
+    uint32_t valid;
+    uint32_t pad0;
+};
+struct SsrPC {
+    float    proj_xx, proj_yy, near_plane, far_plane;
+    float    intensity, stride_px, thickness;
+    uint32_t max_steps;
+    float    texel_x, texel_y, pad0, pad1;
+};
+struct ExposureMeasurePC {
+    float min_lum, max_lum, blend, pad0;
+};
+struct ExposureApplyPC {
+    float key, pad0, pad1, pad2;
+};
 
 template <typename T>
 T read_pc(const PostProcessPassDef& p) {
@@ -54,7 +75,9 @@ T read_pc(const PostProcessPassDef& p) {
     return out;
 }
 
-bool feq(float a, float b) { return (a - b) < 1e-4f && (b - a) < 1e-4f; }
+bool feq(float a, float b, float eps = 1e-4f) {
+    return (a - b) < eps && (b - a) < eps;
+}
 
 const PostProcessPassDef* find_pass(const PostProcessChain& c, const char* name) {
     for (const auto& p : c.passes)
@@ -511,6 +534,129 @@ int main() {
         // 中間ターゲット: dof/ssao/mblur/ping/pong/ldr = 6。
         PT_ASSERT_OP(chain.intermediate_names.size(), ==, size_t{6},
                      "full chain: 6 intermediates");
+    }
+
+    // 14. history 入力名ヘルパー (phase 2)。
+    {
+        PT_ASSERT(history_input_name("pp_taa") == "__history:pp_taa__",
+                  "history name composed");
+        PT_ASSERT(parse_history_input("__history:pp_taa__") == "pp_taa",
+                  "history name parsed");
+        PT_ASSERT(parse_history_input("pp_taa").empty(),
+                  "plain target is not history");
+        PT_ASSERT(parse_history_input("__history:__").empty(),
+                  "empty source rejected");
+    }
+
+    // 15. TAA — mblur 後に挿入、 history 入力を持ち、 FXAA を抑制する。
+    {
+        PostProcessConfig cfg;
+        cfg.taa.enabled  = true;
+        cfg.fxaa.enabled = true;   // TAA 優先で外れる
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1920, 1080, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{5},
+                     "taa chain: 5 passes (fxaa suppressed)");
+        PT_ASSERT(chain.passes[0].name == "taa", "taa chain: taa first");
+        PT_ASSERT(chain.passes[0].inputs[0] == kPostProcessSceneTarget,
+                  "taa reads scene");
+        PT_ASSERT(chain.passes[0].inputs[1] == kPostProcessDepthTarget,
+                  "taa reads depth");
+        PT_ASSERT(chain.passes[0].inputs[2] == "__history:pp_taa__",
+                  "taa reads its own history");
+        PT_ASSERT(chain.passes[0].output == "pp_taa", "taa -> pp_taa");
+        PT_ASSERT(find_pass(chain, "fxaa") == nullptr,
+                  "fxaa suppressed while taa is on");
+        const PostProcessPassDef* gr = find_pass(chain, "color_grade");
+        PT_ASSERT(gr != nullptr && gr->output == kPostProcessOutputTarget,
+                  "grade writes swapchain (no fxaa)");
+
+        // history 名は中間ターゲットに数えない (pp_taa 自体は数える)。
+        bool has_taa = false, has_history = false;
+        for (const auto& n : chain.intermediate_names) {
+            if (n == "pp_taa") has_taa = true;
+            if (n.rfind("__history:", 0) == 0) has_history = true;
+        }
+        PT_ASSERT(has_taa, "pp_taa is an intermediate");
+        PT_ASSERT(!has_history, "history names are not intermediates");
+
+        // valid ゲート: matrix/history が立つまで 0。
+        TaaPC pc = read_pc<TaaPC>(chain.passes[0]);
+        PT_ASSERT_OP(pc.valid, ==, uint32_t{0}, "taa invalid until host seeds");
+        cfg.taa.matrix_valid  = true;
+        cfg.taa.history_valid = true;
+        cfg.taa.jitter_x      = 0.25f;
+        refresh_post_process_chain(chain, cfg, 1920, 1080, false, false);
+        pc = read_pc<TaaPC>(chain.passes[0]);
+        PT_ASSERT_OP(pc.valid, ==, uint32_t{1}, "taa valid after host update");
+        PT_ASSERT(feq(pc.jitter_x, 0.25f), "taa jitter carried by refresh");
+    }
+
+    // 16. SSR — ssao 後 / mblur 前に挿入、 proj パラメータを運ぶ。
+    {
+        PostProcessConfig cfg;
+        cfg.ssao.enabled        = true;
+        cfg.ssr.enabled         = true;
+        cfg.motion_blur.enabled = true;
+        cfg.ssr.proj_xx         = 1.5f;
+        cfg.ssr.max_steps       = 24;
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 1280, 720, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{7},
+                     "ssao+ssr+mblur chain: 7 passes");
+        PT_ASSERT(chain.passes[0].name == "ssao_apply", "order: ssao first");
+        PT_ASSERT(chain.passes[1].name == "ssr",        "order: ssr second");
+        PT_ASSERT(chain.passes[2].name == "motion_blur","order: mblur third");
+        PT_ASSERT(chain.passes[1].inputs[0] == "pp_ssao", "ssr reads ssao out");
+        PT_ASSERT(chain.passes[2].inputs[0] == "pp_ssr",  "mblur reads ssr out");
+
+        SsrPC pc = read_pc<SsrPC>(chain.passes[1]);
+        PT_ASSERT(feq(pc.proj_xx, 1.5f),   "ssr pc: proj_xx");
+        PT_ASSERT_OP(pc.max_steps, ==, uint32_t{24}, "ssr pc: steps");
+        PT_ASSERT(feq(pc.intensity, 0.6f), "ssr pc: default intensity");
+    }
+
+    // 17. Auto exposure — 計測 (1x1 viewport) + 適用の 2 pass、
+    //     時間適応 blend が delta_seconds を反映する。
+    {
+        PostProcessConfig cfg;
+        cfg.hdr.auto_exposure   = true;
+        cfg.hdr.adaptation_rate = 2.0f;
+        cfg.hdr.delta_seconds   = 0.5f;   // blend = 1 - e^-1 ≈ 0.632
+
+        PostProcessChain chain = build_post_process_chain(
+            cfg, "shaders", 800, 600, false, false);
+
+        PT_ASSERT_OP(chain.passes.size(), ==, size_t{6},
+                     "auto-exposure chain: 6 passes");
+        PT_ASSERT(chain.passes[0].name == "exposure_measure", "measure first");
+        PT_ASSERT(chain.passes[1].name == "exposure_apply",   "apply second");
+        PT_ASSERT_OP(chain.passes[0].viewport_w, ==, uint32_t{1},
+                     "measure runs at 1x1 viewport");
+        PT_ASSERT(chain.passes[0].inputs[1] == "__history:pp_exposure__",
+                  "measure reads its own history");
+        PT_ASSERT(chain.passes[1].inputs[1] == "pp_exposure",
+                  "apply reads measured luminance");
+        PT_ASSERT(chain.passes[1].output == "pp_exposed",
+                  "apply -> pp_exposed");
+        PT_ASSERT(chain.passes[2].inputs[0] == "pp_exposed",
+                  "extract reads exposed scene");
+
+        ExposureMeasurePC mpc = read_pc<ExposureMeasurePC>(chain.passes[0]);
+        PT_ASSERT(feq(mpc.blend, 1.0f - std::exp(-1.0f), 1e-3f),
+                  "measure blend = 1 - exp(-dt*rate)");
+        ExposureApplyPC apc = read_pc<ExposureApplyPC>(chain.passes[1]);
+        PT_ASSERT(feq(apc.key, 0.18f), "apply key = hdr.key");
+
+        // 無効へ倒すと apply は key 0 で恒等縮退 (refresh 経由)。
+        cfg.hdr.auto_exposure = false;
+        refresh_post_process_chain(chain, cfg, 800, 600, false, false);
+        apc = read_pc<ExposureApplyPC>(chain.passes[1]);
+        PT_ASSERT(feq(apc.key, 0.0f), "apply key collapses to 0 when off");
     }
 
     return report("unit_postprocess_chain_test");

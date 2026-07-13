@@ -344,6 +344,11 @@ void test_post_process_kind_inference() {
               "name 'FXAA' infers FXAA");
     PT_ASSERT(out.post_process_stack[4].kind == PostProcessKind::MOTION_BLUR,
               "name 'MotionBlur' infers MOTION_BLUR");
+    // TAA / SSR は phase 2 実装 (history buffer / 深度再構築 SSR)。
+    PT_ASSERT(post_process_kind_from_name("TAA") == PostProcessKind::TAA,
+              "name 'TAA' infers TAA");
+    PT_ASSERT(post_process_kind_from_name("SSR") == PostProcessKind::SSR,
+              "name 'SSR' infers SSR");
     // 未実装のエフェクト名は引き続き UNKNOWN に落ちる。
     PT_ASSERT(out.post_process_stack[5].kind == PostProcessKind::UNKNOWN,
               "name 'VolumetricFog' infers UNKNOWN");

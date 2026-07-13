@@ -113,6 +113,8 @@ add_library(pictor STATIC
     src/gi/gi_bake.cpp
     src/gi/gi_scene_proxy.cpp
     src/gi/gi_probe_field.cpp
+    src/gi/gi_gpu_executor.cpp
+    src/gi/gi_shadow_atlas.cpp
 
     # Post-Process (host-driven, real Vulkan)
     src/postprocess/postprocess_pipeline.cpp
@@ -518,6 +520,12 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/shaders/simple_inst.frag
         ${CMAKE_SOURCE_DIR}/shaders/lit.vert
         ${CMAKE_SOURCE_DIR}/shaders/lit.frag
+        ${CMAKE_SOURCE_DIR}/shaders/pbr.vert
+        ${CMAKE_SOURCE_DIR}/shaders/pbr.frag
+        ${CMAKE_SOURCE_DIR}/shaders/pbr_gi.frag
+        ${CMAKE_SOURCE_DIR}/shaders/gi_probe_sample.comp
+        ${CMAKE_SOURCE_DIR}/shaders/shadow_depth.vert
+        ${CMAKE_SOURCE_DIR}/shaders/shadow_depth.frag
         ${CMAKE_SOURCE_DIR}/shaders/hologram.vert
         ${CMAKE_SOURCE_DIR}/shaders/hologram.frag
         ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
@@ -539,6 +547,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssao_apply.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/motion_blur.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/fxaa.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/taa.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssr.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/exposure_measure.frag
+        ${CMAKE_SOURCE_DIR}/shaders/postprocess/exposure_apply.frag
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
         ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp

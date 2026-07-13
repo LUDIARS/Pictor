@@ -16,6 +16,10 @@ GPU dispatch (compute / CSM 実描画) は phase 2 (`GIGpuExecutor`) の領分�
 | `GISceneProxy` | AABB プロキシへの遮蔽クエリ (slab 法 any-hit / closest-hit)。bake / probe 構築の共通基盤 |
 | `GIProbeField` | probe grid の SH 構築 + 遮蔽キャッシュ + `relight()` (動的ライト追従 = phase 1 のリアルタイム GI) + trilinear 補間 |
 | `gi_sh.h` | SH L2 射影 / irradiance 評価 / fibonacci sphere (純関数) |
+| `GIGpuExecutor` | phase 2: 実 VkBuffer + `gi_probe_sample.comp` compute dispatch。マテリアル結線用バッファ (`params_buffer()` / `probe_sh_buffer()` / `object_irradiance_buffer()`) を公開 |
+| `GIShadowAtlas` | phase 2: CSM depth array + render pass + per-cascade framebuffer + PCF compare sampler (描画はホスト責務、`spec/setup/integration.md` §6.2) |
+
+シェーダ側: `gi.glsl` (per-pixel probe 補間) を `pbr_gi.frag` (opt-in バリアント) が include。既存 `pbr.frag` は無変更。
 
 設定: `GIConfig` (shadows+SSAO+probes 統合) / `ShadowMapConfig` (cascade 数/解像度/PCF・PCSS/bias) / `SSAOConfig` / `GIProbeConfig` (grid 原点/間隔/寸法)。bake は `GIBakeConfig` + `BakeTarget` enum (SHADOW_MAP / AMBIENT_OCCLUSION / PROBE_IRRADIANCE / LIGHTMAP)。
 

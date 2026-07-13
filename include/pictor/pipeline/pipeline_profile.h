@@ -40,6 +40,8 @@ enum class PostProcessKind : uint8_t {
     FXAA          = 8,  ///< -> PostProcessConfig::fxaa
     CHROMATIC_ABERRATION = 9,  ///< -> PostProcessConfig::chromatic_aberration
     FILM_GRAIN    = 10, ///< -> PostProcessConfig::film_grain
+    TAA           = 11, ///< -> PostProcessConfig::taa (history buffer 使用)
+    SSR           = 12, ///< -> PostProcessConfig::ssr (深度再構築版)
 };
 
 /// Post-process effect definition (§8.2).
@@ -72,6 +74,8 @@ struct PostProcessDef {
     FXAAConfig                fxaa;
     ChromaticAberrationConfig chromatic_aberration;
     FilmGrainConfig           film_grain;
+    TAAConfig                 taa;
+    SSRConfig                 ssr;
 };
 
 /// Map an effect name (case-insensitive) to a `PostProcessKind`.

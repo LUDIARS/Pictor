@@ -33,6 +33,8 @@ PostProcessConfig build_post_process_config(const std::vector<PostProcessDef>& s
     cfg.fxaa.enabled                 = false;
     cfg.chromatic_aberration.enabled = false;
     cfg.film_grain.enabled           = false;
+    cfg.taa.enabled                  = false;
+    cfg.ssr.enabled                  = false;
 
     for (const auto& def : stack) {
         switch (resolve_kind(def)) {
@@ -80,8 +82,23 @@ PostProcessConfig build_post_process_config(const std::vector<PostProcessDef>& s
                 cfg.film_grain         = def.film_grain;
                 cfg.film_grain.enabled = def.enabled;
                 break;
+            case PostProcessKind::TAA:
+                // 再投影行列 / ジッタ / history はランタイムデータ —
+                // プロファイルからはパラメータのみ写し、 valid 類は
+                // ホスト更新を待つ false 起点。
+                cfg.taa               = def.taa;
+                cfg.taa.enabled       = def.enabled;
+                cfg.taa.matrix_valid  = false;
+                cfg.taa.history_valid = false;
+                break;
+            case PostProcessKind::SSR:
+                // proj_xx / proj_yy / near / far はカメラ由来のランタイム
+                // データ — ホストが毎フレーム上書きする前提で写すだけ。
+                cfg.ssr         = def.ssr;
+                cfg.ssr.enabled = def.enabled;
+                break;
             case PostProcessKind::UNKNOWN:
-                // TAA / SSR / VolumetricFog … — no host-driven
+                // VolumetricFog / LensFlare … — no host-driven
                 // implementation in PostProcessPipeline yet. Ignored.
                 break;
         }

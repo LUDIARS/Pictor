@@ -11,6 +11,12 @@ namespace pictor {
 
 /// HDR rendering configuration.
 /// Controls the floating-point color buffer used before tone mapping.
+///
+/// auto_exposure = true のとき、 チェーンへ exposure_measure (輝度計測、
+/// 1x1 viewport) + exposure_apply (シーンへ露出乗算) の 2 pass が挿入される
+/// (phase 2 — history buffer を使った時間適応)。 適応は
+/// `blend = 1 - exp(-delta_seconds * adaptation_rate)` で行い、
+/// delta_seconds は `PostProcessPipeline::record()` が毎フレーム自動更新する。
 struct HDRConfig {
     bool     enabled         = true;
     float    exposure        = 1.0f;     ///< Exposure multiplier (EV)
@@ -18,8 +24,12 @@ struct HDRConfig {
     float    white_point     = 4.0f;     ///< Whitepoint for extended-Reinhard
     float    min_luminance   = 0.001f;   ///< Minimum scene luminance (auto-exposure)
     float    max_luminance   = 10.0f;    ///< Maximum scene luminance (auto-exposure)
-    bool     auto_exposure   = false;    ///< Enable auto-exposure via luminance histogram
-    float    adaptation_rate = 1.5f;     ///< Auto-exposure adaptation speed (seconds)
+    bool     auto_exposure   = false;    ///< Enable auto-exposure (luminance adaptation)
+    float    adaptation_rate = 1.5f;     ///< Auto-exposure adaptation speed (1/s)
+    float    key             = 0.18f;    ///< Target middle-gray (exposure = key / avg_lum)
+    /// 直近フレームの経過秒。 `PostProcessPipeline::record()` が詰める
+    /// ランタイムフィールド — ホストが直接触る必要はない。
+    float    delta_seconds   = 1.0f / 60.0f;
 };
 
 /// Tone-mapping operator selection.
@@ -134,6 +144,62 @@ struct MotionBlurConfig {
     bool     matrix_valid = false;
 };
 
+/// TAA (Temporal Anti-Aliasing) — history buffer + カメラ再投影 + YCoCg
+/// クランプ (phase 2)。 HDR 空間 (bloom / tonemap 前) で走る。
+///
+/// ホスト契約:
+///   - 投影行列へ `taa_jitter()` のサブピクセルジッタを毎フレーム適用する。
+///   - reproj_matrix (**ジッタ無しの** prevVP * inverse(currVP)) と
+///     jitter_x/y (現フレームのジッタ、 ピクセル単位) を毎フレーム更新する。
+///   - カメラカット / resize / rebuild_chain 後は history_valid = false
+///     (1 フレーム素通しで history を再シード)。
+///   - TAA と FXAA が両方 enabled のときは TAA が優先され FXAA は組み込み
+///     チェーンから外れる (二重 AA 防止)。
+struct TAAConfig {
+    bool     enabled      = false;
+    float    feedback_min = 0.85f;   ///< 動いている画素の history 混合率
+    float    feedback_max = 0.95f;   ///< 静止画素の history 混合率
+    float    reproj_matrix[16] = {1.0f, 0.0f, 0.0f, 0.0f,
+                                  0.0f, 1.0f, 0.0f, 0.0f,
+                                  0.0f, 0.0f, 1.0f, 0.0f,
+                                  0.0f, 0.0f, 0.0f, 1.0f};
+    bool     matrix_valid  = false;
+    float    jitter_x      = 0.0f;   ///< 現フレームのジッタ (px、 unjitter 用)
+    float    jitter_y      = 0.0f;
+    bool     history_valid = false;  ///< false = このフレームは素通し + 再シード
+};
+
+/// TAA 用カメラジッタ (Halton 2,3 列、 8 フレーム周期)。 ピクセル単位の
+/// オフセットを返す — ホストは投影行列の [2][0]/[2][1] (列優先) へ
+/// `2*jx/width` / `2*jy/height` を加算して適用する。
+inline void taa_jitter(uint32_t frame_index, float& out_x, float& out_y) {
+    // Halton(2) / Halton(3) の先頭 8 要素 (中心化済み、 ±0.5px)。
+    static constexpr float kX[8] = { 0.0f, -0.25f,  0.25f, -0.375f,
+                                     0.125f, -0.125f,  0.375f, -0.4375f};
+    static constexpr float kY[8] = {-0.33333f,  0.33333f, -0.11111f,  0.22222f,
+                                    -0.22222f,  0.11111f,  0.44444f, -0.44444f};
+    const uint32_t i = frame_index & 7u;
+    out_x = kX[i];
+    out_y = kY[i];
+}
+
+/// SSR (Screen-Space Reflections) — 深度再構築版 (法線は深度勾配から復元、
+/// phase 2)。 標準的な透視投影 (Vulkan z ∈ [0,1]、 非 reversed-Z) を仮定する。
+///
+/// ホスト契約: proj_xx / proj_yy (投影行列の [0][0] / [1][1])、 near / far を
+/// カメラと一致させて設定する (view 空間再構築に使う)。
+struct SSRConfig {
+    bool     enabled     = false;
+    float    intensity   = 0.6f;    ///< 反射の混合率 0..1
+    uint32_t max_steps   = 32;      ///< レイマーチ最大ステップ (上限 64)
+    float    stride_px   = 8.0f;    ///< 1 ステップのスクリーン距離 (px)
+    float    thickness   = 0.5f;    ///< ヒット判定の view-space 厚み
+    float    proj_xx     = 1.0f;    ///< 投影行列 [0][0]
+    float    proj_yy     = 1.0f;    ///< 投影行列 [1][1]
+    float    near_plane  = 0.1f;
+    float    far_plane   = 1000.0f;
+};
+
 /// 色収差 — 画面端で RGB を放射方向にずらす (grade pass へ統合)。
 struct ChromaticAberrationConfig {
     bool  enabled      = false;
@@ -166,6 +232,8 @@ struct PostProcessConfig {
     FXAAConfig                fxaa;
     ChromaticAberrationConfig chromatic_aberration;
     FilmGrainConfig           film_grain;
+    TAAConfig                 taa;
+    SSRConfig                 ssr;
 };
 
 } // namespace pictor

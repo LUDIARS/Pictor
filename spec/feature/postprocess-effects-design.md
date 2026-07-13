@@ -156,6 +156,22 @@ hit 失敗はフォールバック無し (黒 fade)。
 | 7 | SSR (深度再構築版) / mip-chain bloom / DoF 仕上げ | 2 | — |
 | 8 | Lens Flare / Volumetric Fog / velocity buffer | 3 | 5 |
 
+## 6. phase 2 実装状況 (2026-07-13, `feat/postprocess-gi`)
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| history buffer 基盤 | `PostProcessPipeline`: `__history:<target>__` 入力 (persistent image、 黒クリア初期化)、 フレーム末尾の source → history コピー (barrier 込み)、 resize/rebuild で破棄・再確保 (`history_input_name()` / `parse_history_input()`) | ✅ |
+| viewport 縮退 pass | `PostProcessPassDef::viewport_w/h` (exposure_measure の 1x1 実行) | ✅ |
+| TAA | `TAAConfig` + `taa_jitter()` (Halton 2,3) + `taa.frag` (カメラ再投影 + YCoCg AABB クランプ + 速度依存 feedback)。 HDR 空間 (bloom 前)。 FXAA と同時有効時は TAA 優先 | ✅ |
+| Auto Exposure | `exposure_measure.frag` (8x8 疎グリッド log-avg、 1x1 viewport、 history と時間適応) + `exposure_apply.frag` (key/avg_lum)。 dt は `record()` が自動供給 | ✅ |
+| SSR (深度再構築版) | `SSRConfig` + `ssr.frag` (view 再構築 + 深度勾配法線 + スクリーンスペース march + Schlick フレネル + 画面端フェード) | ✅ |
+| 系統A 配線 | `PostProcessKind::TAA/SSR` + serializer round-trip + bridge (ランタイムフィールドは JSON 対象外) | ✅ |
+| headless テスト | `unit_postprocess_chain_test.cpp` §14-17 | ✅ |
+| mip-chain bloom / DoF 仕上げ / velocity buffer | — | ⬜ (残: phase 2 続き / phase 3) |
+
+チェーン全部盛り (phase 2 後):
+`scene → [dof] → [ssao] → [ssr] → [mblur] → [taa] → [exposure_measure/apply] → extract → blurH → blurV → grade → [fxaa*] → out` (*TAA 無効時のみ)
+
 ## 5. phase 1 実装状況 (2026-07-13, `feat/postprocess-gi`)
 
 | 項目 | 実体 | 状態 |

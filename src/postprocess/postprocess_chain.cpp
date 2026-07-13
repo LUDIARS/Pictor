@@ -2,25 +2,48 @@
 
 #include "pictor/pipeline/pipeline_profile.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace pictor {
 
 // 予約済み論理ターゲット名。
-const char* const kPostProcessOutputTarget = "__output__";
-const char* const kPostProcessSceneTarget  = "__scene__";
-const char* const kPostProcessLutTarget    = "__lut__";
-const char* const kPostProcessDepthTarget  = "__depth__";
+const char* const kPostProcessOutputTarget  = "__output__";
+const char* const kPostProcessSceneTarget   = "__scene__";
+const char* const kPostProcessLutTarget     = "__lut__";
+const char* const kPostProcessDepthTarget   = "__depth__";
+const char* const kPostProcessHistoryPrefix = "__history:";
+
+std::string history_input_name(std::string_view target) {
+    std::string s(kPostProcessHistoryPrefix);
+    s += target;
+    s += "__";
+    return s;
+}
+
+std::string parse_history_input(std::string_view name) {
+    const std::string_view prefix(kPostProcessHistoryPrefix);
+    if (name.size() <= prefix.size() + 2) return {};
+    if (name.substr(0, prefix.size()) != prefix) return {};
+    if (name.substr(name.size() - 2) != "__") return {};
+    return std::string(name.substr(prefix.size(),
+                                   name.size() - prefix.size() - 2));
+}
 
 namespace {
 
 // 組み込みチェーンの中間ターゲット論理名 (ping-pong / 途中挿入 pass の出力)。
-constexpr const char* kPingTarget  = "pp_ping";
-constexpr const char* kPongTarget  = "pp_pong";
-constexpr const char* kDofTarget   = "pp_dof";
-constexpr const char* kSsaoTarget  = "pp_ssao";
-constexpr const char* kMBlurTarget = "pp_mblur";
-constexpr const char* kLdrTarget   = "pp_ldr";
+constexpr const char* kPingTarget     = "pp_ping";
+constexpr const char* kPongTarget     = "pp_pong";
+constexpr const char* kDofTarget      = "pp_dof";
+constexpr const char* kSsaoTarget     = "pp_ssao";
+constexpr const char* kSsrTarget      = "pp_ssr";
+constexpr const char* kMBlurTarget    = "pp_mblur";
+constexpr const char* kTaaTarget      = "pp_taa";
+constexpr const char* kExposureTarget = "pp_exposure";
+constexpr const char* kExposedTarget  = "pp_exposed";
+constexpr const char* kLdrTarget      = "pp_ldr";
 
 // 旧 PostProcessPipeline の push constant 構造体と同一レイアウト。
 // build_post_process_chain() / refresh_post_process_chain() はこの構造体を
@@ -67,6 +90,29 @@ struct FxaaPC {
     float texel_x, texel_y;
     float edge_threshold, edge_threshold_min;
     float subpix_quality, pad0, pad1, pad2;
+};
+// taa.frag の push constant。
+struct TaaPC {
+    float    reproj[16];
+    float    feedback_min, feedback_max;
+    float    jitter_x, jitter_y;      // px
+    float    texel_x, texel_y;
+    uint32_t valid;                   // 0 = 素通し + history 再シード
+    uint32_t pad0;
+};
+// ssr.frag の push constant。
+struct SsrPC {
+    float    proj_xx, proj_yy, near_plane, far_plane;
+    float    intensity, stride_px, thickness;
+    uint32_t max_steps;
+    float    texel_x, texel_y, pad0, pad1;
+};
+// exposure_measure.frag / exposure_apply.frag の push constant。
+struct ExposureMeasurePC {
+    float min_lum, max_lum, blend, pad0;
+};
+struct ExposureApplyPC {
+    float key, pad0, pad1, pad2;      // key <= 0 で素通し
 };
 
 // 構造体を push_data バイト列へ詰める。
@@ -148,6 +194,58 @@ FxaaPC make_fxaa_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
     pc.edge_threshold     = fx.enabled ? fx.edge_threshold : 1.0e9f;
     pc.edge_threshold_min = fx.enabled ? fx.edge_threshold_min : 1.0e9f;
     pc.subpix_quality     = fx.enabled ? fx.subpix_quality : 0.0f;
+    return pc;
+}
+
+TaaPC make_taa_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
+    const auto& taa = cfg.taa;
+    TaaPC pc{};
+    std::memcpy(pc.reproj, taa.reproj_matrix, sizeof(pc.reproj));
+    pc.feedback_min = taa.feedback_min;
+    pc.feedback_max = taa.feedback_max;
+    pc.jitter_x     = taa.jitter_x;
+    pc.jitter_y     = taa.jitter_y;
+    pc.texel_x      = 1.0f / static_cast<float>(w ? w : 1);
+    pc.texel_y      = 1.0f / static_cast<float>(h ? h : 1);
+    // 行列未確定 / history 無効 (初回・カット・resize 後) は素通し。
+    pc.valid = (taa.enabled && taa.matrix_valid && taa.history_valid) ? 1u : 0u;
+    return pc;
+}
+
+SsrPC make_ssr_pc(const PostProcessConfig& cfg, uint32_t w, uint32_t h) {
+    const auto& ssr = cfg.ssr;
+    SsrPC pc{};
+    pc.proj_xx    = ssr.proj_xx;
+    pc.proj_yy    = ssr.proj_yy;
+    pc.near_plane = ssr.near_plane;
+    pc.far_plane  = ssr.far_plane;
+    // disabled → intensity 0 で恒等へ縮退。
+    pc.intensity  = ssr.enabled ? ssr.intensity : 0.0f;
+    pc.stride_px  = ssr.stride_px;
+    pc.thickness  = ssr.thickness;
+    pc.max_steps  = std::min(ssr.max_steps, 64u);
+    pc.texel_x    = 1.0f / static_cast<float>(w ? w : 1);
+    pc.texel_y    = 1.0f / static_cast<float>(h ? h : 1);
+    return pc;
+}
+
+ExposureMeasurePC make_exposure_measure_pc(const PostProcessConfig& cfg) {
+    const auto& hdr = cfg.hdr;
+    ExposureMeasurePC pc{};
+    pc.min_lum = hdr.min_luminance;
+    pc.max_lum = hdr.max_luminance;
+    // 時間適応: blend = 1 - exp(-dt * rate)。 disabled は即時追従 (1.0)。
+    const float dt = std::max(hdr.delta_seconds, 0.0f);
+    pc.blend = hdr.auto_exposure
+        ? std::min(1.0f, 1.0f - std::exp(-dt * hdr.adaptation_rate))
+        : 1.0f;
+    return pc;
+}
+
+ExposureApplyPC make_exposure_apply_pc(const PostProcessConfig& cfg) {
+    ExposureApplyPC pc{};
+    // disabled → key 0 で素通し (シェーダ側の恒等縮退)。
+    pc.key = cfg.hdr.auto_exposure ? cfg.hdr.key : 0.0f;
     return pc;
 }
 
@@ -255,6 +353,55 @@ std::vector<PushFieldDesc> fxaa_layout() {
         {"_pad2",              PushFieldType::FLOAT, 28},
     };
 }
+std::vector<PushFieldDesc> taa_layout() {
+    std::vector<PushFieldDesc> fields;
+    fields.reserve(24);
+    for (uint32_t i = 0; i < 16; ++i) {
+        fields.push_back({"reproj[" + std::to_string(i) + "]",
+                          PushFieldType::FLOAT, i * 4});
+    }
+    fields.push_back({"feedback_min", PushFieldType::FLOAT, 64});
+    fields.push_back({"feedback_max", PushFieldType::FLOAT, 68});
+    fields.push_back({"jitter_x",     PushFieldType::FLOAT, 72});
+    fields.push_back({"jitter_y",     PushFieldType::FLOAT, 76});
+    fields.push_back({"texel_x",      PushFieldType::FLOAT, 80});
+    fields.push_back({"texel_y",      PushFieldType::FLOAT, 84});
+    fields.push_back({"valid",        PushFieldType::UINT,  88});
+    fields.push_back({"_pad0",        PushFieldType::UINT,  92});
+    return fields;
+}
+std::vector<PushFieldDesc> ssr_layout() {
+    return {
+        {"proj_xx",    PushFieldType::FLOAT, 0},
+        {"proj_yy",    PushFieldType::FLOAT, 4},
+        {"near_plane", PushFieldType::FLOAT, 8},
+        {"far_plane",  PushFieldType::FLOAT, 12},
+        {"intensity",  PushFieldType::FLOAT, 16},
+        {"stride_px",  PushFieldType::FLOAT, 20},
+        {"thickness",  PushFieldType::FLOAT, 24},
+        {"max_steps",  PushFieldType::UINT,  28},
+        {"texel_x",    PushFieldType::FLOAT, 32},
+        {"texel_y",    PushFieldType::FLOAT, 36},
+        {"_pad0",      PushFieldType::FLOAT, 40},
+        {"_pad1",      PushFieldType::FLOAT, 44},
+    };
+}
+std::vector<PushFieldDesc> exposure_measure_layout() {
+    return {
+        {"min_lum", PushFieldType::FLOAT, 0},
+        {"max_lum", PushFieldType::FLOAT, 4},
+        {"blend",   PushFieldType::FLOAT, 8},
+        {"_pad0",   PushFieldType::FLOAT, 12},
+    };
+}
+std::vector<PushFieldDesc> exposure_apply_layout() {
+    return {
+        {"key",   PushFieldType::FLOAT, 0},
+        {"_pad0", PushFieldType::FLOAT, 4},
+        {"_pad1", PushFieldType::FLOAT, 8},
+        {"_pad2", PushFieldType::FLOAT, 12},
+    };
+}
 std::vector<PushFieldDesc> grade_layout() {
     return {
         {"bloom_intensity",    PushFieldType::FLOAT, 0},
@@ -332,7 +479,23 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         scene_src = kSsaoTarget;
     }
 
-    // Pass 0c (optional): camera motion blur  scene + depth → pp_mblur
+    // Pass 0c (optional): SSR  scene + depth → pp_ssr
+    //   深度から view 空間を再構築 (法線は深度勾配) してスクリーンスペースの
+    //   レイマーチで反射を合成する。 AO 適用後・motion blur 前。
+    if (cfg.ssr.enabled) {
+        PostProcessPassDef p;
+        p.name        = "ssr";
+        p.vert_spv    = fs_vert;
+        p.frag_spv    = shader_dir + "/ssr.frag.spv";
+        p.inputs      = {scene_src, kPostProcessDepthTarget};
+        p.output      = kSsrTarget;
+        p.push_layout = ssr_layout();
+        store_pc(p.push_data, make_ssr_pc(cfg, extent_w, extent_h));
+        chain.passes.push_back(std::move(p));
+        scene_src = kSsrTarget;
+    }
+
+    // Pass 0d (optional): camera motion blur  scene + depth → pp_mblur
     //   深度から再構築した NDC を reproj (prevVP * inv currVP) で前フレームへ
     //   再投影し、 速度ベクトルに沿ってサンプルする。 HDR 空間 (tonemap 前)。
     if (cfg.motion_blur.enabled) {
@@ -346,6 +509,54 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         store_pc(p.push_data, make_motion_blur_pc(cfg));
         chain.passes.push_back(std::move(p));
         scene_src = kMBlurTarget;
+    }
+
+    // Pass 0e (optional): TAA  scene + depth + history → pp_taa (HDR)
+    //   history buffer (`__history:pp_taa__`) は前フレームの pp_taa。
+    //   pipeline がフレーム末尾に pp_taa → history のコピーを記録する。
+    if (cfg.taa.enabled) {
+        PostProcessPassDef p;
+        p.name        = "taa";
+        p.vert_spv    = fs_vert;
+        p.frag_spv    = shader_dir + "/taa.frag.spv";
+        p.inputs      = {scene_src, kPostProcessDepthTarget,
+                         history_input_name(kTaaTarget)};
+        p.output      = kTaaTarget;
+        p.push_layout = taa_layout();
+        store_pc(p.push_data, make_taa_pc(cfg, extent_w, extent_h));
+        chain.passes.push_back(std::move(p));
+        scene_src = kTaaTarget;
+    }
+
+    // Pass 0f (optional): auto exposure — 計測 (1x1 viewport) + 適用の 2 pass。
+    //   計測は前フレームの適応値 (`__history:pp_exposure__`) と混合して
+    //   時間適応する。 適用は bloom / grade より前 (露出済みの値で抽出する)。
+    if (cfg.hdr.auto_exposure) {
+        {
+            PostProcessPassDef p;
+            p.name        = "exposure_measure";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/exposure_measure.frag.spv";
+            p.inputs      = {scene_src, history_input_name(kExposureTarget)};
+            p.output      = kExposureTarget;
+            p.push_layout = exposure_measure_layout();
+            p.viewport_w  = 1;
+            p.viewport_h  = 1;
+            store_pc(p.push_data, make_exposure_measure_pc(cfg));
+            chain.passes.push_back(std::move(p));
+        }
+        {
+            PostProcessPassDef p;
+            p.name        = "exposure_apply";
+            p.vert_spv    = fs_vert;
+            p.frag_spv    = shader_dir + "/exposure_apply.frag.spv";
+            p.inputs      = {scene_src, kExposureTarget};
+            p.output      = kExposedTarget;
+            p.push_layout = exposure_apply_layout();
+            store_pc(p.push_data, make_exposure_apply_pc(cfg));
+            chain.passes.push_back(std::move(p));
+            scene_src = kExposedTarget;
+        }
     }
 
     // Pass 1: bright-pass extraction  scene → ping
@@ -384,6 +595,9 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         store_pc(p.push_data, make_blur_v_pc(cfg, extent_h));
         chain.passes.push_back(std::move(p));
     }
+    // TAA 有効時は FXAA を外す (二重 AA 防止 — TAA 優先、 spec §3.2)。
+    const bool fxaa_on = cfg.fxaa.enabled && !cfg.taa.enabled;
+
     // Pass 4: final composite (bloom + tonemap + LUT + vignette + CA + grain)
     //   scene+ping+lut → output (FXAA 有効時は pp_ldr へ差し替え)
     {
@@ -392,8 +606,8 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         p.vert_spv    = fs_vert;
         p.frag_spv    = shader_dir + "/color_grade.frag.spv";
         p.inputs      = {scene_src, kPingTarget, kPostProcessLutTarget};
-        p.output      = cfg.fxaa.enabled ? kLdrTarget
-                                         : kPostProcessOutputTarget;
+        p.output      = fxaa_on ? kLdrTarget
+                                : kPostProcessOutputTarget;
         p.push_layout = grade_layout();
         store_pc(p.push_data, make_grade_pc(cfg, output_is_srgb, lut_loaded));
         chain.passes.push_back(std::move(p));
@@ -402,7 +616,7 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
     // Pass 5 (optional): FXAA  pp_ldr → output
     //   トーンマップ後の LDR で走る。 grade が輝度を alpha へ書くため
     //   シェーダ側の luma 計算は alpha 読みで済む。
-    if (cfg.fxaa.enabled) {
+    if (fxaa_on) {
         PostProcessPassDef p;
         p.name        = "fxaa";
         p.vert_spv    = fs_vert;
@@ -450,6 +664,14 @@ void refresh_post_process_chain(PostProcessChain&        chain,
             store_pc(p.push_data, make_motion_blur_pc(cfg));
         } else if (p.name == "fxaa") {
             store_pc(p.push_data, make_fxaa_pc(cfg, extent_w, extent_h));
+        } else if (p.name == "ssr") {
+            store_pc(p.push_data, make_ssr_pc(cfg, extent_w, extent_h));
+        } else if (p.name == "taa") {
+            store_pc(p.push_data, make_taa_pc(cfg, extent_w, extent_h));
+        } else if (p.name == "exposure_measure") {
+            store_pc(p.push_data, make_exposure_measure_pc(cfg));
+        } else if (p.name == "exposure_apply") {
+            store_pc(p.push_data, make_exposure_apply_pc(cfg));
         }
     }
 }
@@ -509,7 +731,10 @@ bool rebind_post_process_input(PostProcessChain& chain,
 void rebuild_intermediate_targets(PostProcessChain& chain) {
     auto is_reserved = [](const std::string& n) {
         return n == kPostProcessSceneTarget || n == kPostProcessOutputTarget ||
-               n == kPostProcessLutTarget   || n == kPostProcessDepthTarget;
+               n == kPostProcessLutTarget   || n == kPostProcessDepthTarget ||
+               // history 入力 (__history:<target>__) は persistent image に
+               // 解決される — 中間ターゲットとして数えない。
+               !parse_history_input(n).empty();
     };
     chain.intermediate_names.clear();
     auto add_unique = [&](const std::string& n) {

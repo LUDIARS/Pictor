@@ -163,3 +163,18 @@ SSAO は (a) PP 近似 (`postprocess-effects-design.md` §2.1、シーン色乗�
   (`GIProbeField::BuildParams::include_direct` で opt-in 可)。
 - `BakedShadow::depths` の意味を「静的太陽可視率 (soft shadow factor)」 と定義。
   cascade 割当はカメラ依存でありベイク時に決められないため flags は全立て。
+
+## 6. phase 2 実装状況 (2026-07-13, `feat/postprocess-gi`)
+
+| 項目 | 実体 | 状態 |
+|---|---|---|
+| `GIGpuExecutor` | `gi/gi_gpu_executor.{h,cpp}`。 実 VkBuffer (params UBO / transforms / visibility / probe SH / object irradiance、 host-visible 永続マップ) + `gi_probe_sample.comp` の compute pipeline を自己所有。 `upload_probe_sh()` / `update_objects()` / `record()` (dispatch + compute→shader barrier)。 shader 不在は即 false (fail-fast) | ✅ |
+| CSM host-driven 描画契約 | `gi/gi_shadow_atlas.{h,cpp}`。 D32 array (cascade layer) + depth-only render pass (CLEAR → SHADER_READ_ONLY) + per-cascade framebuffer + PCF compare sampler。 描画はホスト責務 (`shadow_depth.vert/.frag` 提供) | ✅ |
+| マテリアル GI 項 | `shaders/gi.glsl` (set 2 binding 2/3、 per-pixel probe 補間 + SH irradiance) + `pbr_main.glsl` 分割 + **`pbr_gi.frag` (opt-in バリアント — 既存 `pbr.frag` は無変更でホスト非破壊)** | ✅ |
+| 移行手順 | `spec/setup/integration.md` §6 (バインディング表 + ホスト契約) | ✅ |
+| GILightingSystem からの一体駆動 / SSAO compute (`ssao_gen.comp`、 法線バッファ要) | — | ⬜ (phase 2 続き — 法線供給の設計が先) |
+
+備考: `shadow.glsl` の GLSL 予約語バグ (`sample` 引数名) を修正 — pbr.frag 系を
+初めてビルド対象にしたことで露見 (従来はホスト側コンパイル頼みで未検証だった)。
+新たに `pbr.vert/.frag/.pbr_gi.frag/gi_probe_sample.comp/shadow_depth.*` を
+`pictor_shaders` のコンパイル対象へ追加し、 CI でシェーダが検証されるようにした。
