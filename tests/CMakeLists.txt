@@ -19,6 +19,8 @@ set(PICTOR_TESTS
     unit_pipeline_profile_serializer_test
     unit_pipeline_tiers_test
     unit_postprocess_chain_test
+    unit_gi_probe_field_test
+    unit_gi_bake_test
     unit_attachment_def_test
     unit_pipeline_registries_test
     unit_compiled_graph_wiring_test

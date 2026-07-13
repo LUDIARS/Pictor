@@ -268,7 +268,8 @@ void test_post_process_param_roundtrip() {
     dof.depth_of_field.bokeh_radius   = 5.0f;
     dof.depth_of_field.sample_count   = 24;
 
-    // SSAO has no host-driven implementation — kind stays UNKNOWN.
+    // 明示 kind (UNKNOWN のまま) は name 推論より優先される — 名前が
+    // "SSAO" でも explicit Unknown が round-trip で保存されることを見る。
     PostProcessDef ssao;
     ssao.name = "SSAO";
 
@@ -308,9 +309,9 @@ void test_post_process_param_roundtrip() {
               "DoF focus_distance round-trips");
     PT_ASSERT_OP(d.depth_of_field.sample_count, ==, 24u, "DoF sample_count round-trips");
 
-    // SSAO: kind inferred as UNKNOWN, no host implementation.
+    // 明示 kind Unknown は name 推論 (SSAO) に上書きされず保存される。
     PT_ASSERT(dst.post_process_stack[5].kind == PostProcessKind::UNKNOWN,
-              "SSAO resolves to UNKNOWN kind");
+              "explicit Unknown kind survives round-trip");
 }
 
 void test_post_process_kind_inference() {
@@ -319,24 +320,38 @@ void test_post_process_kind_inference() {
     const std::string j = R"({
       "profile_name": "Inferred",
       "post_process": [
-        { "name": "Bloom",       "enabled": true },
-        { "name": "Tonemapping", "enabled": true },
-        { "name": "Grade",       "enabled": true },
-        { "name": "FXAA",        "enabled": true }
+        { "name": "Bloom",         "enabled": true },
+        { "name": "Tonemapping",   "enabled": true },
+        { "name": "Grade",         "enabled": true },
+        { "name": "FXAA",          "enabled": true },
+        { "name": "MotionBlur",    "enabled": true },
+        { "name": "VolumetricFog", "enabled": true }
       ]
     })";
     PipelineProfileDef out;
     std::string err;
     PT_ASSERT(from_pipeline_profile_json(j, out, &err), err.c_str());
-    PT_ASSERT_OP(out.post_process_stack.size(), ==, 4u, "stack parsed");
+    PT_ASSERT_OP(out.post_process_stack.size(), ==, 6u, "stack parsed");
     PT_ASSERT(out.post_process_stack[0].kind == PostProcessKind::BLOOM,
               "name 'Bloom' infers BLOOM");
     PT_ASSERT(out.post_process_stack[1].kind == PostProcessKind::TONE_MAPPING,
               "name 'Tonemapping' infers TONE_MAPPING");
     PT_ASSERT(out.post_process_stack[2].kind == PostProcessKind::COLOR_GRADING,
               "name 'Grade' infers COLOR_GRADING");
-    PT_ASSERT(out.post_process_stack[3].kind == PostProcessKind::UNKNOWN,
-              "name 'FXAA' infers UNKNOWN");
+    // FXAA / MotionBlur は 2026-07 の phase 1 実装で host-driven 実装を得た
+    // (spec/feature/postprocess-effects-design.md) — UNKNOWN ではなくなった。
+    PT_ASSERT(out.post_process_stack[3].kind == PostProcessKind::FXAA,
+              "name 'FXAA' infers FXAA");
+    PT_ASSERT(out.post_process_stack[4].kind == PostProcessKind::MOTION_BLUR,
+              "name 'MotionBlur' infers MOTION_BLUR");
+    // TAA / SSR は phase 2 実装 (history buffer / 深度再構築 SSR)。
+    PT_ASSERT(post_process_kind_from_name("TAA") == PostProcessKind::TAA,
+              "name 'TAA' infers TAA");
+    PT_ASSERT(post_process_kind_from_name("SSR") == PostProcessKind::SSR,
+              "name 'SSR' infers SSR");
+    // 未実装のエフェクト名は引き続き UNKNOWN に落ちる。
+    PT_ASSERT(out.post_process_stack[5].kind == PostProcessKind::UNKNOWN,
+              "name 'VolumetricFog' infers UNKNOWN");
 }
 
 void test_post_process_bridge() {

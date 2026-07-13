@@ -85,6 +85,12 @@ struct PostProcessPassDef {
     std::vector<PushFieldDesc> push_layout;
     std::vector<uint8_t>       push_data;
 
+    /// viewport / scissor の上書き (0 = フル解像度)。 exposure_measure の
+    /// ような「1 fragment だけ走らせたい」 縮退 pass 用。 出力ターゲット自体
+    /// はフル解像度で確保され、 領域外の内容は未定義。
+    uint32_t viewport_w = 0;
+    uint32_t viewport_h = 0;
+
     /// push constant の総バイト数 (16-byte アラインに切り上げ済み)。
     uint32_t push_size() const {
         return static_cast<uint32_t>(push_data.size());
@@ -110,6 +116,34 @@ extern const char* const kPostProcessLutTarget;      // "__lut__"
 /// 入力専用 — `output` には使えない。
 extern const char* const kPostProcessDepthTarget;    // "__depth__"
 
+/// スクリーン速度 (RG16F、 UV 差分) を指す予約済みターゲット名。
+/// `PostProcessConfig::velocity.enabled` (scene pass MRT 化) のときだけ
+/// 解決できる。 per-object motion blur / TAA 動体対応 (phase 3) 用。
+/// 入力専用 — `output` には使えない。
+extern const char* const kPostProcessVelocityTarget; // "__velocity__"
+
+// ============================================================
+// history buffer — 寿命 >1 フレームの持ち越し入力 (phase 2)
+// ============================================================
+/// `history_input_name("pp_taa")` = "__history:pp_taa__" を inputs に入れると、
+/// その binding は **前フレームの** 論理ターゲット `pp_taa` の内容
+/// (persistent history image) に解決される。 `PostProcessPipeline` は
+/// フレーム末尾に対象ターゲット → history image のコピーを記録する。
+///
+///   - history image は初期化時に黒クリアされる。 最初のフレームや
+///     resize / rebuild_chain 後は黒 (TAA 等は config の history_valid で
+///     素通しし再シードする — ホスト責務)。
+///   - 入力専用 — `output` には使えない。
+///   - `rebuild_intermediate_targets()` は history 名を中間ターゲットとして
+///     数えない (参照元ターゲット側が確保される)。
+extern const char* const kPostProcessHistoryPrefix;  // "__history:"
+
+/// `target` の history 入力名 ("__history:<target>__") を組み立てる。
+std::string history_input_name(std::string_view target);
+
+/// `name` が history 入力名なら参照元ターゲット名を返す。 違えば空文字。
+std::string parse_history_input(std::string_view name);
+
 // ============================================================
 // PostProcessChain — pass 列 + 中間ターゲット集合
 // ============================================================
@@ -126,8 +160,18 @@ struct PostProcessChain {
     std::vector<PostProcessPassDef> passes;
     std::vector<std::string>        intermediate_names;
 
+    /// 中間ターゲットの解像度除数の宣言 (name, divisor)。 未宣言 = 1
+    /// (フル解像度)。 mip-chain bloom の縮小ターゲット (1/2, 1/4, …) 用。
+    /// `rebuild_intermediate_targets()` は names を作り直すがこの宣言は
+    /// 保持する (参照されなくなった宣言は無害)。
+    std::vector<std::pair<std::string, uint32_t>> target_divisors;
+
     bool empty() const { return passes.empty(); }
 };
+
+/// `name` の宣言済み解像度除数を返す (未宣言は 1)。
+uint32_t post_process_target_divisor(const PostProcessChain& chain,
+                                     std::string_view name);
 
 // ============================================================
 // チェーン途中編集 API — anchor pass 名基準の挿入 / 削除
@@ -193,12 +237,21 @@ void rebuild_intermediate_targets(PostProcessChain& chain);
 /// disabled なエフェクトは旧実装と同じ「push constant で恒等へ縮退」 する
 /// (Bloom 無効 → threshold 1e9、 tonemap 無効 → LINEAR_CLAMP 等)。
 ///
-/// `cfg.depth_of_field.enabled` のとき、 チェーン先頭へ DoF pass を途中挿入
-/// する (High プリセットの経路):
-///   - dof : scene + __depth__ → pp_dof、 push = DofPC レイアウト
-/// 以降の extract / grade は scene の代わりに pp_dof を読む (配線替え)。
-/// DoF 無効時のチェーンは従来の 4 pass とバイト単位で同一 — 有効 / 無効の
-/// 切替は構造変更なので `PostProcessPipeline::rebuild_chain()` を要する。
+/// enabled なエフェクトに応じて任意 pass を途中挿入する
+/// (`spec/feature/postprocess-effects-design.md` §2.1)。 フル構成:
+///   scene → [dof] → [ssao_apply] → [motion_blur] →
+///     extract → blur H → blur V → grade → [fxaa] → __output__
+///   - dof         : scene + __depth__ → pp_dof (DofPC)
+///   - ssao_apply  : 前段 + __depth__ → pp_ssao (SsaoPC、 深度差 AO を乗算)
+///   - motion_blur : 前段 + __depth__ → pp_mblur (MotionBlurPC、 カメラ再投影)
+///   - fxaa        : pp_ldr → __output__ (FxaaPC、 LDR。 有効時は grade の
+///                   出力が pp_ldr へ差し替わる)
+/// 後段の extract / grade は直前の挿入 pass の出力を読む (配線替え)。
+/// 全て無効時のチェーンは従来どおりの 4 pass 構造で、 各 push 値は恒等へ
+/// 縮退する (grade の push は CA / grain フィールド分だけ旧版より長い)。
+/// 各エフェクトの有効 / 無効切替は構造変更なので
+/// `PostProcessPipeline::rebuild_chain()` を要する
+/// (値だけの変更は `refresh_post_process_chain()`)。
 ///
 /// `shader_dir`        : 組み込みシェーダ SPIR-V のディレクトリ。
 /// `extent_w/extent_h` : blur の texel ステップ計算に使う描画解像度。
@@ -206,9 +259,12 @@ void rebuild_intermediate_targets(PostProcessChain& chain);
 ///                       (旧実装の二重ガンマ回避をそのまま踏襲)。
 /// `lut_loaded`        : 実 LUT が読めたか (false なら lut_intensity=0)。
 ///
-/// 戻り値の `passes` には組み込み 4 pass のあと、 将来の任意 pass
+/// 戻り値の `passes` には組み込み pass 列のあと、 ホスト定義の任意 pass
 /// (`extra` 引数) が続く。 `extra` の各 pass は inputs/output を論理名で
-/// 指定でき、 SSAO / FXAA 等の挿入に使う (現状 KS は空で呼ぶ)。
+/// 指定できる (現状 KS は空で呼ぶ)。 組み込み pass 名 (dof / ssao_apply /
+/// motion_blur / fxaa / bloom_extract / bloom_blur_h / bloom_blur_v /
+/// color_grade) は `refresh_post_process_chain()` が push_data を管理する
+/// 予約名 — extra には使わないこと。
 PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
                                           const std::string&       shader_dir,
                                           uint32_t                 extent_w,

@@ -45,6 +45,11 @@ VkImageView PostProcessPipeline::scene_color_view() const {
     return targets_[static_cast<size_t>(scene_index_)].view;
 }
 
+VkImageView PostProcessPipeline::scene_velocity_view() const {
+    if (scene_index_ < 0) return VK_NULL_HANDLE;
+    return targets_[static_cast<size_t>(scene_index_)].velocity_view;
+}
+
 VkImageView PostProcessPipeline::scene_depth_view() const {
     if (scene_index_ < 0) return VK_NULL_HANDLE;
     return targets_[static_cast<size_t>(scene_index_)].depth_view;
@@ -98,30 +103,53 @@ VkShaderModule PostProcessPipeline::load_shader_(const std::string& path) const 
 // ── scene render pass: color (RGBA16F) + depth (D32_SFLOAT), CLEAR ──────────
 //    旧実装の rp_scene_ と同一。 DecalSystem 等が color/depth をサンプルする。
 bool PostProcessPipeline::create_scene_render_pass_() {
-    VkAttachmentDescription atts[2]{};
-    atts[0].format         = kHdrFormat;
-    atts[0].samples        = VK_SAMPLE_COUNT_1_BIT;
-    atts[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    atts[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    atts[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    atts[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    atts[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    atts[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    atts[1].format         = kDepthFormat;
-    atts[1].samples        = VK_SAMPLE_COUNT_1_BIT;
-    atts[1].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    atts[1].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    atts[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    atts[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    atts[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    atts[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    // velocity buffer 有効時は color(0) / velocity(1) / depth(2) の MRT。
+    // フラグが変わったら作り直す (rebuild_chain 経由の構造変更)。
+    const bool want_velocity = config_.velocity.enabled;
+    if (rp_scene_ != VK_NULL_HANDLE) {
+        if (scene_rp_has_velocity_ == want_velocity) return true;
+        vkDestroyRenderPass(device_, rp_scene_, nullptr);
+        rp_scene_ = VK_NULL_HANDLE;
+    }
+    scene_rp_has_velocity_ = want_velocity;
 
-    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkAttachmentDescription atts[3]{};
+    uint32_t att_count = 0;
+    const uint32_t color_idx = att_count++;
+    atts[color_idx].format         = kHdrFormat;
+    atts[color_idx].samples        = VK_SAMPLE_COUNT_1_BIT;
+    atts[color_idx].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    atts[color_idx].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[color_idx].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    atts[color_idx].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[color_idx].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    atts[color_idx].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    uint32_t velocity_idx = 0;
+    if (want_velocity) {
+        velocity_idx = att_count++;
+        atts[velocity_idx] = atts[color_idx];
+        atts[velocity_idx].format = VK_FORMAT_R16G16_SFLOAT;
+    }
+    const uint32_t depth_idx = att_count++;
+    atts[depth_idx].format         = kDepthFormat;
+    atts[depth_idx].samples        = VK_SAMPLE_COUNT_1_BIT;
+    atts[depth_idx].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    atts[depth_idx].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[depth_idx].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    atts[depth_idx].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[depth_idx].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    atts[depth_idx].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRefs[2] = {
+        {color_idx, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        {velocity_idx, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+    };
+    VkAttachmentReference depthRef{depth_idx,
+                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub{};
     sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sub.colorAttachmentCount    = 1;
-    sub.pColorAttachments       = &colorRef;
+    sub.colorAttachmentCount    = want_velocity ? 2u : 1u;
+    sub.pColorAttachments       = colorRefs;
     sub.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency deps[2]{};
@@ -145,7 +173,7 @@ bool PostProcessPipeline::create_scene_render_pass_() {
     deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    rp.attachmentCount = 2;
+    rp.attachmentCount = att_count;
     rp.pAttachments    = atts;
     rp.subpassCount    = 1;
     rp.pSubpasses      = &sub;
@@ -261,20 +289,24 @@ VkRenderPass PostProcessPipeline::get_or_create_output_render_pass_(VkFormat fmt
 }
 
 bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
-                                         bool with_depth) {
+                                         bool with_depth, VkExtent2D extent) {
     rt.fb_render_pass = rp;
     rt.has_depth      = with_depth;
+    rt.extent         = extent;
 
     // ── color image ──
     VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ic.imageType   = VK_IMAGE_TYPE_2D;
     ic.format      = kHdrFormat;
-    ic.extent      = {extent_.width, extent_.height, 1};
+    ic.extent      = {extent.width, extent.height, 1};
     ic.mipLevels   = 1;
     ic.arrayLayers = 1;
     ic.samples     = VK_SAMPLE_COUNT_1_BIT;
     ic.tiling      = VK_IMAGE_TILING_OPTIMAL;
-    ic.usage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    // TRANSFER_SRC: history buffer (`__history:*__`) のコピー元になり得る。
+    ic.usage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                     VK_IMAGE_USAGE_SAMPLED_BIT |
+                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(device_, &ic, nullptr, &rt.image) != VK_SUCCESS) return false;
@@ -300,7 +332,7 @@ bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
         VkImageCreateInfo dic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         dic.imageType   = VK_IMAGE_TYPE_2D;
         dic.format      = kDepthFormat;
-        dic.extent      = {extent_.width, extent_.height, 1};
+        dic.extent      = {extent.width, extent.height, 1};
         dic.mipLevels   = 1;
         dic.arrayLayers = 1;
         dic.samples     = VK_SAMPLE_COUNT_1_BIT;
@@ -329,14 +361,56 @@ bool PostProcessPipeline::create_target_(RenderTarget& rt, VkRenderPass rp,
             return false;
     }
 
+    // ── velocity image (scene + velocity.enabled のみ、 RG16F) ──
+    //    render pass の attachment 順は color(0) / velocity(1) / depth(2)。
+    const bool with_velocity = with_depth && config_.velocity.enabled;
+    if (with_velocity) {
+        VkImageCreateInfo vic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        vic.imageType     = VK_IMAGE_TYPE_2D;
+        vic.format        = VK_FORMAT_R16G16_SFLOAT;
+        vic.extent        = {extent.width, extent.height, 1};
+        vic.mipLevels     = 1;
+        vic.arrayLayers   = 1;
+        vic.samples       = VK_SAMPLE_COUNT_1_BIT;
+        vic.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        vic.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                            VK_IMAGE_USAGE_SAMPLED_BIT;
+        vic.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        vic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device_, &vic, nullptr, &rt.velocity_image) !=
+            VK_SUCCESS)
+            return false;
+        vkGetImageMemoryRequirements(device_, rt.velocity_image, &mr);
+        ai.allocationSize  = mr.size;
+        ai.memoryTypeIndex = find_memory_type_(mr.memoryTypeBits,
+                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device_, &ai, nullptr, &rt.velocity_memory) !=
+            VK_SUCCESS)
+            return false;
+        vkBindImageMemory(device_, rt.velocity_image, rt.velocity_memory, 0);
+
+        VkImageViewCreateInfo vvi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vvi.image    = rt.velocity_image;
+        vvi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vvi.format   = VK_FORMAT_R16G16_SFLOAT;
+        vvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &vvi, nullptr, &rt.velocity_view) !=
+            VK_SUCCESS)
+            return false;
+    }
+
     // ── framebuffer ──
-    VkImageView fb_atts[2] = {rt.view, rt.depth_view};
+    VkImageView fb_atts[3];
+    uint32_t fb_count = 0;
+    fb_atts[fb_count++] = rt.view;
+    if (with_velocity) fb_atts[fb_count++] = rt.velocity_view;
+    if (with_depth)    fb_atts[fb_count++] = rt.depth_view;
     VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     fi.renderPass      = rp;
-    fi.attachmentCount = with_depth ? 2u : 1u;
+    fi.attachmentCount = fb_count;
     fi.pAttachments    = fb_atts;
-    fi.width           = extent_.width;
-    fi.height          = extent_.height;
+    fi.width           = extent.width;
+    fi.height          = extent.height;
     fi.layers          = 1;
     return vkCreateFramebuffer(device_, &fi, nullptr, &rt.fb) == VK_SUCCESS;
 }
@@ -352,16 +426,22 @@ bool PostProcessPipeline::create_targets_() {
     // index 0: scene HDR ターゲット (color + depth, scene render pass)。
     {
         RenderTarget scene;
-        if (!create_target_(scene, rp_scene_, /*with_depth=*/true)) return false;
+        if (!create_target_(scene, rp_scene_, /*with_depth=*/true, extent_))
+            return false;
         scene_index_ = static_cast<int32_t>(targets_.size());
         target_index_[kPostProcessSceneTarget] = scene_index_;
         targets_.push_back(scene);
         fb_scene_ = scene.fb;
     }
     // chain が宣言する中間ターゲット (ping / pong …)。 depth 無し。
+    // target_divisors 宣言があれば縮小して確保する (mip-chain bloom 用)。
     for (const auto& name : chain_.intermediate_names) {
+        const uint32_t div = post_process_target_divisor(chain_, name);
+        const VkExtent2D ext = {std::max(extent_.width / div, 1u),
+                                std::max(extent_.height / div, 1u)};
         RenderTarget rt;
-        if (!create_target_(rt, rp_inter, /*with_depth=*/false)) return false;
+        if (!create_target_(rt, rp_inter, /*with_depth=*/false, ext))
+            return false;
         target_index_[name] = static_cast<int32_t>(targets_.size());
         targets_.push_back(rt);
     }
@@ -572,7 +652,9 @@ void PostProcessPipeline::write_descriptor_sets_() {
         std::vector<VkWriteDescriptorSet>  writes(cp.input_count);
         for (uint32_t i = 0; i < cp.input_count; ++i) {
             // 入力 index >= 0 は targets_、 -1 は LUT (専用 Texture)、
-            // -2 は scene 深度 (__depth__、 NEAREST サンプラ)。
+            // -2 は scene 深度 (__depth__、 NEAREST サンプラ)、
+            // -3 は scene velocity (__velocity__)、
+            // -4-n は history_[n] (persistent image)。
             const int32_t idx = cp.input_indices[i];
             if (idx >= 0) {
                 infos[i].sampler     = sampler_;
@@ -582,13 +664,22 @@ void PostProcessPipeline::write_descriptor_sets_() {
                 infos[i].sampler     = sampler_;
                 infos[i].imageView   = lut_.view;
                 infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            } else {
+            } else if (idx == -2) {
                 // scene render pass の finalLayout (DEPTH_STENCIL_READ_ONLY)
                 // と一致させる。
                 infos[i].sampler     = depth_sampler_;
                 infos[i].imageView   = scene_depth_view();
                 infos[i].imageLayout =
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            } else if (idx == -3) {
+                infos[i].sampler     = sampler_;
+                infos[i].imageView   = scene_velocity_view();
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            } else {
+                const size_t h = static_cast<size_t>(-4 - idx);
+                infos[i].sampler     = sampler_;
+                infos[i].imageView   = history_[h].tex.view;
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
 
             writes[i] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -677,6 +768,163 @@ int32_t PostProcessPipeline::resolve_target_(const std::string& name) const {
     return -2;  // 不明 (LUT は呼び出し側が個別解決)
 }
 
+// chain の `__history:<source>__` 入力を集め、 persistent image を確保して
+// 黒クリア + SHADER_READ_ONLY へ遷移させる (初回フレームの read を有効化)。
+// source ターゲットの存在は build 側 (input 解決) で検証済み。
+bool PostProcessPipeline::create_history_textures_() {
+    history_.clear();
+
+    // 参照される history source 名を出現順・重複なしで収集する。
+    std::vector<std::string> sources;
+    for (const auto& def : chain_.passes) {
+        for (const auto& in_name : def.inputs) {
+            const std::string src = parse_history_input(in_name);
+            if (src.empty()) continue;
+            bool have = false;
+            for (const auto& s : sources)
+                if (s == src) { have = true; break; }
+            if (!have) sources.push_back(src);
+        }
+    }
+    if (sources.empty()) return true;
+
+    for (const auto& src : sources) {
+        HistoryEntry entry;
+        entry.source       = src;
+        entry.source_index = resolve_target_(src);
+        if (entry.source_index < 0) {
+            std::fprintf(stderr,
+                         "[postprocess] history source '%s' is not a target\n",
+                         src.c_str());
+            return false;
+        }
+
+        // history image は source ターゲットと同解像度 (縮小ターゲット対応)。
+        const VkExtent2D src_extent =
+            targets_[static_cast<size_t>(entry.source_index)].extent;
+
+        VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ic.imageType     = VK_IMAGE_TYPE_2D;
+        ic.format        = kHdrFormat;
+        ic.extent        = {src_extent.width, src_extent.height, 1};
+        ic.mipLevels     = 1;
+        ic.arrayLayers   = 1;
+        ic.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ic.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ic.usage         = VK_IMAGE_USAGE_SAMPLED_BIT |
+                           VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ic.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device_, &ic, nullptr, &entry.tex.image) != VK_SUCCESS)
+            return false;
+
+        VkMemoryRequirements mr{};
+        vkGetImageMemoryRequirements(device_, entry.tex.image, &mr);
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize  = mr.size;
+        ai.memoryTypeIndex = find_memory_type_(mr.memoryTypeBits,
+                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device_, &ai, nullptr, &entry.tex.memory) != VK_SUCCESS)
+            return false;
+        vkBindImageMemory(device_, entry.tex.image, entry.tex.memory, 0);
+
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image    = entry.tex.image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format   = kHdrFormat;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &vi, nullptr, &entry.tex.view) != VK_SUCCESS)
+            return false;
+
+        // 黒クリア + SHADER_READ_ONLY へ遷移 (初回フレームから read 可能に)。
+        VkCommandBuffer cmd = vk_->begin_single_time_commands();
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.srcAccessMask = 0;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = entry.tex.image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &b);
+        VkClearColorValue black{};
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cmd, entry.tex.image,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &black, 1, &range);
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &b);
+        vk_->end_single_time_commands(cmd);
+
+        history_.push_back(entry);
+    }
+    return true;
+}
+
+// フレーム末尾の history 更新: source ターゲット → history image をコピー。
+// source は直前の render pass の finalLayout (SHADER_READ_ONLY)、 history は
+// 今フレームの read 完了後 (FRAGMENT stage) に TRANSFER_DST へ遷移させる。
+void PostProcessPipeline::record_history_copies_(VkCommandBuffer cmd) {
+    for (const auto& entry : history_) {
+        if (entry.source_index < 0) continue;
+        const auto& src_rt = targets_[static_cast<size_t>(entry.source_index)];
+        VkImage src = src_rt.image;
+
+        VkImageMemoryBarrier pre[2]{};
+        // source: SHADER_READ_ONLY → TRANSFER_SRC
+        pre[0] = VkImageMemoryBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        pre[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        pre[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        pre[0].oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        pre[0].newLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        pre[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pre[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pre[0].image = src;
+        pre[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        // history: SHADER_READ_ONLY → TRANSFER_DST (今フレームの read 完了後)
+        pre[1] = pre[0];
+        pre[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        pre[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        pre[1].newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        pre[1].image         = entry.tex.image;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             0, nullptr, 0, nullptr, 2, pre);
+
+        VkImageCopy region{};
+        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.extent         = {src_rt.extent.width, src_rt.extent.height, 1};
+        vkCmdCopyImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       entry.tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &region);
+
+        VkImageMemoryBarrier post[2]{};
+        // source: TRANSFER_SRC → SHADER_READ_ONLY (次フレームの入力へ戻す)
+        post[0] = pre[0];
+        post[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        post[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        post[0].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        post[0].newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        // history: TRANSFER_DST → SHADER_READ_ONLY (次フレームの read へ)
+        post[1] = post[0];
+        post[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        post[1].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        post[1].image         = entry.tex.image;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 2, post);
+    }
+}
+
 // chain_ から CompiledPass 列 + render pass / target / descriptor / pipeline を
 // 構築する。 初期化 / resize の共通ボディ。
 bool PostProcessPipeline::build_from_chain_(
@@ -700,6 +948,12 @@ bool PostProcessPipeline::build_from_chain_(
         return false;
     }
 
+    // ── history buffers (`__history:*__` 入力の解決先) ──
+    if (!create_history_textures_()) {
+        std::fprintf(stderr, "[postprocess] history buffer creation failed\n");
+        return false;
+    }
+
     // ── pass を CompiledPass へ解決する ──
     //    LUT 入力は論理名 "__lut__" を持つ — input index = -1 で表現する。
     compiled_.clear();
@@ -710,6 +964,8 @@ bool PostProcessPipeline::build_from_chain_(
         cp.push_data   = def.push_data;
         cp.push_size   = def.push_size();
         cp.input_count = static_cast<uint32_t>(def.inputs.size());
+        cp.viewport_w  = def.viewport_w;
+        cp.viewport_h  = def.viewport_h;
 
         // 入力ターゲットを index へ解決する。
         cp.input_indices.reserve(def.inputs.size());
@@ -720,6 +976,36 @@ bool PostProcessPipeline::build_from_chain_(
             }
             if (in_name == kPostProcessDepthTarget) {
                 cp.input_indices.push_back(-2);  // scene 深度ビュー
+                continue;
+            }
+            if (in_name == kPostProcessVelocityTarget) {
+                if (!config_.velocity.enabled) {
+                    // 前提の欠落 — 黙って縮退しない (RULE_CODE §7.1)。
+                    std::fprintf(stderr,
+                                 "[postprocess] pass '%s': __velocity__ requires "
+                                 "PostProcessConfig::velocity.enabled\n",
+                                 def.name.c_str());
+                    return false;
+                }
+                cp.input_indices.push_back(-3);  // scene velocity ビュー
+                continue;
+            }
+            const std::string hist_src = parse_history_input(in_name);
+            if (!hist_src.empty()) {
+                int32_t hidx = -1;
+                for (size_t h = 0; h < history_.size(); ++h) {
+                    if (history_[h].source == hist_src) {
+                        hidx = static_cast<int32_t>(h);
+                        break;
+                    }
+                }
+                if (hidx < 0) {
+                    std::fprintf(stderr,
+                                 "[postprocess] pass '%s': unresolved history '%s'\n",
+                                 def.name.c_str(), in_name.c_str());
+                    return false;
+                }
+                cp.input_indices.push_back(-4 - hidx);  // history_[hidx]
                 continue;
             }
             int32_t idx = resolve_target_(in_name);
@@ -847,10 +1133,14 @@ bool PostProcessPipeline::initialize_vulkan(
 }
 
 void PostProcessPipeline::record(VkCommandBuffer cmd, uint32_t output_index,
-                                 float /*delta_time*/) {
+                                 float delta_time) {
     if (!vulkan_ready_ || output_index >= output_fbs_.size()) return;
 
-    // 組み込み 4 pass の push_data を現フレームの config / 解像度へ詰め直す。
+    // auto exposure の時間適応に使う経過秒を config へ詰める (ランタイム
+    // フィールド — refresh の make_exposure_measure_pc が読む)。
+    if (delta_time > 0.0f) config_.hdr.delta_seconds = delta_time;
+
+    // 組み込み pass の push_data を現フレームの config / 解像度へ詰め直す。
     // (PostProcessTuner のライブ編集を毎フレーム反映するため。 旧 record()
     //  が push constant をその場で組んでいたのと等価。)
     refresh_post_process_chain(chain_, config_, extent_.width, extent_.height,
@@ -859,10 +1149,6 @@ void PostProcessPipeline::record(VkCommandBuffer cmd, uint32_t output_index,
         for (const auto& p : chain_.passes)
             if (p.name == cp.name) { cp.push_data = p.push_data; break; }
     }
-
-    VkViewport vp{0.0f, 0.0f, static_cast<float>(extent_.width),
-                  static_cast<float>(extent_.height), 0.0f, 1.0f};
-    VkRect2D sc{{0, 0}, extent_};
 
     // chain の pass を挿入順に記録する。 各 pass は自前の render pass を
     // begin/end する — render pass の EXTERNAL↔0 subpass dependency が
@@ -877,10 +1163,24 @@ void PostProcessPipeline::record(VkCommandBuffer cmd, uint32_t output_index,
             fb = targets_[static_cast<size_t>(cp.output_index)].fb;
         }
 
+        // 描画領域: 出力ターゲットの実解像度 (縮小ターゲットは小さい)。
+        // viewport 上書き (exposure_measure の 1x1 等) があればそれが勝つ。
+        VkExtent2D pass_extent =
+            (cp.output_index >= 0)
+                ? targets_[static_cast<size_t>(cp.output_index)].extent
+                : extent_;
+        if (cp.viewport_w > 0 && cp.viewport_h > 0) {
+            pass_extent = {std::min(cp.viewport_w, pass_extent.width),
+                           std::min(cp.viewport_h, pass_extent.height)};
+        }
+        VkViewport vp{0.0f, 0.0f, static_cast<float>(pass_extent.width),
+                      static_cast<float>(pass_extent.height), 0.0f, 1.0f};
+        VkRect2D sc{{0, 0}, pass_extent};
+
         VkRenderPassBeginInfo rpi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         rpi.renderPass      = cp.render_pass;
         rpi.framebuffer     = fb;
-        rpi.renderArea      = {{0, 0}, extent_};
+        rpi.renderArea      = {{0, 0}, pass_extent};
         rpi.clearValueCount = 0;
         vkCmdBeginRenderPass(cmd, &rpi, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -896,6 +1196,9 @@ void PostProcessPipeline::record(VkCommandBuffer cmd, uint32_t output_index,
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
     }
+
+    // history buffer 更新 (source ターゲット → persistent image のコピー)。
+    record_history_copies_(cmd);
 }
 
 bool PostProcessPipeline::resize(uint32_t width, uint32_t height,
@@ -959,6 +1262,12 @@ void PostProcessPipeline::destroy_chain_resources_() {
         if (rt.depth_view)   vkDestroyImageView(device_, rt.depth_view, nullptr);
         if (rt.depth_image)  vkDestroyImage(device_, rt.depth_image, nullptr);
         if (rt.depth_memory) vkFreeMemory(device_, rt.depth_memory, nullptr);
+        if (rt.velocity_view)
+            vkDestroyImageView(device_, rt.velocity_view, nullptr);
+        if (rt.velocity_image)
+            vkDestroyImage(device_, rt.velocity_image, nullptr);
+        if (rt.velocity_memory)
+            vkFreeMemory(device_, rt.velocity_memory, nullptr);
     };
     for (VkFramebuffer fb : output_fbs_)
         if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
@@ -968,6 +1277,15 @@ void PostProcessPipeline::destroy_chain_resources_() {
     target_index_.clear();
     scene_index_ = -1;
     fb_scene_    = VK_NULL_HANDLE;
+
+    // history image (resize / rebuild で内容は失われる — ホストは
+    // history_valid を倒して再シードする契約)。
+    for (auto& h : history_) {
+        if (h.tex.view)   vkDestroyImageView(device_, h.tex.view, nullptr);
+        if (h.tex.image)  vkDestroyImage(device_, h.tex.image, nullptr);
+        if (h.tex.memory) vkFreeMemory(device_, h.tex.memory, nullptr);
+    }
+    history_.clear();
 
     for (auto& cp : compiled_)
         if (cp.pipeline) vkDestroyPipeline(device_, cp.pipeline, nullptr);
@@ -999,6 +1317,13 @@ void PostProcessPipeline::shutdown() {
         target_index_.clear();
         scene_index_ = -1;
         fb_scene_    = VK_NULL_HANDLE;
+
+        for (auto& h : history_) {
+            if (h.tex.view)   vkDestroyImageView(device_, h.tex.view, nullptr);
+            if (h.tex.image)  vkDestroyImage(device_, h.tex.image, nullptr);
+            if (h.tex.memory) vkFreeMemory(device_, h.tex.memory, nullptr);
+        }
+        history_.clear();
 
         if (lut_.view)   vkDestroyImageView(device_, lut_.view, nullptr);
         if (lut_.image)  vkDestroyImage(device_, lut_.image, nullptr);
