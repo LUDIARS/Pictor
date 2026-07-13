@@ -1,15 +1,27 @@
 # GI — グローバルイルミネーション (影 / AO / プローブ)
 
-> 実装: `include/pictor/gi/` (2), `src/gi/`
+> 実装: `include/pictor/gi/` (5), `src/gi/`
+> 設計: [`../gi-bake-realtime-design.md`](../gi-bake-realtime-design.md) (phase 分割と実装状況の正本)
 
 影 (CSM) + 環境遮蔽 (SSAO) + 間接光 (irradiance probe) のランタイム + オフライン bake。
+**phase 1 (CPU 経路) 実装済み** — bake 実演算と probe grid の CPU relight / 補間が動く。
+GPU dispatch (compute / CSM 実描画) は phase 2 (`GIGpuExecutor`) の領分で未実装。
 
 ## 構成
 
 | クラス | 役割 |
 |---|---|
-| `GILightingSystem` | ランタイム GI パス統括。可視カリング後に shadow / SSAO / probe sampling の 3 前パスを実行、cascade uniform と GPU binding を管理 |
-| `GIBakeSystem` | Static プール向けの高品質オフライン事前計算 → GPU SSBO にキャッシュ |
+| `GILightingSystem` | ランタイム GI パス統括。可視カリング後に shadow / SSAO / probe sampling の 3 前パスを実行、cascade uniform と GPU binding を管理。probe SH の CPU 保持と dynamic pool の per-object 補間 (`dynamic_object_irradiance()`) |
+| `GIBakeSystem` | Static プール向けの高品質オフライン事前計算 (CPU レイキャスト実演算) → binary 永続化 |
+| `GISceneProxy` | AABB プロキシへの遮蔽クエリ (slab 法 any-hit / closest-hit)。bake / probe 構築の共通基盤 |
+| `GIProbeField` | probe grid の SH 構築 + 遮蔽キャッシュ + `relight()` (動的ライト追従 = phase 1 のリアルタイム GI) + trilinear 補間 |
+| `gi_sh.h` | SH L2 射影 / irradiance 評価 / fibonacci sphere (純関数) |
+| `GIGpuExecutor` | phase 2: 実 VkBuffer + `gi_probe_sample.comp` compute dispatch。マテリアル結線用バッファ (`params_buffer()` / `probe_sh_buffer()` / `object_irradiance_buffer()`) を公開。phase 3 で環境反射パラメータ (`set_env_params()`) を追加 |
+| `GIShadowAtlas` | phase 2: CSM depth array + render pass + per-cascade framebuffer + PCF compare sampler (描画はホスト責務、`spec/setup/integration.md` §6.2) |
+| `GISsaoCompute` | phase 2: 深度のみ SSAO compute (`ssao_gen.comp`)。R8 AO image + 決定的カーネル所有 (`integration.md` §6.4) |
+| `GIReflectionProbe` | phase 3: mip 付き cubemap の host-driven キャプチャ契約 + blit mip 生成 + 1x1 黒 fallback (`integration.md` §7.3) |
+
+シェーダ側: `gi.glsl` (per-pixel probe 補間 + 環境スペキュラ `sampleGIEnvSpecular`) を `pbr_gi.frag` (opt-in バリアント) が include。既存 `pbr.frag` は無変更。probe の動的追従は `GIProbeField::update_budgeted()` (DDGI 風 round-robin、`integration.md` §7.4)。
 
 設定: `GIConfig` (shadows+SSAO+probes 統合) / `ShadowMapConfig` (cascade 数/解像度/PCF・PCSS/bias) / `SSAOConfig` / `GIProbeConfig` (grid 原点/間隔/寸法)。bake は `GIBakeConfig` + `BakeTarget` enum (SHADOW_MAP / AMBIENT_OCCLUSION / PROBE_IRRADIANCE / LIGHTMAP)。
 

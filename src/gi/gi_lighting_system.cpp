@@ -1,4 +1,6 @@
 ﻿#include "pictor/gi/gi_lighting_system.h"
+#include "pictor/gi/gi_probe_field.h"
+#include "pictor/gi/gi_sh.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
@@ -211,6 +213,12 @@ void GILightingSystem::initialize(uint32_t max_objects,
             buffer_manager_.allocate_instance_data(total_probes * 9 * 4 * sizeof(float));
         resources_.object_irradiance =
             buffer_manager_.allocate_instance_data(max_objects * 9 * 4 * sizeof(float));
+
+        // CPU 側の probe / per-object SH 保持領域 (init 1 回確保 — DoD 規約)。
+        probe_sh_cpu_.assign(
+            static_cast<size_t>(total_probes) * kSHFloatCount, 0.0f);
+        dynamic_irradiance_cpu_.assign(
+            static_cast<size_t>(max_objects) * kSHFloatCount, 0.0f);
     }
 
     initialized_ = true;
@@ -251,8 +259,18 @@ void GILightingSystem::set_directional_light(const DirectionalLight& light) {
 
 void GILightingSystem::upload_probe_data(const float* sh_data, uint32_t probe_count) {
     if (!initialized_ || !config_.gi_probes_enabled) return;
-    (void)sh_data;
-    stats_.active_probes = probe_count;
+    if (sh_data == nullptr) return;
+
+    // CPU 側へ保持する (レイアウト: probe × 36 float)。 確保済みサイズを
+    // 超える分は切り捨て — grid 設定と合わない入力を黙って拡張しない。
+    const size_t capacity_probes = probe_sh_cpu_.size() / kSHFloatCount;
+    const size_t copy_probes =
+        std::min(static_cast<size_t>(probe_count), capacity_probes);
+    std::memcpy(probe_sh_cpu_.data(), sh_data,
+                copy_probes * kSHFloatCount * sizeof(float));
+
+    stats_.active_probes = static_cast<uint32_t>(copy_probes);
+    probe_data_valid_ = copy_probes > 0;
 }
 
 void GILightingSystem::set_config(const GIConfig& config) {
@@ -388,14 +406,32 @@ void GILightingSystem::execute_ssao_pass(const float4x4& camera_projection) {
 void GILightingSystem::execute_gi_probe_pass() {
     if (!config_.gi_probes_enabled) return;
 
-    uint32_t object_count = registry_.total_object_count();
-    uint32_t workgroups = calculate_workgroups(object_count);
+    // CPU 補間経路 (phase 1) — dynamic pool の各オブジェクト位置で probe SH
+    // を trilinear 補間し、 per-object irradiance をフレームごとに更新する。
+    // GPU dispatch (gi_probe_sample.comp) は phase 2 (GIGpuExecutor)。
+    // static pool のベイク済みオブジェクトは GIBakeSystem の結果を使うため
+    // ここでは扱わない。
+    dynamic_irradiance_count_ = 0;
+    if (!probe_data_valid_) return;
 
-    uint32_t total_probes = config_.probes.grid_x
-                          * config_.probes.grid_y
-                          * config_.probes.grid_z;
-    stats_.active_probes = total_probes;
-    stats_.gi_workgroups += workgroups;
+    const ObjectPool& pool = registry_.dynamic_pool();
+    const uint32_t count = std::min(
+        pool.count(),
+        static_cast<uint32_t>(dynamic_irradiance_cpu_.size() / kSHFloatCount));
+    const auto& transforms = pool.transforms();
+
+    for (uint32_t i = 0; i < count; ++i) {
+        const float3 pos = transforms[i].get_translation();
+        sample_probe_grid(config_.probes, probe_sh_cpu_.data(), pos,
+                          dynamic_irradiance_cpu_.data()
+                              + static_cast<size_t>(i) * kSHFloatCount);
+    }
+    dynamic_irradiance_count_ = count;
+
+    stats_.active_probes = config_.probes.grid_x
+                         * config_.probes.grid_y
+                         * config_.probes.grid_z;
+    stats_.gi_workgroups += calculate_workgroups(count);
 }
 
 // ============================================================

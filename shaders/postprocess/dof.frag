@@ -23,9 +23,16 @@ layout(push_constant) uniform DofPC {
     uint  sample_count;
     float texel_x;
     float texel_y;
-    float _pad0;
-    float _pad1;
+    float near_plane;   // > 0 で深度バッファ値を view 距離へ線形化
+    float far_plane;    // 0 = 線形化なし (生の深度を距離扱い — 旧挙動)
 };
+
+// 深度バッファ値 → view 距離。 near/far 未設定 (0) は素通し (レガシー互換)。
+float toViewDistance(float d) {
+    if (far_plane <= near_plane || near_plane <= 0.0) return d;
+    return near_plane * far_plane
+         / max(far_plane - d * (far_plane - near_plane), 1e-6);
+}
 
 // Poisson disc samples (16 points, normalized to unit disc) — dof.comp と同一。
 const vec2 poissonDisc[16] = vec2[](
@@ -65,7 +72,7 @@ float computeCoC(float depth) {
 void main() {
     vec2 texelSize = vec2(texel_x, texel_y);
 
-    float centerDepth = texture(sceneDepth, inUV).r;
+    float centerDepth = toViewDistance(texture(sceneDepth, inUV).r);
     float coc = computeCoC(centerDepth);
     float absCoC = abs(coc);
 
@@ -86,7 +93,7 @@ void main() {
         vec2 sampleUV = inUV + offset;
 
         vec3 sampleColor = texture(sceneColor, sampleUV).rgb;
-        float sampleDepth = texture(sceneDepth, sampleUV).r;
+        float sampleDepth = toViewDistance(texture(sceneDepth, sampleUV).r);
         float sampleCoC = abs(computeCoC(sampleDepth));
 
         // Weight: accept sample if its CoC covers the center pixel

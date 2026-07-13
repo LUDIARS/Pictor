@@ -4,6 +4,8 @@
 #include "pictor/gpu/gpu_buffer_manager.h"
 #include "pictor/scene/scene_registry.h"
 
+#include <vector>
+
 namespace pictor {
 
 // ============================================================
@@ -155,7 +157,11 @@ public:
     /// Set/update the primary directional light (for CSM shadows)
     void set_directional_light(const DirectionalLight& light);
 
-    /// Upload/update probe irradiance data (CPU → GPU)
+    /// probe irradiance データ (probe_count × 36 float、 `GIProbeField::sh_data()`
+    /// 互換レイアウト) を受け取り CPU 側に保持する。 execute() の probe pass が
+    /// 動的オブジェクトの補間に使う。 GPU バッファへの転送は phase 2
+    /// (GIGpuExecutor) の責務 — 本メソッドは転送を行わない
+    /// (spec/feature/gi-bake-realtime-design.md §2.5)。
     void upload_probe_data(const float* sh_data, uint32_t probe_count);
 
     // ---- Configuration ----
@@ -174,6 +180,25 @@ public:
     // ---- Resource access (for shader binding) ----
 
     const GIResourceLayout& resource_layout() const { return resources_; }
+
+    // ---- Probe data access (CPU 経路 — phase 1) ----
+
+    /// 保持中の probe SH (probe_count × 36 float)。 未 upload なら nullptr。
+    const float* probe_sh_data() const {
+        return probe_sh_cpu_.empty() ? nullptr : probe_sh_cpu_.data();
+    }
+
+    /// execute() が dynamic pool の各オブジェクト位置で補間した per-object
+    /// irradiance SH (dynamic pool index × 36 float)。 ホストはこれを
+    /// 自前のインスタンスデータへ流し込んで ambient 項に使える。
+    /// gi_probes_enabled 時のみ更新される。
+    const float* dynamic_object_irradiance() const {
+        return dynamic_irradiance_cpu_.empty() ? nullptr
+                                               : dynamic_irradiance_cpu_.data();
+    }
+    uint32_t dynamic_object_irradiance_count() const {
+        return dynamic_irradiance_count_;
+    }
 
     /// Get current shadow uniform data (for binding to fragment shaders)
     const ShadowUniformData& shadow_uniforms() const { return shadow_uniform_data_; }
@@ -250,6 +275,13 @@ private:
     uint32_t           screen_width_ = 0;
     uint32_t           screen_height_ = 0;
     uint32_t           baked_static_count_ = 0;
+
+    // probe SH の CPU 保持 (initialize で確保、 以降サイズ不変 — DoD 規約)。
+    // GPU 転送は phase 2 (GIGpuExecutor)。
+    std::vector<float> probe_sh_cpu_;
+    std::vector<float> dynamic_irradiance_cpu_;
+    uint32_t           dynamic_irradiance_count_ = 0;
+    bool               probe_data_valid_ = false;
 };
 
 } // namespace pictor

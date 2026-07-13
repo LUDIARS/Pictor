@@ -35,6 +35,13 @@ enum class PostProcessKind : uint8_t {
     VIGNETTE      = 3,  ///< -> PostProcessConfig::vignette
     COLOR_GRADING = 4,  ///< -> PostProcessConfig::color_grading (LUT)
     DEPTH_OF_FIELD = 5, ///< -> PostProcessConfig::depth_of_field
+    SSAO          = 6,  ///< -> PostProcessConfig::ssao (PP 近似)
+    MOTION_BLUR   = 7,  ///< -> PostProcessConfig::motion_blur (カメラ再投影)
+    FXAA          = 8,  ///< -> PostProcessConfig::fxaa
+    CHROMATIC_ABERRATION = 9,  ///< -> PostProcessConfig::chromatic_aberration
+    FILM_GRAIN    = 10, ///< -> PostProcessConfig::film_grain
+    TAA           = 11, ///< -> PostProcessConfig::taa (history buffer 使用)
+    SSR           = 12, ///< -> PostProcessConfig::ssr (深度再構築版)
 };
 
 /// Post-process effect definition (§8.2).
@@ -57,17 +64,25 @@ struct PostProcessDef {
 
     // Effect parameters — only the struct matching `kind` is consumed by the
     // bridge. Defaults mirror `PostProcessConfig`'s per-effect defaults.
-    BloomConfig          bloom;
-    ToneMappingConfig    tone_mapping;
-    VignetteConfig       vignette;
-    ColorGradingConfig   color_grading;
-    DepthOfFieldConfig   depth_of_field;
+    BloomConfig               bloom;
+    ToneMappingConfig         tone_mapping;
+    VignetteConfig            vignette;
+    ColorGradingConfig        color_grading;
+    DepthOfFieldConfig        depth_of_field;
+    SSAOPostConfig            ssao;
+    MotionBlurConfig          motion_blur;
+    FXAAConfig                fxaa;
+    ChromaticAberrationConfig chromatic_aberration;
+    FilmGrainConfig           film_grain;
+    TAAConfig                 taa;
+    SSRConfig                 ssr;
 };
 
 /// Map an effect name (case-insensitive) to a `PostProcessKind`.
 /// Accepts the canonical preset spellings plus common aliases:
 ///   Bloom, Tonemapping/ToneMapping/Tonemap, Vignette,
-///   ColorGrading/LUT/Grade, DoF/DepthOfField.
+///   ColorGrading/LUT/Grade, DoF/DepthOfField, SSAO/AmbientOcclusion,
+///   MotionBlur, FXAA/AntiAliasing, ChromaticAberration, FilmGrain/Grain.
 /// Returns `UNKNOWN` for names with no host-driven implementation.
 PostProcessKind post_process_kind_from_name(const std::string& name);
 

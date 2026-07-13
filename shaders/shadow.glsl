@@ -52,11 +52,12 @@ const vec2 POISSON_DISK[16] = vec2[16](
 );
 
 // Rotated Poisson disk for temporal noise
-vec2 rotatePoisson(vec2 sample, float angle) {
+// (引数名に GLSL 予約語 `sample` は使えない — glslc がエラーにする)
+vec2 rotatePoisson(vec2 tap, float angle) {
     float s = sin(angle);
     float c = cos(angle);
-    return vec2(c * sample.x - s * sample.y,
-                s * sample.x + c * sample.y);
+    return vec2(c * tap.x - s * tap.y,
+                s * tap.x + c * tap.y);
 }
 
 // ============================================================

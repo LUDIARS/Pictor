@@ -1,4 +1,5 @@
 ﻿#include "pictor/gi/gi_bake.h"
+#include "pictor/gi/gi_sh.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -6,6 +7,41 @@
 #include <cstring>
 
 namespace pictor {
+
+namespace {
+
+float3 normalize_or_zero(const float3& v) {
+    const float len2 = v.x * v.x + v.y * v.y + v.z * v.z;
+    if (len2 < 1e-12f) return {0.0f, 0.0f, 0.0f};
+    return v * (1.0f / std::sqrt(len2));
+}
+
+float length3(const float3& v) {
+    return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+/// オブジェクトの太陽可視率 — AABB 中心 + 上面 4 隅の 5 レイの平均。
+/// 面ではなく代表点のサンプルなので 0/0.2/…/1.0 の離散値になる
+/// (per-object GI の粒度としては十分 — spec §2)。
+float sun_visibility(const GISceneProxy& proxy, const AABB& box,
+                     ObjectId self, const float3& to_sun) {
+    const float3 c = box.center();
+    const float3 samples[5] = {
+        c,
+        {box.min.x, box.max.y, box.min.z},
+        {box.max.x, box.max.y, box.min.z},
+        {box.min.x, box.max.y, box.max.z},
+        {box.max.x, box.max.y, box.max.z},
+    };
+    constexpr float kSunRayLen = 1e6f;   // 平行光 — 実質無限遠
+    int lit = 0;
+    for (const auto& s : samples) {
+        if (!proxy.occluded(s, to_sun, kSunRayLen, self)) ++lit;
+    }
+    return static_cast<float>(lit) / 5.0f;
+}
+
+} // namespace
 
 GIBakeSystem::GIBakeSystem(GPUBufferManager& buffer_manager,
                            SceneRegistry& registry,
@@ -50,6 +86,9 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback progress) {
     // Collect static object IDs
     collect_static_objects(static_pool, result);
 
+    // Build the shared bake scene (occlusion proxy / probe field / lights)
+    prepare_bake_scene(static_pool);
+
     // Count active targets for progress tracking
     uint32_t total_passes = 0;
     if (has_flag(config_.targets, BakeTarget::SHADOW_MAP))       ++total_passes;
@@ -65,7 +104,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback progress) {
                 static_cast<float>(current_pass) / total_passes, "Baking shadows")) {
             return result; // cancelled
         }
-        bake_shadows(static_pool, result, progress);
+        if (!bake_shadows(static_pool, result, progress)) return result;
         ++current_pass;
         ++stats_.bake_passes;
     }
@@ -76,7 +115,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback progress) {
                 static_cast<float>(current_pass) / total_passes, "Baking ambient occlusion")) {
             return result;
         }
-        bake_ao(static_pool, result, progress);
+        if (!bake_ao(static_pool, result, progress)) return result;
         ++current_pass;
         ++stats_.bake_passes;
     }
@@ -87,7 +126,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback progress) {
                 static_cast<float>(current_pass) / total_passes, "Baking probe irradiance")) {
             return result;
         }
-        bake_irradiance(static_pool, result, progress);
+        if (!bake_irradiance(static_pool, result, progress)) return result;
         ++current_pass;
         ++stats_.bake_passes;
     }
@@ -98,7 +137,7 @@ GIBakeResult GIBakeSystem::bake(BakeProgressCallback progress) {
                 static_cast<float>(current_pass) / total_passes, "Baking lightmaps")) {
             return result;
         }
-        bake_lightmap(static_pool, result, progress);
+        if (!bake_lightmap(static_pool, result, progress)) return result;
         ++current_pass;
         ++stats_.bake_passes;
     }
@@ -175,173 +214,212 @@ void GIBakeSystem::invalidate() {
 }
 
 // ============================================================
+// Bake Scene Preparation
+// ============================================================
+
+void GIBakeSystem::prepare_bake_scene(const ObjectPool& pool) {
+    bake_proxy_.build(pool);
+
+    bake_point_lights_.clear();
+    if (provider_) {
+        bake_point_lights_ = provider_->get_bake_point_lights();
+    }
+
+    // probe field は irradiance / lightmap のどちらかが対象のときだけ構築
+    // (probe 数 × レイ数のコストを他ターゲットに払わせない)。
+    if (has_flag(config_.targets, BakeTarget::PROBE_IRRADIANCE) ||
+        has_flag(config_.targets, BakeTarget::LIGHTMAP)) {
+        GIProbeField::BuildParams params;
+        // bake は realtime 既定 (64) より高密度にサンプルする。
+        params.rays_per_probe =
+            std::max(64u, config_.lightmap.samples_per_texel);
+        bake_probes_.build(config_.probes, bake_proxy_, light_,
+                           bake_point_lights_, params);
+    }
+}
+
+// ============================================================
 // Shadow Bake
 // ============================================================
 
-void GIBakeSystem::bake_shadows(const ObjectPool& pool, GIBakeResult& result,
+bool GIBakeSystem::bake_shadows(const ObjectPool& pool, GIBakeResult& result,
                                 const BakeProgressCallback& progress) {
-    uint32_t count = pool.count();
+    const uint32_t count = pool.count();
     result.shadows.resize(count);
 
-    // Compute cascade splits (same algorithm as runtime)
-    uint32_t cascade_count = std::min(config_.shadow.cascade_count, 4u);
+    const uint32_t cascade_count = std::min(config_.shadow.cascade_count, 4u);
+    const float3 to_sun = normalize_or_zero(light_.direction) * -1.0f;
 
-    // For static bake, we compute shadow data against a fixed light direction.
-    // This is a one-time compute dispatch that writes per-object cascade flags + depths.
-    //
-    // In real Vulkan:
-    //   1. Compute light-space VP matrices for each cascade
-    //   2. Upload static pool bounds/transforms to input SSBOs
-    //   3. Dispatch shadow_map_gen.comp against static objects only
-    //   4. Readback results to CPU for caching
-
-    uint32_t workgroups = calculate_workgroups(count);
-    stats_.total_workgroups += workgroups;
-
-    // Placeholder: assign cascade flags based on AABB position relative to light
     const auto& bounds = pool.bounds();
-    const auto& transforms = pool.transforms();
+    const auto& ids    = pool.object_ids();
 
     for (uint32_t i = 0; i < count; i++) {
-        const AABB& aabb = bounds[i];
-        float3 center = aabb.center();
+        // cascade 割当はカメラ依存 — ベイクでは決められないため全 cascade を
+        // 立てる (ランタイムのカリングが絞る)。 depths には静的な太陽可視率
+        // (soft shadow factor) を焼く。
+        result.shadows[i].cascade_flags = (1u << cascade_count) - 1;
 
-        // Simplified: all static objects are shadow casters in cascade 0
-        // Real implementation uses the compute shader for accurate cascade assignment
-        result.shadows[i].cascade_flags = (1u << cascade_count) - 1; // all cascades
-        for (uint32_t c = 0; c < cascade_count; c++) {
-            result.shadows[i].depths[c] = 0.5f; // placeholder depth
+        const float lit = (light_.intensity > 0.0f)
+            ? sun_visibility(bake_proxy_, bounds[i], ids[i], to_sun)
+            : 1.0f;
+        const float shadowed =
+            1.0f - (1.0f - lit) * config_.shadow.shadow_strength;
+        for (uint32_t c = 0; c < 4; c++) {
+            result.shadows[i].depths[c] =
+                (c < cascade_count) ? shadowed : 1.0f;
+        }
+
+        if (progress && (i % 256u) == 0u &&
+            !progress(static_cast<float>(i) / static_cast<float>(count),
+                      "Baking shadows")) {
+            return false;
         }
     }
-
-    (void)transforms;
-    (void)progress;
+    return true;
 }
 
 // ============================================================
 // AO Bake
 // ============================================================
 
-void GIBakeSystem::bake_ao(const ObjectPool& pool, GIBakeResult& result,
+bool GIBakeSystem::bake_ao(const ObjectPool& pool, GIBakeResult& result,
                            const BakeProgressCallback& progress) {
-    uint32_t count = pool.count();
+    const uint32_t count = pool.count();
     result.ao.resize(count);
 
-    // For static AO bake, we use a much higher sample count than realtime SSAO.
-    // Instead of screen-space, we compute object-space AO by casting rays from
-    // each object's position against surrounding static geometry.
-    //
-    // In real Vulkan:
-    //   1. Upload static pool bounds/transforms
-    //   2. Upload AO sample kernel (config_.ao.sample_count directions)
-    //   3. Dispatch static_ao_bake.comp with all static objects
-    //   4. Readback per-object AO values
-
-    uint32_t workgroups = calculate_workgroups(count);
-    stats_.total_workgroups += workgroups;
+    // object-space AO — 各オブジェクトの AABB 中心から fibonacci sphere の
+    // 全球方向へレイを撃ち、 radius 以内の遮蔽率を距離減衰付きで積分する。
+    // realtime SSAO (screen-space) より高サンプル (既定 256)。
+    const uint32_t samples = std::max(config_.ao.sample_count, 16u);
+    const float    radius  = std::max(config_.ao.radius, 1e-3f);
 
     const auto& bounds = pool.bounds();
+    const auto& ids    = pool.object_ids();
 
     for (uint32_t i = 0; i < count; i++) {
-        // Placeholder: estimate AO based on nearby object density
-        // Real implementation uses the compute shader with ray-AABB intersection
-        result.ao[i].occlusion = 1.0f;
-    }
+        const float3 center = bounds[i].center();
+        float occlusion_sum = 0.0f;
 
-    (void)bounds;
-    (void)progress;
+        for (uint32_t s = 0; s < samples; ++s) {
+            const float3 dir = fibonacci_sphere_dir(s, samples);
+            const auto hit = bake_proxy_.closest_hit(center, dir, radius, ids[i]);
+            if (!hit.hit || hit.distance < config_.ao.bias) continue;
+            // 近い遮蔽ほど強く効かせる線形減衰。
+            occlusion_sum += 1.0f - hit.distance / radius;
+        }
+
+        const float occluded_fraction =
+            occlusion_sum / static_cast<float>(samples);
+        result.ao[i].occlusion = std::clamp(
+            1.0f - occluded_fraction * config_.ao.intensity, 0.0f, 1.0f);
+
+        if (progress && (i % 64u) == 0u &&
+            !progress(static_cast<float>(i) / static_cast<float>(count),
+                      "Baking ambient occlusion")) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // ============================================================
 // Irradiance Bake
 // ============================================================
 
-void GIBakeSystem::bake_irradiance(const ObjectPool& pool, GIBakeResult& result,
+bool GIBakeSystem::bake_irradiance(const ObjectPool& pool, GIBakeResult& result,
                                    const BakeProgressCallback& progress) {
-    uint32_t count = pool.count();
+    const uint32_t count = pool.count();
     result.irradiance.resize(count);
 
-    // For static irradiance bake, we interpolate probe data once and cache it.
-    // This is identical to the runtime gi_probe_sample.comp pass, but we
-    // store the result permanently.
-    //
-    // In real Vulkan:
-    //   1. Ensure probe irradiance SSBO has valid data
-    //   2. Upload static transforms
-    //   3. Dispatch gi_probe_sample.comp for static objects
-    //   4. Readback per-object SH data
-
-    uint32_t workgroups = calculate_workgroups(count);
-    stats_.total_workgroups += workgroups;
-
-    const auto& transforms = pool.transforms();
+    // probe grid (prepare_bake_scene で構築済み) をオブジェクト位置で
+    // trilinear 補間して per-object SH をキャッシュする。 ランタイムの
+    // gi_probe_sample.comp と同じ演算の CPU 版。
+    const auto& bounds = pool.bounds();
 
     for (uint32_t i = 0; i < count; i++) {
-        // Placeholder: zero irradiance (probe data would be interpolated by shader)
-        std::memset(result.irradiance[i].sh, 0, sizeof(result.irradiance[i].sh));
-    }
+        bake_probes_.sample(bounds[i].center(), result.irradiance[i].sh);
 
-    (void)transforms;
-    (void)progress;
+        if (progress && (i % 256u) == 0u &&
+            !progress(static_cast<float>(i) / static_cast<float>(count),
+                      "Baking probe irradiance")) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // ============================================================
 // Lightmap Bake
 // ============================================================
 
-void GIBakeSystem::bake_lightmap(const ObjectPool& pool, GIBakeResult& result,
+bool GIBakeSystem::bake_lightmap(const ObjectPool& pool, GIBakeResult& result,
                                  const BakeProgressCallback& progress) {
-    uint32_t count = pool.count();
+    const uint32_t count = pool.count();
     result.lightmaps.resize(count);
 
-    // Lightmap bake combines direct and indirect illumination.
-    // For each static object:
-    //   1. Compute direct lighting from directional + point lights
-    //   2. Compute indirect lighting via multiple bounces
-    //   3. Store combined result
-    //
-    // In real Vulkan:
-    //   1. Upload static scene data (bounds, transforms, materials)
-    //   2. Upload light sources (directional + point lights from provider)
-    //   3. For each bounce: dispatch lightmap_bake.comp
-    //   4. Accumulate results across bounces
-    //   5. Readback combined lightmap data
+    // per-object lightmap — 上向き法線の代表面として direct / indirect を焼く
+    // (per-texel ライトマップは目標にしない — spec §2)。
+    //   direct   : 太陽 (可視率 × N·L) + 点光源 (可視 × 距離減衰 × N·L)
+    //   indirect : probe field の irradiance × indirect_intensity ×
+    //              バウンス増幅 (probe は 1 次バウンスまで —
+    //              2 次以降は albedo^k の等比和で近似する)
+    const float3 up     = {0.0f, 1.0f, 0.0f};
+    const float3 to_sun = normalize_or_zero(light_.direction) * -1.0f;
+    const float  sun_ndotl = std::max(0.0f, to_sun.y);   // dot(up, to_sun)
 
-    std::vector<PointLight> extra_lights;
-    if (provider_) {
-        extra_lights = provider_->get_bake_point_lights();
+    const uint32_t bounces = std::max(config_.lightmap.bounce_count, 1u);
+    constexpr float kBounceAlbedo = 0.5f;   // GIProbeField 既定と揃える
+    float bounce_gain = 0.0f;
+    for (uint32_t k = 0; k < bounces; ++k) {
+        bounce_gain += std::pow(kBounceAlbedo, static_cast<float>(k));
     }
 
-    uint32_t bounces = config_.lightmap.bounce_count;
-    uint32_t workgroups = calculate_workgroups(count);
-    stats_.total_workgroups += workgroups * (bounces + 1); // direct + N bounces
-
-    const auto& transforms = pool.transforms();
     const auto& bounds = pool.bounds();
+    const auto& ids    = pool.object_ids();
 
     for (uint32_t i = 0; i < count; i++) {
-        float3 center = bounds[i].center();
+        const AABB&  box    = bounds[i];
+        const float3 center = box.center();
+        auto& lm = result.lightmaps[i];
 
-        // Placeholder: simple N·L directional lighting
-        float3 normal = {0.0f, 1.0f, 0.0f}; // assume upward normal
-        float ndotl = -(light_.direction.x * normal.x +
-                        light_.direction.y * normal.y +
-                        light_.direction.z * normal.z);
-        ndotl = std::max(0.0f, ndotl);
+        // ── direct: 太陽 ────────────────────────────────────────────
+        float3 direct{};
+        if (light_.intensity > 0.0f && sun_ndotl > 0.0f) {
+            const float lit = sun_visibility(bake_proxy_, box, ids[i], to_sun);
+            const float scale = light_.intensity * sun_ndotl * lit;
+            direct = light_.color * scale;
+        }
 
-        result.lightmaps[i].direct_r = light_.color.x * light_.intensity * ndotl;
-        result.lightmaps[i].direct_g = light_.color.y * light_.intensity * ndotl;
-        result.lightmaps[i].direct_b = light_.color.z * light_.intensity * ndotl;
+        // ── direct: 点光源 (provider 供給) ──────────────────────────
+        for (const auto& pl : bake_point_lights_) {
+            const float3 to_light = pl.position - center;
+            const float dist = length3(to_light);
+            if (dist < 1e-4f || dist > pl.radius) continue;
+            const float3 dir = to_light * (1.0f / dist);
+            if (bake_proxy_.occluded(center, dir, dist, ids[i])) continue;
+            const float att   = 1.0f - dist / pl.radius;
+            const float ndotl = std::max(0.0f, dir.y);   // dot(up, dir)
+            direct = direct + pl.color * (pl.intensity * att * att * ndotl);
+        }
 
-        // Indirect: placeholder uniform ambient
-        result.lightmaps[i].indirect_r = 0.1f;
-        result.lightmaps[i].indirect_g = 0.1f;
-        result.lightmaps[i].indirect_b = 0.1f;
+        lm.direct_r = direct.x;
+        lm.direct_g = direct.y;
+        lm.direct_b = direct.z;
+
+        // ── indirect: probe field ───────────────────────────────────
+        const float3 indirect = bake_probes_.sample_irradiance(center, up);
+        const float gain = config_.lightmap.indirect_intensity * bounce_gain;
+        lm.indirect_r = indirect.x * gain;
+        lm.indirect_g = indirect.y * gain;
+        lm.indirect_b = indirect.z * gain;
+
+        if (progress && (i % 64u) == 0u &&
+            !progress(static_cast<float>(i) / static_cast<float>(count),
+                      "Baking lightmaps")) {
+            return false;
+        }
     }
-
-    (void)transforms;
-    (void)extra_lights;
-    (void)progress;
+    return true;
 }
 
 // ============================================================

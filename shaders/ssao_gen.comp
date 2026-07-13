@@ -1,8 +1,15 @@
 // Pictor — Screen-Space Ambient Occlusion (SSAO) Generation Shader
-// Generates an occlusion map from the depth buffer and view-space normals.
-// Uses hemisphere sampling with random rotation to detect nearby geometry
-// that blocks ambient light. Output is a single-channel occlusion texture.
-// Independent of material shaders — reads only depth/normal G-buffer.
+// 深度バッファのみから遮蔽マップを生成する (G-buffer 法線を要求しない —
+// 法線は深度差分から再構築、 回転ノイズはシェーダ内ハッシュ)。
+// 出力は R8 の遮蔽テクスチャ。 マテリアルシェーダが間接光項に乗算する。
+//
+// 実行は pictor::GISsaoCompute (gi/gi_ssao_compute.h) が所有する。
+// バインディング:
+//   0 = SSAOParams UBO (行列は pictor::float4x4 を生 memcpy — row-vector
+//       規約の行列を column-major mat4 として読むと M*v が v*M と一致する)
+//   1 = 半球カーネル SSBO (generate_ssao_kernel() が生成)
+//   2 = シーン深度 (sampler2D)
+//   3 = AO 出力 (r8 storage image)
 
 #version 450
 
@@ -13,48 +20,69 @@ layout(set = 0, binding = 0) uniform SSAOParams {
     mat4  invProjection;
     uvec2 screenSize;
     float radius;           // world-space hemisphere radius
-    float bias;             // angle bias to reduce self-occlusion
+    float bias;             // 自己遮蔽防止バイアス
     float intensity;        // occlusion strength multiplier
-    uint  sampleCount;      // kernel samples (typically 32 or 64)
-    float falloffStart;     // distance at which AO starts to fall off
-    float falloffEnd;       // distance at which AO reaches zero
+    uint  sampleCount;      // kernel samples
+    float falloffStart;     // AO の距離フェード開始
+    float falloffEnd;       // AO が消える距離
 };
 
-// Hemisphere sample kernel (pre-computed on CPU, cosine-weighted)
+// 半球サンプルカーネル (CPU 生成、 +Z 半球、 決定的)
 layout(std430, set = 0, binding = 1) readonly buffer SampleKernel {
     vec4 samples[];  // xyz = direction, w = scale factor
 };
 
-// Input: depth buffer from depth pre-pass
+// 入力: シーン深度
 layout(set = 0, binding = 2) uniform sampler2D depthTexture;
 
-// Input: view-space normals (from G-buffer or reconstructed)
-layout(set = 0, binding = 3) uniform sampler2D normalTexture;
+// 出力: 単チャンネル AO マップ
+layout(set = 0, binding = 3, r8) writeonly uniform image2D aoOutput;
 
-// Input: 4x4 rotation noise texture (tiled across screen)
-layout(set = 0, binding = 4) uniform sampler2D noiseTexture;
-
-// Output: single-channel AO map
-layout(set = 0, binding = 5, r8) writeonly uniform image2D aoOutput;
-
-// Reconstruct view-space position from depth
+// 深度から view 空間位置を再構築 (Vulkan: z ∈ [0,1])
 vec3 reconstructViewPos(vec2 uv, float depth) {
-    // NDC: Vulkan uses [0,1] depth range
     vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
     vec4 viewPos = invProjection * clipPos;
     return viewPos.xyz / viewPos.w;
+}
+
+// 深度差分から view 空間法線を再構築する。 左右 / 上下それぞれ深度差の
+// 小さい側を使い、 エッジでの法線割れを抑える (5-tap)。
+vec3 reconstructNormal(vec2 uv, vec2 texel, float centerDepth,
+                       vec3 centerPos) {
+    float dl = texture(depthTexture, uv - vec2(texel.x, 0.0)).r;
+    float dr = texture(depthTexture, uv + vec2(texel.x, 0.0)).r;
+    float du = texture(depthTexture, uv - vec2(0.0, texel.y)).r;
+    float dd = texture(depthTexture, uv + vec2(0.0, texel.y)).r;
+
+    vec3 px = (abs(dr - centerDepth) < abs(dl - centerDepth))
+        ? reconstructViewPos(uv + vec2(texel.x, 0.0), dr) - centerPos
+        : centerPos - reconstructViewPos(uv - vec2(texel.x, 0.0), dl);
+    vec3 py = (abs(dd - centerDepth) < abs(du - centerDepth))
+        ? reconstructViewPos(uv + vec2(0.0, texel.y), dd) - centerPos
+        : centerPos - reconstructViewPos(uv - vec2(0.0, texel.y), du);
+
+    vec3 n = normalize(cross(py, px));
+    // カメラ側 (view -Z) を向くよう揃える。
+    return (n.z > 0.0) ? -n : n;
+}
+
+// 画面座標ハッシュの回転ベクトル (ノイズテクスチャ代替、 決定的)。
+vec3 hashRotation(uvec2 pos) {
+    float h = fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
+    float angle = h * 6.2831853;
+    return vec3(cos(angle), sin(angle), 0.0);
 }
 
 void main() {
     uvec2 pos = gl_GlobalInvocationID.xy;
     if (pos.x >= screenSize.x || pos.y >= screenSize.y) return;
 
-    vec2 uv = (vec2(pos) + 0.5) / vec2(screenSize);
+    vec2 texel = 1.0 / vec2(screenSize);
+    vec2 uv = (vec2(pos) + 0.5) * texel;
 
-    // Sample depth and reconstruct view-space position
     float depth = texture(depthTexture, uv).r;
 
-    // Skip far plane (sky)
+    // far plane (空) はスキップ
     if (depth >= 1.0) {
         imageStore(aoOutput, ivec2(pos), vec4(1.0));
         return;
@@ -62,63 +90,46 @@ void main() {
 
     vec3 viewPos = reconstructViewPos(uv, depth);
 
-    // Distance-based falloff: skip very distant fragments
-    float dist = -viewPos.z; // positive distance in view space
+    float dist = abs(viewPos.z);
     if (dist > falloffEnd) {
         imageStore(aoOutput, ivec2(pos), vec4(1.0));
         return;
     }
 
-    // Read view-space normal
-    vec3 normal = normalize(texture(normalTexture, uv).xyz * 2.0 - 1.0);
+    vec3 normal = reconstructNormal(uv, texel, depth, viewPos);
+    vec3 randomVec = hashRotation(pos);
 
-    // Rotation vector from 4x4 noise tile
-    vec2 noiseUV = vec2(pos) / 4.0; // 4x4 tile
-    vec3 randomVec = normalize(texture(noiseTexture, noiseUV).xyz * 2.0 - 1.0);
-
-    // Build TBN (tangent-bitangent-normal) from normal + randomVec
+    // TBN (tangent-bitangent-normal)
     vec3 tangent   = normalize(randomVec - normal * dot(randomVec, normal));
     vec3 bitangent = cross(normal, tangent);
     mat3 TBN       = mat3(tangent, bitangent, normal);
 
-    // Accumulate occlusion from hemisphere samples
     float occlusion = 0.0;
-
-    for (uint i = 0; i < sampleCount; i++) {
-        // Transform sample from tangent space to view space
+    for (uint i = 0u; i < sampleCount; i++) {
         vec3 sampleDir = TBN * samples[i].xyz;
         vec3 samplePos = viewPos + sampleDir * radius * samples[i].w;
 
-        // Project sample to screen space
         vec4 sampleClip = projection * vec4(samplePos, 1.0);
         vec2 sampleUV   = (sampleClip.xy / sampleClip.w) * 0.5 + 0.5;
 
-        // Bounds check
         if (sampleUV.x < 0.0 || sampleUV.x > 1.0 ||
             sampleUV.y < 0.0 || sampleUV.y > 1.0) {
             continue;
         }
 
-        // Sample depth at the projected position
         float sampleDepth = texture(depthTexture, sampleUV).r;
         vec3  sampleViewPos = reconstructViewPos(sampleUV, sampleDepth);
 
-        // Range check: only occlude if the sampled geometry is close enough
         float rangeCheck = smoothstep(0.0, 1.0,
-            radius / abs(viewPos.z - sampleViewPos.z));
-
-        // Occlusion test: is the sample behind existing geometry?
+            radius / max(abs(viewPos.z - sampleViewPos.z), 1e-4));
         float occluded = (sampleViewPos.z >= samplePos.z + bias) ? 1.0 : 0.0;
         occlusion += occluded * rangeCheck;
     }
 
     occlusion = 1.0 - (occlusion / float(sampleCount)) * intensity;
 
-    // Distance-based falloff
     float distFade = 1.0 - smoothstep(falloffStart, falloffEnd, dist);
     occlusion = mix(1.0, occlusion, distFade);
 
-    occlusion = clamp(occlusion, 0.0, 1.0);
-
-    imageStore(aoOutput, ivec2(pos), vec4(occlusion));
+    imageStore(aoOutput, ivec2(pos), vec4(clamp(occlusion, 0.0, 1.0)));
 }
