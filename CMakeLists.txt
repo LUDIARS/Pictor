@@ -114,6 +114,7 @@ add_library(pictor STATIC
     src/gi/gi_scene_proxy.cpp
     src/gi/gi_probe_field.cpp
     src/gi/gi_gpu_executor.cpp
+    src/gi/sharc_executor.cpp
     src/gi/gi_shadow_atlas.cpp
     src/gi/gi_ssao_compute.cpp
     src/gi/gi_reflection_probe.cpp
@@ -419,6 +420,14 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
         target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
 
+        # SHaRC 拡張 D1 デモ (roughness ladder + 近接光源、 4 パス compute)
+        add_executable(pictor_sharc_demo
+            demo/sharc/main.cpp
+            demo/texture2d/texture2d_renderer.cpp
+        )
+        target_include_directories(pictor_sharc_demo PRIVATE demo/texture2d)
+        target_link_libraries(pictor_sharc_demo PRIVATE pictor)
+
         # Iter relation-graph demo (instanced/DoD graph view + cull/hit-test + dock)
         add_executable(pictor_graph_demo
             demo/graph/main.cpp
@@ -458,7 +467,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             pictor_text_effects_demo pictor_material_serializer_demo
             pictor_fbx_viewer pictor_demo pictor_graphics_demo
             pictor_ocean_demo pictor_text_demo pictor_postprocess_demo
-            pictor_rive_demo pictor_texture2d_demo)
+            pictor_rive_demo pictor_texture2d_demo pictor_sharc_demo)
             if(TARGET ${_demo})
                 target_compile_options(${_demo} PRIVATE /utf-8)
             endif()
@@ -628,6 +637,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_shaders)
+    endif()
+    if(TARGET pictor_sharc_demo)
+        add_dependencies(pictor_sharc_demo pictor_shaders)
     endif()
 endif()
 

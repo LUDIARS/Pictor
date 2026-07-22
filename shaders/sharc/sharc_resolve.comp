@@ -49,9 +49,23 @@ void main() {
     vec3  albedo    = req.albedoView.rgb;
     vec3  v         = normalize(req.viewDir.xyz);
 
-    uint level = sharcLevelFromDistance(distance(pos, sharcCameraPos.xyz));
+    // march はセル入口点の距離でレベルを選ぶため、 ヒット点の距離と
+    // レベル境界を跨いでずれることがある。 ±1 レベルで救済して
+    // キャッシュミス (黒斑点) を防ぐ。
+    uint levelBase = sharcLevelFromDistance(distance(pos, sharcCameraPos.xyz));
+    uint level = levelBase;
     ivec3 grid = sharcGridCoord(pos, level);
     uint slot  = sharcFindSlot(grid, level);
+    if (slot == SHARC_SLOT_INVALID && levelBase > 0u) {
+        level = levelBase - 1u;
+        grid  = sharcGridCoord(pos, level);
+        slot  = sharcFindSlot(grid, level);
+    }
+    if (slot == SHARC_SLOT_INVALID && levelBase + 1u < sharcLevelCount) {
+        level = levelBase + 1u;
+        grid  = sharcGridCoord(pos, level);
+        slot  = sharcFindSlot(grid, level);
+    }
 
     vec3 radiance = vec3(0.0);
     float hit = 0.0;

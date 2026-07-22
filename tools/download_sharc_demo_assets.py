@@ -29,6 +29,11 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+# Windows コンソール (cp932) でも em-dash 等で落ちないよう UTF-8 化
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 ASSET_ROOT = Path(__file__).resolve().parent.parent / "demo" / "assets" / "sharc"
 
 USER_AGENT = "PictorSharcAssetFetcher/1.0"
@@ -72,33 +77,58 @@ ASSETS: list[Asset] = [
         license_note="CC BY 3.0 (Infinite Realities / McGuire CG Archive)",
         demo_ids="D2",
     ),
+    # Bistro は McGuire アーカイブが 5 分割ホスト (info.js の
+    # downloadFilename 準拠)。 テクスチャ 3 つはサーバ上は拡張子なし。
     Asset(
-        name="Amazon Lumberyard Bistro",
-        url="https://casual-effects.com/g3d/data10/research/model/bistro/bistro.zip",
-        dest="bistro",
-        approx_size="~2.4GB",
+        name="Amazon Lumberyard Bistro — Exterior",
+        url="https://casual-effects.com/g3d/data10/research/model/bistro/Exterior.zip",
+        dest="bistro/Exterior",
+        approx_size="~1GB",
         license_note="CC BY 4.0 (Amazon Lumberyard / ORCA)",
         demo_ids="Hero",
         full_only=True,
     ),
     Asset(
-        name="NVIDIA Emerald Square",
-        url="https://casual-effects.com/g3d/data10/research/model/emerald_square/emerald_square.zip",
-        dest="emerald_square",
-        approx_size="~1.2GB",
-        license_note="CC BY 4.0 (NVIDIA / ORCA)",
-        demo_ids="負荷",
+        name="Amazon Lumberyard Bistro — Interior",
+        url="https://casual-effects.com/g3d/data10/research/model/bistro/Interior.zip",
+        dest="bistro/Interior",
+        approx_size="~500MB",
+        license_note="CC BY 4.0 (Amazon Lumberyard / ORCA)",
+        demo_ids="Hero",
         full_only=True,
     ),
     Asset(
-        name="Zero-Day",
-        url="https://casual-effects.com/g3d/data10/research/model/ZeroDay/ZeroDay.zip",
-        dest="zeroday",
-        approx_size="~700MB",
-        license_note="CC BY 4.0 (Beeple / ORCA)",
-        demo_ids="負荷",
+        name="Amazon Lumberyard Bistro — BuildingTextures",
+        url="https://casual-effects.com/g3d/data10/research/model/bistro/BuildingTextures",
+        dest="bistro/BuildingTextures",
+        approx_size="~400MB",
+        license_note="CC BY 4.0 (Amazon Lumberyard / ORCA)",
+        demo_ids="Hero",
         full_only=True,
     ),
+    Asset(
+        name="Amazon Lumberyard Bistro — OtherTextures",
+        url="https://casual-effects.com/g3d/data10/research/model/bistro/OtherTextures",
+        dest="bistro/OtherTextures",
+        approx_size="~300MB",
+        license_note="CC BY 4.0 (Amazon Lumberyard / ORCA)",
+        demo_ids="Hero",
+        full_only=True,
+    ),
+    Asset(
+        name="Amazon Lumberyard Bistro — PropTextures",
+        url="https://casual-effects.com/g3d/data10/research/model/bistro/PropTextures",
+        dest="bistro/PropTextures",
+        approx_size="~300MB",
+        license_note="CC BY 4.0 (Amazon Lumberyard / ORCA)",
+        demo_ids="Hero",
+        full_only=True,
+    ),
+    # Emerald Square / Zero-Day は ORCA (developer.nvidia.com) の
+    # ページ経由でのみ配布 — 直リンクが安定しないため手動取得:
+    #   https://developer.nvidia.com/orca/nvidia-emerald-square
+    #   https://developer.nvidia.com/orca/beeple-zero-day
+    # 取得後は demo/assets/sharc/{emerald_square,zeroday}/ へ展開する。
 ]
 
 
@@ -140,7 +170,11 @@ def download_asset(asset: Asset) -> bool:
         return True
 
     dest.mkdir(parents=True, exist_ok=True)
-    archive = dest / Path(asset.url).name
+    # サーバ上拡張子なし配布 (Bistro テクスチャ群) は zip として保存する
+    basename = Path(asset.url).name
+    if "." not in basename:
+        basename += ".zip"
+    archive = dest / basename
     print(f"[get ] {asset.name} ({asset.approx_size}) <- {asset.url}")
     opener = urllib.request.build_opener()
     opener.addheaders = [("User-Agent", USER_AGENT)]
