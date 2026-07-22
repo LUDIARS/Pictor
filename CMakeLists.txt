@@ -583,6 +583,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_march.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_compact.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_update.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_resolve.comp
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})

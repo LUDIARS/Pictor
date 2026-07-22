@@ -1,0 +1,236 @@
+// Pictor — SHaRC 拡張 Pass 3: Light (セル更新)
+//
+// 1 workgroup = 1 要求セル (spec §3)。
+//   1. per-cell reservoir (ReSTIR DI 簡易版) からライトを importance sampling
+//   2. (SHARC_RAY_QUERY 時) 可視性レイ → 既定はアンシャドウ
+//   3. M0/M1 蓄積 + vMF ローブ EM 更新 → EMA でセルへブレンド
+// 1 フレーム遅延 + 永続キャッシュ (SHaRC 方式): このパスの結果は
+// 次フレームの resolve が参照する。
+//
+// dispatch: indirect (compact が生成, x = 要求セル数)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#define SHARC_SET 0
+#include "sharc_common.glsl"
+#include "sharc_moments.glsl"
+#include "sharc_lobes.glsl"
+
+const uint SHARC_SAMPLES_PER_CELL = 64u;   // = local_size_x
+
+// ライト (点光源) リスト
+struct SharcLight {
+    vec4 posRadius;        // xyz = 位置, w = 半径
+    vec4 colorIntensity;   // rgb = 色, a = 強度
+};
+
+layout(std430, set = SHARC_SET, binding = 6) readonly buffer SharcRequests {
+    uint gpu_sharc_requests[];
+};
+
+layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
+    SharcLight gpu_sharc_lights[];
+};
+
+// per-cell reservoir: {lightIdx, wSum, M, targetPdf} (float は uint ビット格納)
+layout(std430, set = SHARC_SET, binding = 10) buffer SharcReservoirs {
+    uvec4 gpu_sharc_reservoirs[];
+};
+
+// ============================================================
+// 乱数 (フレーム/セル/スレッドで独立)
+// ============================================================
+
+float sharcRand(inout uint state) {
+    state = sharcHashUint(state);
+    return float(state) * (1.0 / 4294967296.0);
+}
+
+// ============================================================
+// shared: workgroup 内サンプルバッファ + WRS リダクション
+// ============================================================
+
+shared vec4  sh_dirLuma[SHARC_SAMPLES_PER_CELL];   // xyz=方向 w=輝度重み
+shared vec4  sh_rgbDist[SHARC_SAMPLES_PER_CELL];   // rgb=放射輝度 w=距離
+shared float sh_weight[SHARC_SAMPLES_PER_CELL];    // RIS 重み
+shared uint  sh_candidate[SHARC_SAMPLES_PER_CELL]; // 候補ライト
+shared float sh_pdfHat[SHARC_SAMPLES_PER_CELL];    // 候補の target pdf
+
+// セル中心での未遮蔽寄与 (target pdf 用)
+vec3 sharcLightContribution(SharcLight light, vec3 cellCenter,
+                            out vec3 outDir, out float outDist) {
+    vec3 toLight = light.posRadius.xyz - cellCenter;
+    float d2 = max(dot(toLight, toLight), 1e-4);
+    outDist = sqrt(d2);
+    outDir  = toLight / outDist;
+    return light.colorIntensity.rgb * light.colorIntensity.a / d2;
+}
+
+void main() {
+    uint reqIdx = gl_WorkGroupID.x;
+    uint tid    = gl_LocalInvocationID.x;
+    uint slot   = gpu_sharc_requests[reqIdx];
+    if (slot >= sharcTableSize || gpu_sharc_keys[slot] == 0u) return;
+
+    uint sampleCountPrev, lastFrame, level;
+    float lumaMean, lumaVar;
+    sharcLoadMeta(slot, sampleCountPrev, lastFrame, lumaMean, lumaVar, level);
+
+    // セル中心: march が挿入時に書いた逆引き座標から復元
+    ivec3 grid; uint posLevel;
+    sharcUnpackGridLevel(gpu_sharc_cell_pos[slot], grid, posLevel);
+    vec3 cellCenter = sharcCellCenter(grid, posLevel);
+
+    uvec4 resPrev = gpu_sharc_reservoirs[slot];
+    uint  resLight = resPrev.x;
+    float resM     = uintBitsToFloat(resPrev.z);
+    float resPdf   = uintBitsToFloat(resPrev.w);
+
+    // ============================================================
+    // 1. 候補生成 + WRS (thread 並列 → shared 逐次リダクション)
+    // ============================================================
+    uint rng = sharcHashCombine(sharcHashCombine(slot, sharcFrameIndex), tid);
+
+    uint  candIdx = 0u;
+    float candPdfHat = 0.0;
+    float candW = 0.0;
+    vec3  candDir = vec3(0.0, 1.0, 0.0);
+    vec3  candRgb = vec3(0.0);
+    float candDist = 0.0;
+
+    if (sharcLightCount > 0u) {
+        candIdx = min(uint(sharcRand(rng) * float(sharcLightCount)),
+                      sharcLightCount - 1u);
+        float pSource = 1.0 / float(sharcLightCount);
+        SharcLight light = gpu_sharc_lights[candIdx];
+        vec3 dir; float dist;
+        vec3 contrib = sharcLightContribution(light, cellCenter, dir, dist);
+        candPdfHat = sharcLuminance(contrib);
+        candW = candPdfHat / pSource;
+        candDir = dir;
+        candRgb = contrib;
+        candDist = dist;
+    }
+
+    sh_dirLuma[tid]   = vec4(candDir, sharcLuminance(candRgb));
+    sh_rgbDist[tid]   = vec4(candRgb, candDist);
+    sh_weight[tid]    = candW;
+    sh_candidate[tid] = candIdx;
+    sh_pdfHat[tid]    = candPdfHat;
+    barrier();
+
+    // ============================================================
+    // 2. 逐次処理 (thread 0): WRS 決定 + モーメント/ローブのバッチ更新
+    //    64 サンプルの逐次ループはセル更新パスでは十分軽い。
+    // ============================================================
+    if (tid != 0u) return;
+
+    // --- WRS: 今フレーム候補を reservoir へ統合 ---
+    float wTotal = 0.0;
+    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) wTotal += sh_weight[i];
+
+    float pick = sharcRand(rng) * max(wTotal, SHARC_EPSILON);
+    uint  chosen = 0u;
+    float acc = 0.0;
+    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) {
+        acc += sh_weight[i];
+        if (acc >= pick) { chosen = i; break; }
+    }
+
+    // 時間結合 (M 上限つき, ReSTIR 定石)
+    const float kMaxM = 512.0;
+    float mNew = float(SHARC_SAMPLES_PER_CELL);
+    if (resM > 0.0 && resPdf > 0.0) {
+        // 既存 reservoir を 1 候補として再挿入
+        float wPrev = resPdf * resM;
+        wTotal += wPrev;
+        if (sharcRand(rng) * wTotal < wPrev) {
+            chosen = 0xFFFFFFFFu;   // 既存採択
+        }
+    }
+    uint  outLight; float outPdf;
+    if (chosen == 0xFFFFFFFFu) {
+        outLight = resLight;
+        outPdf   = resPdf;
+    } else {
+        outLight = sh_candidate[chosen];
+        outPdf   = sh_pdfHat[chosen];
+    }
+    float outM = min(resM + mNew, kMaxM);
+    gpu_sharc_reservoirs[slot] = uvec4(outLight,
+                                       floatBitsToUint(wTotal),
+                                       floatBitsToUint(outM),
+                                       floatBitsToUint(outPdf));
+
+    // --- モーメント蓄積 (全候補の RIS 重み付き平均) ---
+    vec3 m0 = vec3(0.0);
+    vec3 m1 = vec3(0.0);
+    float wNorm = 0.0;
+    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) {
+        float w = sh_weight[i];
+        if (w <= SHARC_EPSILON) continue;
+        // RIS: 重み w = p̂/p, 推定値は Σ(f/p̂)·w / Σw → f 平均
+        sharcMomentsAccumulate(m0, m1, sh_dirLuma[i].xyz,
+                               sh_rgbDist[i].rgb, w / max(sh_pdfHat[i],
+                                                          SHARC_EPSILON));
+        wNorm += w / max(sh_pdfHat[i], SHARC_EPSILON);
+    }
+    if (wNorm > SHARC_EPSILON) {
+        m0 /= wNorm;
+        m1 /= wNorm;
+        sharcMomentsBlend(slot, m0, m1, sharcEmaAlpha);
+    }
+
+    // --- ローブ EM 更新 (バッチ E ステップ + EMA M ステップ) ---
+    SharcLobe lobes[SHARC_LOBE_COUNT];
+    for (int k = 0; k < SHARC_LOBE_COUNT; k++) lobes[k] = sharcLoadLobe(slot, uint(k));
+
+    float batchW[SHARC_LOBE_COUNT];
+    vec3  batchDir[SHARC_LOBE_COUNT];
+    vec3  batchRgb[SHARC_LOBE_COUNT];
+    float batchDist[SHARC_LOBE_COUNT];
+    for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
+        batchW[k] = 0.0; batchDir[k] = vec3(0.0);
+        batchRgb[k] = vec3(0.0); batchDist[k] = 0.0;
+    }
+
+    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) {
+        float w = sh_weight[i];
+        if (w <= SHARC_EPSILON) continue;
+        vec3 dir = sh_dirLuma[i].xyz;
+        vec3 rgb = sh_rgbDist[i].rgb;
+        float dist = sh_rgbDist[i].w;
+
+        float r[SHARC_LOBE_COUNT];
+        bool orphan;
+        sharcLobeResponsibilities(lobes, dir, r, orphan);
+        if (orphan) {
+            sharcLobeSpawn(lobes, dir, rgb, dist, w);
+            continue;
+        }
+        for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
+            float rw = r[k] * w;
+            batchW[k]    += rw;
+            batchDir[k]  += dir * rw;
+            batchRgb[k]  += rgb * rw;
+            batchDist[k] += dist * rw;
+        }
+    }
+    for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
+        lobes[k] = sharcLobeBlendBatch(lobes[k], batchW[k], batchDir[k],
+                                       batchRgb[k], batchDist[k],
+                                       sharcEmaAlpha);
+        sharcStoreLobe(slot, uint(k), lobes[k]);
+    }
+
+    // --- メタ更新 (輝度統計は分散推定 → 信頼度/適応サンプリングの種) ---
+    float lumaBatch = sharcLuminance(m0);
+    float meanNew = mix(lumaMean, lumaBatch, sharcEmaAlpha);
+    float varNew  = mix(lumaVar, (lumaBatch - meanNew) * (lumaBatch - meanNew),
+                        sharcEmaAlpha);
+    sharcStoreMeta(slot, sampleCountPrev + SHARC_SAMPLES_PER_CELL,
+                   sharcFrameIndex & 0xFFFFu, meanNew, varNew, level);
+}
