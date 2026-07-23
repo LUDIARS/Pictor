@@ -110,8 +110,12 @@ void main() {
 
             // 鏡面 (層2 ローブ、 セルごとの中心で再照準)
             vec3 cellCenter = sharcCellCenter(grid, level);
-            sample_ += fresnel * sharcSpecularEvaluate(slot, cellCenter, pos,
-                                                       n, v, roughness);
+            // 鏡面のグローバル減衰: SG 振幅は広 roughness でエネルギー過大に
+            // なり拡散 (テクスチャ色) を塗り潰す。 拡散主体に抑える。
+            const float kSpecScale = 0.02;
+            sample_ += kSpecScale * fresnel *
+                       sharcSpecularEvaluate(slot, cellCenter, pos, n, v,
+                                             roughness);
 
             acc  += sample_ * w;
             wSum += w;
