@@ -58,7 +58,13 @@ struct SharcTri {
     vec4 v0;           // xyz = 頂点, w = uintBitsToFloat(oct32 法線 n0)
     vec4 v1;           // w = n1
     vec4 v2;           // w = n2
+    uvec4 colors;      // xyz = コーナー焼き込み色 (RGB8 リニア), w = 予約
 };
+
+vec3 sharcUnpackRgb8(uint c) {
+    return vec3(float(c & 0xFFu), float((c >> 8) & 0xFFu),
+                float((c >> 16) & 0xFFu)) * (1.0 / 255.0);
+}
 
 layout(std430, set = SHARC_SET, binding = 15) readonly buffer SharcTris {
     SharcTri gpu_sharc_tris[];
@@ -192,9 +198,13 @@ void main() {
             bestV * sharcOct32Decode(floatBitsToUint(tri.v2.w)));
         if (dot(n, rd) > 0.0) n = -n;   // 裏面ヒット (逆光透過) は視線側へ
         SharcMaterial mat = gpu_sharc_materials[gpu_sharc_tri_mat[bestTri]];
+        // albedo はコーナー焼き込み色 (map_Kd) の重心補間
+        vec3 albedo = w * sharcUnpackRgb8(tri.colors.x) +
+                      bestU * sharcUnpackRgb8(tri.colors.y) +
+                      bestV * sharcUnpackRgb8(tri.colors.z);
         req.posRough   = vec4(pos, mat.albedoRough.a);
         req.normalMfp  = vec4(n, mat.mfpPad.x);
-        req.albedoView = vec4(mat.albedoRough.rgb, 0.0);
+        req.albedoView = vec4(albedo, 0.0);
         req.viewDir    = vec4(-rd, 0.0);
     } else if (floorHit) {
         vec3 pos = ro + rd * best;

@@ -125,13 +125,16 @@ public:
     void record(VkCommandBuffer cmd);
 
     // ---- ホスト直書き用 mapped ポインタ (DoD: コピー層を挟まない) ----
+    // rays / shade は staging (host-visible)。 GPU 本体は device-local で、
+    // commit_cpu_geometry() を呼んだ次の record() が転送する (CPU 一次交差
+    // を使う D1 専用 — メッシュシーンは hit パスが GPU 上で生成するので不要)。
 
     SharcRayGpu*          rays_mapped();
     SharcShadeRequestGpu* shade_requests_mapped();
     SharcLightGpu*        lights_mapped();
 
-    /// 解決済み放射輝度 (vec4 × ray_count)。 GPU 完了後に読むこと。
-    const float* output_mapped() const;
+    /// staging へ書いた rays / shade を次の record() で GPU 本体へ転送する。
+    void commit_cpu_geometry() { cpu_geometry_dirty_ = true; }
 
     /// 出力バッファの実体 (present 側 fragment が SSBO として直読みする —
     /// readback レスの全 GPU 経路)。
@@ -160,7 +163,7 @@ private:
     };
 
     bool create_buffer_(Buffer& out, VkDeviceSize size,
-                        VkBufferUsageFlags usage);
+                        VkBufferUsageFlags usage, bool device_local = false);
     /// device-local バッファ + staging 経由の一括転送 (シーン用、 mapped なし)。
     bool create_device_buffer_(Buffer& out, const void* data,
                                VkDeviceSize size);
@@ -199,6 +202,9 @@ private:
     Buffer scene_tris_;   // 三角形 (device-local)       (binding 15)
     Buffer scene_tri_mats_; // per-tri マテリアル id     (binding 16)
     Buffer scene_materials_; // マテリアル表             (binding 17)
+    Buffer rays_staging_;    // D1 CPU 経路の転送元 (host-visible)
+    Buffer shade_staging_;   // 同上
+    Buffer counters_rb_;     // request_count 読み出し用 (host-visible 16B)
 
     VkDescriptorSetLayout dsl_       = VK_NULL_HANDLE;
     VkPipelineLayout      layout_    = VK_NULL_HANDLE;
@@ -211,6 +217,7 @@ private:
     Pass update_;
     Pass resolve_;
 
+    bool     cpu_geometry_dirty_ = false;
     uint32_t scene_tri_count_ = 0;
     uint32_t scene_flags_     = 0;
     float    floor_y_         = 0.0f;

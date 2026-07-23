@@ -427,7 +427,9 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             demo/sharc/obj_mesh.cpp
             demo/sharc/mesh_bvh.cpp
             demo/sharc/present_renderer.cpp
+            third_party/stb/stb_image_impl.cpp
         )
+        target_include_directories(pictor_sharc_demo PRIVATE third_party/stb)
         target_link_libraries(pictor_sharc_demo PRIVATE pictor)
 
         # Iter relation-graph demo (instanced/DoD graph view + cull/hit-test + dock)

@@ -92,13 +92,14 @@ struct SharcBvhNodeGpu {
 };
 static_assert(sizeof(SharcBvhNodeGpu) == 32, "GLSL SharcBvhNode と一致させる");
 
-/// 三角形 (48B)。 w = oct32 パック済み頂点法線 (uint ビット)。
+/// 三角形 (64B)。 n = oct32 頂点法線、 c = コーナー焼き込み色 (RGB8 リニア)。
 struct SharcTriGpu {
     float v0[3]; uint32_t n0;
     float v1[3]; uint32_t n1;
     float v2[3]; uint32_t n2;
+    uint32_t c0, c1, c2, pad;
 };
-static_assert(sizeof(SharcTriGpu) == 48, "GLSL SharcTri と一致させる");
+static_assert(sizeof(SharcTriGpu) == 64, "GLSL SharcTri と一致させる");
 
 /// マテリアル (32B)。
 struct SharcMaterialGpu {

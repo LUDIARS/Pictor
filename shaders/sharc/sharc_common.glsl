@@ -278,17 +278,24 @@ uint sharcFindSlot(ivec3 grid, uint level) {
     return SHARC_SLOT_INVALID;
 }
 
-// 挿入 (atomicCAS)。 戻り値 = スロット。 満杯なら SHARC_SLOT_INVALID。
+// 挿入。 戻り値 = スロット。 満杯なら SHARC_SLOT_INVALID。
 // outInserted = このスレッドが新規確保したか (要求リスト登録の重複排除)。
+// 既存スロットは通常読みで返し、 空きの時だけ atomicCAS を踏む —
+// 大量レイが同一セルを歩く march では atomic RMW が支配的コストになるため。
 uint sharcInsertSlot(ivec3 grid, uint level, out bool outInserted) {
     uint fp = sharcFingerprint(grid, level);
     uint slot = sharcSlotHash(grid, level);
     outInserted = false;
     for (uint i = 0u; i < SHARC_PROBE_LIMIT; i++) {
         uint s = (slot + i) & (sharcTableSize - 1u);
-        uint prev = atomicCompSwap(gpu_sharc_keys[s], 0u, fp);
-        if (prev == 0u) { outInserted = true; return s; }
-        if (prev == fp) return s;
+        uint cur = gpu_sharc_keys[s];
+        if (cur == fp) return s;                 // 既存 (atomic 不要の多数派)
+        if (cur == 0u) {
+            uint prev = atomicCompSwap(gpu_sharc_keys[s], 0u, fp);
+            if (prev == 0u) { outInserted = true; return s; }
+            if (prev == fp) return s;
+            // 別セルが先に確保 → 次スロットへ線形続行
+        }
     }
     return SHARC_SLOT_INVALID;
 }

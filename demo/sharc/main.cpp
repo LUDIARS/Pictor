@@ -518,6 +518,21 @@ int main(int argc, char** argv) {
                     gpu_mats.push_back(m);
                 }
             }
+            const auto pack_rgb = [](float r, float g, float b) {
+                const auto q = [](float v) {
+                    return static_cast<uint32_t>(
+                        std::clamp(v * 255.0f + 0.5f, 0.0f, 255.0f));
+                };
+                return q(r) | (q(g) << 8) | (q(b) << 16);
+            };
+            // コーナー色: OBJ はローダの焼き込みを引き継ぎ、 override /
+            // PLY はマテリアル一色 (テクスチャは head の map_Kd も焼き込み
+            // 済みなので、 override でも色が既にあれば優先する)
+            const bool has_baked = !inst->mesh.tri_corner_colors.empty();
+            const uint32_t flat = override_mat
+                ? pack_rgb(inst->ov_albedo.x, inst->ov_albedo.y,
+                           inst->ov_albedo.z)
+                : 0u;
             for (size_t t = 0; t < inst->mesh.triangles.size(); ++t) {
                 const auto& tri = inst->mesh.triangles[t];
                 merged.triangles.push_back({tri[0] + vbase, tri[1] + vbase,
@@ -526,6 +541,20 @@ int main(int argc, char** argv) {
                                        ? mat_base
                                        : mat_base +
                                              inst->mesh.tri_material[t]);
+                if (has_baked) {
+                    merged.tri_corner_colors.push_back(
+                        inst->mesh.tri_corner_colors[t]);
+                } else {
+                    const uint32_t c = override_mat
+                        ? flat
+                        : pack_rgb(inst->mesh.materials[
+                                       inst->mesh.tri_material[t]].albedo[0],
+                                   inst->mesh.materials[
+                                       inst->mesh.tri_material[t]].albedo[1],
+                                   inst->mesh.materials[
+                                       inst->mesh.tri_material[t]].albedo[2]);
+                    merged.tri_corner_colors.push_back({c, c, c});
+                }
             }
         }
         sharc_demo::finalize_mesh(merged);
@@ -558,6 +587,11 @@ int main(int argc, char** argv) {
             g.n0 = sharc_oct32_encode(n0[0], n0[1], n0[2]);
             g.n1 = sharc_oct32_encode(n1[0], n1[1], n1[2]);
             g.n2 = sharc_oct32_encode(n2[0], n2[1], n2[2]);
+            const auto& cc = merged.tri_corner_colors[order[i]];
+            g.c0 = cc[0];
+            g.c1 = cc[1];
+            g.c2 = cc[2];
+            g.pad = 0;
             gpu_tri_mats[i] = tri_mats[order[i]];
         }
         SharcSceneUpload up;
@@ -756,6 +790,7 @@ int main(int argc, char** argv) {
                 workers.emplace_back(trace_rows, y0, y1);
             }
             for (auto& th : workers) th.join();
+            sharc.commit_cpu_geometry();   // staging → 本体は次の record()
         }
         sharc.set_camera(float3{fwd.x, fwd.y, fwd.z},
                          float3{right.x, right.y, right.z},

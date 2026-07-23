@@ -56,10 +56,15 @@ uint32_t find_memory_type(VkPhysicalDevice phys, uint32_t filter,
 } // namespace
 
 bool SharcGpuExecutor::create_buffer_(Buffer& out, VkDeviceSize size,
-                                      VkBufferUsageFlags usage) {
+                                      VkBufferUsageFlags usage,
+                                      bool device_local) {
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size        = size;
-    bi.usage       = usage;
+    // device-local はクリア (vkCmdFillBuffer) / staging 転送を受けるため
+    // TRANSFER_DST を常に付ける
+    bi.usage       = usage | (device_local
+                                  ? VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                                  : VkBufferUsageFlags{0});
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vkCreateBuffer(device_, &bi, nullptr, &out.buf) != VK_SUCCESS)
         return false;
@@ -68,18 +73,25 @@ bool SharcGpuExecutor::create_buffer_(Buffer& out, VkDeviceSize size,
     vkGetBufferMemoryRequirements(device_, out.buf, &mr);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize  = mr.size;
-    // host-visible + coherent — CPU 直書き / 直読み (GIGpuExecutor と同方針)。
+    // ホットバッファは device-local (PCIe 越しアクセスがフレーム時間の
+    // 支配項だった)。 CPU が触るものだけ host-visible + coherent。
     ai.memoryTypeIndex = find_memory_type(
         vk_->physical_device(), mr.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        device_local ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+                     : (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
     if (vkAllocateMemory(device_, &ai, nullptr, &out.mem) != VK_SUCCESS)
         return false;
     vkBindBufferMemory(device_, out.buf, out.mem, 0);
-    if (vkMapMemory(device_, out.mem, 0, size, 0, &out.mapped) != VK_SUCCESS)
-        return false;
     out.size = size;
-    std::memset(out.mapped, 0, static_cast<size_t>(size));
+    if (!device_local) {
+        if (vkMapMemory(device_, out.mem, 0, size, 0, &out.mapped) !=
+            VK_SUCCESS) {
+            return false;
+        }
+        std::memset(out.mapped, 0, static_cast<size_t>(size));
+    }
+    // device-local のゼロ初期化は initialize 末尾の一括 FillBuffer で行う
     return true;
 }
 
@@ -287,41 +299,83 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
     }
 
     // ── buffers ──
+    //    ホットパス (ハッシュ / セル / レイ / 出力) は device-local。
+    //    CPU が触るのは params / lights / staging / counters 読み出しのみ。
     const VkDeviceSize slots = config_.table_size;
     const auto ssbo = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    const VkDeviceSize rays_bytes =
+        VkDeviceSize{config_.max_rays} * sizeof(SharcRayGpu);
+    const VkDeviceSize shade_bytes =
+        VkDeviceSize{config_.max_rays} * sizeof(SharcShadeRequestGpu);
     if (!create_buffer_(params_, sizeof(SharcParamsGpu),
                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) ||
-        !create_buffer_(keys_, slots * sizeof(uint32_t), ssbo) ||
-        !create_buffer_(cells_, slots * kSharcCellBytes, ssbo) ||
-        !create_buffer_(rays_, VkDeviceSize{config_.max_rays} *
-                        sizeof(SharcRayGpu), ssbo) ||
+        !create_buffer_(keys_, slots * sizeof(uint32_t), ssbo, true) ||
+        !create_buffer_(cells_, slots * kSharcCellBytes, ssbo, true) ||
+        !create_buffer_(rays_, rays_bytes, ssbo, true) ||
         !create_buffer_(hits_, VkDeviceSize{config_.max_hits} *
-                        kSharcHitRecordBytes, ssbo) ||
-        !create_buffer_(counters_, 4 * sizeof(uint32_t), ssbo) ||
-        !create_buffer_(requests_, slots * sizeof(uint32_t), ssbo) ||
-        !create_buffer_(stamps_, slots * sizeof(uint32_t), ssbo) ||
+                        kSharcHitRecordBytes, ssbo, true) ||
+        !create_buffer_(counters_, 4 * sizeof(uint32_t),
+                        ssbo | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true) ||
+        !create_buffer_(requests_, slots * sizeof(uint32_t), ssbo, true) ||
+        !create_buffer_(stamps_, slots * sizeof(uint32_t), ssbo, true) ||
         !create_buffer_(indirect_, 3 * sizeof(uint32_t),
-                        ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) ||
+                        ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, true) ||
         !create_buffer_(lights_, VkDeviceSize{config_.max_lights} *
                         sizeof(SharcLightGpu), ssbo) ||
         !create_buffer_(reservoirs_, slots * kSharcReservoirUints *
-                        sizeof(uint32_t), ssbo) ||
-        !create_buffer_(cell_pos_, slots * 2 * sizeof(uint32_t), ssbo) ||
-        !create_buffer_(shade_, VkDeviceSize{config_.max_rays} *
-                        sizeof(SharcShadeRequestGpu), ssbo) ||
+                        sizeof(uint32_t), ssbo, true) ||
+        !create_buffer_(cell_pos_, slots * 2 * sizeof(uint32_t), ssbo, true) ||
+        !create_buffer_(shade_, shade_bytes, ssbo, true) ||
         !create_buffer_(output_, VkDeviceSize{config_.max_rays} *
-                        4 * sizeof(float), ssbo) ||
+                        4 * sizeof(float), ssbo, true) ||
         // シーンバッファは upload_scene まではプレースホルダ (descriptor の
         // 有効性のため最小サイズで確保しておく)
         !create_buffer_(scene_nodes_, 32, ssbo) ||
-        !create_buffer_(scene_tris_, 48, ssbo) ||
+        !create_buffer_(scene_tris_, 64, ssbo) ||
         !create_buffer_(scene_tri_mats_, 16, ssbo) ||
-        !create_buffer_(scene_materials_, 32, ssbo)) {
+        !create_buffer_(scene_materials_, 32, ssbo) ||
+        // D1 (CPU 一次交差) の転送元 staging + counters 読み出し
+        !create_buffer_(rays_staging_, rays_bytes,
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT) ||
+        !create_buffer_(shade_staging_, shade_bytes,
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT) ||
+        !create_buffer_(counters_rb_, 4 * sizeof(uint32_t),
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT)) {
         std::fprintf(stderr, "[sharc] buffer creation failed\n");
         shutdown();
         return false;
     }
     write_params_();
+
+    // device-local バッファのゼロ初期化 (ハッシュキー等は 0 = 空が前提)
+    {
+        VkCommandBufferAllocateInfo cai{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cai.commandPool        = vk.command_pool();
+        cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(device_, &cai, &cmd) != VK_SUCCESS) {
+            shutdown();
+            return false;
+        }
+        VkCommandBufferBeginInfo bgi{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bgi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bgi);
+        for (Buffer* b : {&keys_, &cells_, &rays_, &hits_, &counters_,
+                          &requests_, &stamps_, &indirect_, &reservoirs_,
+                          &cell_pos_, &shade_, &output_}) {
+            vkCmdFillBuffer(cmd, b->buf, 0, VK_WHOLE_SIZE, 0u);
+        }
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cmd;
+        vkQueueSubmit(vk.graphics_queue(), 1, &si, VK_NULL_HANDLE);
+        vkQueueWaitIdle(vk.graphics_queue());
+        vkFreeCommandBuffers(device_, vk.command_pool(), 1, &cmd);
+    }
 
     // ── descriptor set layout (UBO + SSBO×13) ──
     VkDescriptorSetLayoutBinding bindings[kBindingCount]{};
@@ -415,9 +469,8 @@ void SharcGpuExecutor::begin_frame(const float3& camera_pos) {
     if (!initialized_) return;
     camera_pos_ = camera_pos;
     ++frame_index_;
-    // per-frame カウンタ (hit / request) をリセット。 スタンプ / キー /
-    // セルは永続 (SHaRC 方式の時間蓄積)。
-    std::memset(counters_.mapped, 0, counters_.size);
+    // per-frame カウンタのリセットは record() 冒頭の FillBuffer で行う
+    // (counters は device-local)。 スタンプ / キー / セルは永続。
     write_params_();
 }
 
@@ -429,24 +482,21 @@ void SharcGpuExecutor::set_counts(uint32_t ray_count, uint32_t light_count) {
 }
 
 SharcRayGpu* SharcGpuExecutor::rays_mapped() {
-    return static_cast<SharcRayGpu*>(rays_.mapped);
+    return static_cast<SharcRayGpu*>(rays_staging_.mapped);
 }
 
 SharcShadeRequestGpu* SharcGpuExecutor::shade_requests_mapped() {
-    return static_cast<SharcShadeRequestGpu*>(shade_.mapped);
+    return static_cast<SharcShadeRequestGpu*>(shade_staging_.mapped);
 }
 
 SharcLightGpu* SharcGpuExecutor::lights_mapped() {
     return static_cast<SharcLightGpu*>(lights_.mapped);
 }
 
-const float* SharcGpuExecutor::output_mapped() const {
-    return static_cast<const float*>(output_.mapped);
-}
-
 uint32_t SharcGpuExecutor::request_count() const {
     if (!initialized_) return 0;
-    return static_cast<const uint32_t*>(counters_.mapped)[1];
+    // record() 末尾で counters → counters_rb_ にコピーされる (1 フレーム遅延)
+    return static_cast<const uint32_t*>(counters_rb_.mapped)[1];
 }
 
 void SharcGpuExecutor::barrier_(VkCommandBuffer cmd, VkBuffer buf,
@@ -465,6 +515,26 @@ void SharcGpuExecutor::barrier_(VkCommandBuffer cmd, VkBuffer buf,
 
 void SharcGpuExecutor::record(VkCommandBuffer cmd) {
     if (!initialized_ || ray_count_ == 0) return;
+
+    // ── per-frame カウンタのクリア (device-local なので GPU で行う) ──
+    vkCmdFillBuffer(cmd, counters_.buf, 0, VK_WHOLE_SIZE, 0u);
+    // ── D1 (CPU 一次交差) の staging → 本体転送 (dirty 時のみ) ──
+    if (cpu_geometry_dirty_) {
+        VkBufferCopy rc{0, 0, rays_staging_.size};
+        vkCmdCopyBuffer(cmd, rays_staging_.buf, rays_.buf, 1, &rc);
+        VkBufferCopy sc{0, 0, shade_staging_.size};
+        vkCmdCopyBuffer(cmd, shade_staging_.buf, shade_.buf, 1, &sc);
+        cpu_geometry_dirty_ = false;
+    }
+    {
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                           VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
+                             0, nullptr, 0, nullptr);
+    }
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
                             0, 1, &desc_set_, 0, nullptr);
@@ -515,9 +585,13 @@ void SharcGpuExecutor::record(VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.pipeline);
     vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
 
-    // resolve の出力 → ホスト読み取り
-    barrier_(cmd, output_.buf, VK_ACCESS_SHADER_WRITE_BIT,
-             VK_ACCESS_HOST_READ_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+    // request_count 読み出し用に counters を host-visible へコピー
+    barrier_(cmd, counters_.buf, VK_ACCESS_SHADER_WRITE_BIT,
+             VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    VkBufferCopy cc{0, 0, counters_rb_.size};
+    vkCmdCopyBuffer(cmd, counters_.buf, counters_rb_.buf, 1, &cc);
+    // 出力 (device-local) は present の fragment が読む — バリアは
+    // 呼び出し側 (demo) が render pass 前に張る。
 }
 
 #endif // PICTOR_HAS_VULKAN
@@ -541,7 +615,8 @@ void SharcGpuExecutor::shutdown() {
                           &counters_, &requests_, &stamps_, &indirect_,
                           &lights_, &reservoirs_, &cell_pos_, &shade_,
                           &output_, &scene_nodes_, &scene_tris_,
-                          &scene_tri_mats_, &scene_materials_}) {
+                          &scene_tri_mats_, &scene_materials_,
+                          &rays_staging_, &shade_staging_, &counters_rb_}) {
             destroy_buffer_(*b);
         }
         device_ = VK_NULL_HANDLE;

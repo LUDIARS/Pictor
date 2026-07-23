@@ -66,11 +66,15 @@ uint sharcRegisterCell(ivec3 grid, uint level) {
         sharcStoreMeta(slot, 0u, sharcFrameIndex & 0xFFFFu, 0.0, 0.0, level);
         gpu_sharc_cell_pos[slot] = sharcPackGridLevel(grid, level);
     }
-    uint prevStamp = atomicExchange(gpu_sharc_stamps[slot], sharcFrameIndex);
-    if (prevStamp != sharcFrameIndex) {
-        uint idx = atomicAdd(gpu_sharc_counters[1], 1u);
-        if (idx < sharcTableSize) {
-            gpu_sharc_requests[idx] = slot;
+    // 通常読みで既登録なら atomic を踏まない (多数派の fast path)
+    if (gpu_sharc_stamps[slot] != sharcFrameIndex) {
+        uint prevStamp = atomicExchange(gpu_sharc_stamps[slot],
+                                        sharcFrameIndex);
+        if (prevStamp != sharcFrameIndex) {
+            uint idx = atomicAdd(gpu_sharc_counters[1], 1u);
+            if (idx < sharcTableSize) {
+                gpu_sharc_requests[idx] = slot;
+            }
         }
     }
     return slot;

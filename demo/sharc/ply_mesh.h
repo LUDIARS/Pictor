@@ -16,11 +16,12 @@
 
 namespace sharc_demo {
 
-/// メッシュのマテリアル (OBJ/MTL 由来。 テクスチャは未対応 — Kd/Ns のみ)。
+/// メッシュのマテリアル (OBJ/MTL 由来)。
 struct PlyMaterial {
     std::array<float, 3> albedo{0.75f, 0.75f, 0.75f};
     float roughness = 0.6f;
     float mfp = 0.0f;   ///< SSS 平均自由行程 (0 = 不透明)。 葉など半透明素材用
+    std::string texture; ///< map_Kd の解決済みパス (空 = テクスチャなし)
 };
 
 struct PlyMesh {
@@ -32,6 +33,10 @@ struct PlyMesh {
     /// 非空なら tri_material が triangles と同数で対応する。
     std::vector<PlyMaterial> materials;
     std::vector<uint32_t>    tri_material;
+
+    /// 三角形コーナーごとの焼き込み色 (RGB8 packed、 リニア空間)。
+    /// map_Kd を UV サンプルして OBJ ローダが生成する。 空 = albedo 一色。
+    std::vector<std::array<uint32_t, 3>> tri_corner_colors;
 
     std::array<float, 3> bounds_min{};
     std::array<float, 3> bounds_max{};
