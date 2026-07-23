@@ -35,6 +35,7 @@
 #include "obj_mesh.h"
 #include "ply_mesh.h"
 #include "present_renderer.h"
+#include "texture_atlas.h"
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
@@ -137,7 +138,7 @@ const Vec3      kMeshAlbedo{0.35f, 0.68f, 0.45f};
 
 // 人物プロップ (Lee Perry-Smith head): 肌の SSS
 constexpr float kSkinMfp       = 0.02f;
-constexpr float kSkinRoughness = 0.45f;
+constexpr float kSkinRoughness = 0.65f;   // 鏡面優勢だと肌がクロム調に見える
 const Vec3      kSkinAlbedo{0.80f, 0.58f, 0.47f};
 
 bool ray_sphere(Vec3 ro, Vec3 rd, const Sphere& s, float& t) {
@@ -342,7 +343,7 @@ int main(int argc, char** argv) {
             g_orbit.pitch     = 0.35f;
             g_scene_target    = g_target;
             g_scene_dist      = 30.0f;
-            title = "Pictor SHaRC Hero - Bistro (clay)";
+            title = "Pictor SHaRC Hero - Bistro";
         } else {
             sharc_demo::fit_mesh(primary->mesh, 3.0f);
             mesh_scene.use_floor = true;
@@ -421,13 +422,15 @@ int main(int argc, char** argv) {
                 p[2] += prop_pos.z;
             }
             sharc_demo::finalize_mesh(prop->mesh);
-            prop->mesh.materials.clear();   // MTL より SSS override を優先
-            prop->material_override = true;
-            if (is_head) {
-                prop->ov_albedo    = kSkinAlbedo;
-                prop->ov_roughness = kSkinRoughness;
-                prop->ov_mfp       = kSkinMfp;
+            if (is_head && !prop->mesh.materials.empty()) {
+                // head: map_Kd (肌テクスチャ) は残し、 SSS/roughness だけ上書き
+                for (auto& m : prop->mesh.materials) {
+                    m.mfp       = kSkinMfp;
+                    m.roughness = kSkinRoughness;
+                }
             } else {
+                prop->mesh.materials.clear();
+                prop->material_override = true;
                 prop->ov_albedo    = kMeshAlbedo;      // 翡翠 (D2 と同素材)
                 prop->ov_roughness = kMeshRoughness;
                 prop->ov_mfp       = kMeshMfp;
@@ -489,6 +492,7 @@ int main(int argc, char** argv) {
     if (mesh_scene.active) {
         sharc_demo::PlyMesh merged;
         std::vector<SharcMaterialGpu> gpu_mats;
+        std::vector<sharc_demo::PlyMaterial> atlas_mats;   // texture パス保持
         std::vector<uint32_t> tri_mats;
         for (const auto& inst : mesh_scene.instances) {
             const auto vbase =
@@ -507,6 +511,7 @@ int main(int argc, char** argv) {
                 m.roughness = inst->ov_roughness;
                 m.mfp       = inst->ov_mfp;
                 gpu_mats.push_back(m);
+                atlas_mats.emplace_back();   // テクスチャなし
             } else {
                 for (const auto& pm : inst->mesh.materials) {
                     SharcMaterialGpu m{};
@@ -516,23 +521,10 @@ int main(int argc, char** argv) {
                     m.roughness = pm.roughness;
                     m.mfp       = pm.mfp;
                     gpu_mats.push_back(m);
+                    atlas_mats.push_back(pm);
                 }
             }
-            const auto pack_rgb = [](float r, float g, float b) {
-                const auto q = [](float v) {
-                    return static_cast<uint32_t>(
-                        std::clamp(v * 255.0f + 0.5f, 0.0f, 255.0f));
-                };
-                return q(r) | (q(g) << 8) | (q(b) << 16);
-            };
-            // コーナー色: OBJ はローダの焼き込みを引き継ぎ、 override /
-            // PLY はマテリアル一色 (テクスチャは head の map_Kd も焼き込み
-            // 済みなので、 override でも色が既にあれば優先する)
-            const bool has_baked = !inst->mesh.tri_corner_colors.empty();
-            const uint32_t flat = override_mat
-                ? pack_rgb(inst->ov_albedo.x, inst->ov_albedo.y,
-                           inst->ov_albedo.z)
-                : 0u;
+            const bool has_uv = !inst->mesh.tri_corner_uvs.empty();
             for (size_t t = 0; t < inst->mesh.triangles.size(); ++t) {
                 const auto& tri = inst->mesh.triangles[t];
                 merged.triangles.push_back({tri[0] + vbase, tri[1] + vbase,
@@ -541,21 +533,28 @@ int main(int argc, char** argv) {
                                        ? mat_base
                                        : mat_base +
                                              inst->mesh.tri_material[t]);
-                if (has_baked) {
-                    merged.tri_corner_colors.push_back(
-                        inst->mesh.tri_corner_colors[t]);
+                if (has_uv) {
+                    merged.tri_corner_uvs.push_back(
+                        inst->mesh.tri_corner_uvs[t]);
                 } else {
-                    const uint32_t c = override_mat
-                        ? flat
-                        : pack_rgb(inst->mesh.materials[
-                                       inst->mesh.tri_material[t]].albedo[0],
-                                   inst->mesh.materials[
-                                       inst->mesh.tri_material[t]].albedo[1],
-                                   inst->mesh.materials[
-                                       inst->mesh.tri_material[t]].albedo[2]);
-                    merged.tri_corner_colors.push_back({c, c, c});
+                    merged.tri_corner_uvs.push_back(
+                        {{{0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}}});
                 }
             }
+        }
+
+        // ── アルベドテクスチャ配列 (512^2 × ≤192 層) + マテリアルへの
+        //    レイヤ割当。 UV は REPEAT でタイルするため配列方式 ──
+        const auto atlas = sharc_demo::build_texture_atlas(atlas_mats, 512,
+                                                           192);
+        for (size_t i = 0; i < gpu_mats.size(); ++i) {
+            const auto& tex = atlas_mats[i].texture;
+            const auto it = tex.empty() ? atlas.layer_of.end()
+                                        : atlas.layer_of.find(tex);
+            gpu_mats[i].atlas_layer_plus1 =
+                (it != atlas.layer_of.end())
+                    ? static_cast<float>(it->second + 1)
+                    : 0.0f;
         }
         sharc_demo::finalize_mesh(merged);
         sharc_demo::MeshBvh gpu_bvh;
@@ -587,11 +586,12 @@ int main(int argc, char** argv) {
             g.n0 = sharc_oct32_encode(n0[0], n0[1], n0[2]);
             g.n1 = sharc_oct32_encode(n1[0], n1[1], n1[2]);
             g.n2 = sharc_oct32_encode(n2[0], n2[1], n2[2]);
-            const auto& cc = merged.tri_corner_colors[order[i]];
-            g.c0 = cc[0];
-            g.c1 = cc[1];
-            g.c2 = cc[2];
-            g.pad = 0;
+            const auto& uv = merged.tri_corner_uvs[order[i]];
+            g.uv0[0] = uv[0][0]; g.uv0[1] = uv[0][1];
+            g.uv1[0] = uv[1][0]; g.uv1[1] = uv[1][1];
+            g.uv2[0] = uv[2][0]; g.uv2[1] = uv[2][1];
+            g.pad0 = 0;
+            g.pad1 = 0;
             gpu_tri_mats[i] = tri_mats[order[i]];
         }
         SharcSceneUpload up;
@@ -602,6 +602,11 @@ int main(int argc, char** argv) {
         up.tri_materials  = gpu_tri_mats.data();
         up.materials      = gpu_mats.data();
         up.material_count = static_cast<uint32_t>(gpu_mats.size());
+        if (!atlas.empty()) {
+            up.atlas_pixels = atlas.pixels.data();
+            up.atlas_size   = atlas.size;
+            up.atlas_layers = atlas.layers;
+        }
         gpu_scene = sharc.upload_scene(up);
         if (gpu_scene) {
             sharc.set_scene_floor(mesh_scene.use_floor, kFloorY);

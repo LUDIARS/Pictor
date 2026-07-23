@@ -81,6 +81,11 @@ struct SharcSceneUpload {
     const uint32_t* tri_materials = nullptr;  ///< [tri_count]
     const SharcMaterialGpu* materials = nullptr;
     uint32_t material_count = 0;
+    /// アルベドテクスチャ配列 (RGBA8 sRGB、 [layer][size*size*4] 連結)。
+    /// nullptr / 0 レイヤなら 1x1 白ダミーを維持する。
+    const uint8_t* atlas_pixels = nullptr;
+    uint32_t atlas_size   = 0;
+    uint32_t atlas_layers = 0;
 };
 
 class SharcGpuExecutor {
@@ -171,6 +176,8 @@ private:
     bool create_pass_(Pass& out, const std::string& spv_path);
     void write_params_();
     void write_scene_descriptors_();
+    bool create_atlas_(const uint8_t* pixels, uint32_t size, uint32_t layers);
+    void destroy_atlas_();
     void barrier_(VkCommandBuffer cmd, VkBuffer buf,
                   VkAccessFlags src, VkAccessFlags dst,
                   VkPipelineStageFlags dst_stage);
@@ -205,6 +212,12 @@ private:
     Buffer rays_staging_;    // D1 CPU 経路の転送元 (host-visible)
     Buffer shade_staging_;   // 同上
     Buffer counters_rb_;     // request_count 読み出し用 (host-visible 16B)
+
+    // アルベドテクスチャ配列 (binding 18、 未使用時は 1x1 白ダミー)
+    VkImage        atlas_image_   = VK_NULL_HANDLE;
+    VkDeviceMemory atlas_mem_     = VK_NULL_HANDLE;
+    VkImageView    atlas_view_    = VK_NULL_HANDLE;
+    VkSampler      atlas_sampler_ = VK_NULL_HANDLE;
 
     VkDescriptorSetLayout dsl_       = VK_NULL_HANDLE;
     VkPipelineLayout      layout_    = VK_NULL_HANDLE;
