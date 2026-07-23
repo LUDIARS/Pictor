@@ -7,6 +7,7 @@ Pictor (C++20 / Vulkan / デスクトップ起点のレンダリング基盤) �
 - [portability/web.md](portability/web.md) — Emscripten / WebGL2 / WebGPU
 
 関連 spec: `dx12-backend-design.md` (RHI 抽象 — 設計のみ) /
+`metal-backend-design.md` (iOS Metal 直呼び — SHaRC 先行、 MoltenVK 置換) /
 `subsystem/webgl.md` (WebGL リファレンス実装) / `subsystem/surface.md`
 (ISurfaceProvider) / `subsystem/uma_memory.md` (UMA アップロード方針)。
 
