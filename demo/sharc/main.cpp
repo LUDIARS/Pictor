@@ -8,9 +8,11 @@
 ///     例: pictor_sharc_demo ../demo/assets/sharc/dragon/dragon_recon/dragon_vrip_res2.ply
 ///   Hero (引数に OBJ): Bistro クレイレンダ (MTL Kd/Ns のみ、 テクスチャ未対応)
 ///     多灯 (夕日 + 街灯列 + アクセント ~16 灯) + 葉の SSS (マテリアル名判定)
-///     第 2 引数で人物プロップを目線高さに合成 (肌 SSS + 背後光)
+///     第 2 引数以降は複数プロップ (.obj = 人物 head 肌 SSS /
+///     .ply = スキャン像 翡翠 SSS)。 地面レイキャストで街路へ接地
 ///     例: pictor_sharc_demo ../demo/assets/sharc/bistro/Exterior/exterior.obj \
-///         ../demo/assets/sharc/lpshead/head.OBJ
+///         ../demo/assets/sharc/lpshead/head.OBJ \
+///         ../demo/assets/sharc/dragon/dragon_recon/dragon_vrip_res2.ply
 ///
 /// 構成 (decoupled shading の最小配線):
 ///   1. CPU が低解像度グリッドの一次レイを解析交差 (球 / 床 / メッシュ BVH)
@@ -350,10 +352,14 @@ int main(int argc, char** argv) {
         mesh_scene.instances.push_back(std::move(primary));
         mesh_scene.active = true;
 
-        // ── プロップ (第 2 引数): 人物 head を街路の目線高さに肌 SSS で配置 ──
-        if (argc > 2) {
+        // ── プロップ (第 2 引数以降、 複数可): 街路の地面に SSS 素材で配置 ──
+        //    .obj = 人物 head (肌, 45cm) / .ply = スキャン像 (翡翠, 1.2m)。
+        //    一次交差は BVH (対数スケール) なので体数を増やしてもレイあたり
+        //    コストはほぼ不変 — VRAM 48B/tri のみ。 静的モデル限定
+        //    (動的は BVH refit が必要、 spec §3 将来枝)。
+        for (int prop_arg = 2; prop_arg < argc; ++prop_arg) {
             auto prop = std::make_unique<MeshInstance>();
-            const std::string ppath = argv[2];
+            const std::string ppath = argv[prop_arg];
             const bool prop_obj =
                 (ppath.size() > 4 &&
                  (ppath.compare(ppath.size() - 4, 4, ".obj") == 0 ||
@@ -362,13 +368,14 @@ int main(int argc, char** argv) {
                                   : sharc_demo::load_ply(ppath);
             if (prop->mesh.empty()) {
                 std::fprintf(stderr, "[init] FATAL: prop load failed: %s\n",
-                             argv[2]);
+                             argv[prop_arg]);
                 return 1;
             }
-            sharc_demo::fit_mesh(prop->mesh, 0.45f);   // 頭部実寸 ≈ 45cm
-            // ターゲット手前 (初期カメラ方向) に置き、 高さは地面への
-            // 下向きレイキャストで決める (重心 y は建物中腹なので固定値だと
-            // 構造物内に埋まる)。
+            const bool is_head = prop_obj;
+            const float target_extent = is_head ? 0.45f : 1.2f;
+            const float eye_height    = is_head ? 1.55f : 0.0f;
+            sharc_demo::fit_mesh(prop->mesh, target_extent);
+
             const Vec3 eye0{
                 g_target.x + g_orbit.dist * std::cos(g_orbit.pitch) *
                                  std::sin(g_orbit.yaw),
@@ -378,19 +385,22 @@ int main(int argc, char** argv) {
             const Vec3 toward = norm(eye0 - g_target);
             // ターゲット周囲をリング状に探査し、 下向きレイキャストが
             // 最も低い地面 (= 屋根ではなく街路) に当たる点へ接地する。
-            Vec3 head_pos = g_target + toward * 8.0f;
+            // 体ごとに開始角をずらして重なりを避ける。
+            Vec3 prop_pos = g_target + toward * 8.0f;
             {
                 const auto& scene_mesh = mesh_scene.instances[0]->mesh;
                 const float top = scene_mesh.bounds_max[1] + 1.0f;
                 const float rd[3] = {0.0f, -1.0f, 0.0f};
+                const float base_ang = std::atan2(toward.x, toward.z)
+                                     + static_cast<float>(prop_arg - 2) * 0.6f;
                 float best_ground = 1e9f;
-                Vec3 best_xz = head_pos;
+                Vec3 best_xz = prop_pos;
                 for (int i = 0; i < 12; ++i) {
-                    const float ang = static_cast<float>(i) *
+                    const float ang = base_ang + static_cast<float>(i) *
                                       (2.0f * 3.14159265f / 12.0f);
                     for (const float r : {5.0f, 8.0f, 11.0f}) {
-                        const float cx = g_target.x + std::cos(ang) * r;
-                        const float cz = g_target.z + std::sin(ang) * r;
+                        const float cx = g_target.x + std::sin(ang) * r;
+                        const float cz = g_target.z + std::cos(ang) * r;
                         const float ro[3] = {cx, top, cz};
                         const auto gh = mesh_scene.instances[0]->bvh.intersect(
                             ro, rd, 1e5f);
@@ -403,25 +413,34 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (best_ground > 1e8f) best_ground = 0.0f;   // 全ミス時
-                head_pos = {best_xz.x, best_ground + 1.55f, best_xz.z};
+                prop_pos = {best_xz.x, best_ground + eye_height, best_xz.z};
             }
             for (auto& p : prop->mesh.positions) {
-                p[0] += head_pos.x;
-                p[1] += head_pos.y;
-                p[2] += head_pos.z;
+                p[0] += prop_pos.x;
+                p[1] += prop_pos.y;
+                p[2] += prop_pos.z;
             }
             sharc_demo::finalize_mesh(prop->mesh);
-            prop->mesh.materials.clear();   // MTL より肌 override を優先
+            prop->mesh.materials.clear();   // MTL より SSS override を優先
             prop->material_override = true;
-            prop->ov_albedo    = kSkinAlbedo;
-            prop->ov_roughness = kSkinRoughness;
-            prop->ov_mfp       = kSkinMfp;
+            if (is_head) {
+                prop->ov_albedo    = kSkinAlbedo;
+                prop->ov_roughness = kSkinRoughness;
+                prop->ov_mfp       = kSkinMfp;
+            } else {
+                prop->ov_albedo    = kMeshAlbedo;      // 翡翠 (D2 と同素材)
+                prop->ov_roughness = kMeshRoughness;
+                prop->ov_mfp       = kMeshMfp;
+            }
             prop->bvh.build(prop->mesh);
-            std::fprintf(stderr, "[scene] prop at (%.1f %.1f %.1f)\n",
-                         head_pos.x, head_pos.y, head_pos.z);
-            g_prop_pos = head_pos;
-            g_prop_back = norm(Vec3{-toward.x, 0.0f, -toward.z});
-            g_has_prop = true;
+            std::fprintf(stderr, "[scene] prop %d at (%.1f %.1f %.1f)\n",
+                         prop_arg - 1, prop_pos.x, prop_pos.y, prop_pos.z);
+            if (!g_has_prop) {
+                // カメラプリセット H は最初のプロップを向く
+                g_prop_pos = prop_pos;
+                g_prop_back = norm(Vec3{-toward.x, 0.0f, -toward.z});
+                g_has_prop = true;
+            }
             mesh_scene.instances.push_back(std::move(prop));
         }
     }
