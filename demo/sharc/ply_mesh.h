@@ -20,6 +20,7 @@ namespace sharc_demo {
 struct PlyMaterial {
     std::array<float, 3> albedo{0.75f, 0.75f, 0.75f};
     float roughness = 0.6f;
+    float mfp = 0.0f;   ///< SSS 平均自由行程 (0 = 不透明)。 葉など半透明素材用
 };
 
 struct PlyMesh {

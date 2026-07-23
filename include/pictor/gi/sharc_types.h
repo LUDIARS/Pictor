@@ -65,8 +65,67 @@ struct alignas(16) SharcParamsGpu {
     uint32_t ray_count;
     uint32_t stale_frames;     ///< エビクション閾値 (フレーム)
     float hit_epsilon;         ///< t 区間の数値マージン
+    uint32_t scene_tri_count;  ///< GPU シーンの三角形数 (0 = hit パス無効)
+    uint32_t scene_flags;      ///< kSharcSceneMesh | kSharcSceneFloor
+    float floor_y;             ///< 解析床の高さ
+    float scene_ray_far;       ///< hit パスの初期 tMax
+    float cam_fwd[4];          ///< xyz = 前方, w = fovScale
+    float cam_right[4];        ///< xyz = 右, w = アスペクト比
+    float cam_up[4];           ///< xyz = 上, w = レンダリング幅 (float)
 };
-static_assert(sizeof(SharcParamsGpu) == 64, "GLSL SharcParams と一致させる");
+static_assert(sizeof(SharcParamsGpu) == 128, "GLSL SharcParams と一致させる");
+
+/// scene_flags (GLSL SHARC_SCENE_* と一致)。
+constexpr uint32_t kSharcSceneMesh  = 1u;
+constexpr uint32_t kSharcSceneFloor = 2u;
+
+// ============================================================
+// GPU シーン (hit パス) のレイアウト — sharc_hit.comp と一致
+// ============================================================
+
+/// BVH ノード (32B)。 左子 = 自ノード + 1、 right/leaf-start を left に格納。
+struct SharcBvhNodeGpu {
+    float bmin[3];
+    uint32_t left;      ///< 内部: right 子 index / 葉: 三角形開始
+    float bmax[3];
+    uint32_t count;     ///< 0 = 内部 / >0 = 葉の三角形数
+};
+static_assert(sizeof(SharcBvhNodeGpu) == 32, "GLSL SharcBvhNode と一致させる");
+
+/// 三角形 (48B)。 w = oct32 パック済み頂点法線 (uint ビット)。
+struct SharcTriGpu {
+    float v0[3]; uint32_t n0;
+    float v1[3]; uint32_t n1;
+    float v2[3]; uint32_t n2;
+};
+static_assert(sizeof(SharcTriGpu) == 48, "GLSL SharcTri と一致させる");
+
+/// マテリアル (32B)。
+struct SharcMaterialGpu {
+    float albedo[3];
+    float roughness;
+    float mfp;
+    float pad[3];
+};
+static_assert(sizeof(SharcMaterialGpu) == 32, "GLSL SharcMaterial と一致させる");
+
+/// 単位ベクトル → oct32 (GLSL sharcOct32Encode と同一)。
+inline uint32_t sharc_oct32_encode(float nx, float ny, float nz) {
+    const float len = std::fabs(nx) + std::fabs(ny) + std::fabs(nz);
+    const float inv = (len > 1e-12f) ? 1.0f / len : 0.0f;
+    float px = nx * inv, py = ny * inv;
+    if (nz < 0.0f) {
+        const float ox = (1.0f - std::fabs(py)) * (px >= 0.0f ? 1.0f : -1.0f);
+        const float oy = (1.0f - std::fabs(px)) * (py >= 0.0f ? 1.0f : -1.0f);
+        px = ox;
+        py = oy;
+    }
+    const auto qx = static_cast<uint32_t>(
+        (std::min)((std::max)(px * 32767.0f + 32767.5f, 0.0f), 65535.0f));
+    const auto qy = static_cast<uint32_t>(
+        (std::min)((std::max)(py * 32767.0f + 32767.5f, 0.0f), 65535.0f));
+    return (qy << 16) | qx;
+}
 
 /// per-cell reservoir (uvec4): {lightIdx, wSum(f32), M(f32), targetPdf(f32)}。
 constexpr uint32_t kSharcReservoirUints = 4;

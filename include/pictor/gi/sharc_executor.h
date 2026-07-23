@@ -71,6 +71,18 @@ struct SharcLightGpu {
     float color_intensity[4];  ///< rgb = 色, a = 強度
 };
 
+/// GPU シーン (hit パス) の一括アップロード内容。 全てフラット DoD 配列で、
+/// デモ側の BVH / メッシュをレイアウト変換なしに近い形で転写する。
+struct SharcSceneUpload {
+    const SharcBvhNodeGpu* nodes = nullptr;
+    uint32_t node_count = 0;
+    const SharcTriGpu* tris = nullptr;        ///< 葉順に並べ替え済み
+    uint32_t tri_count = 0;
+    const uint32_t* tri_materials = nullptr;  ///< [tri_count]
+    const SharcMaterialGpu* materials = nullptr;
+    uint32_t material_count = 0;
+};
+
 class SharcGpuExecutor {
 public:
     SharcGpuExecutor() = default;
@@ -86,6 +98,21 @@ public:
     /// ディレクトリ (sharc_{march,compact,update,resolve}.comp.spv を要求)。
     bool initialize(VulkanContext& vk, const std::string& shader_dir,
                     const SharcConfig& config);
+
+    /// GPU シーン (BVH + 三角形 + マテリアル) を device-local バッファへ
+    /// 転送し、 hit パス (GPU 一次交差) を有効化する。 init 後に 1 回。
+    bool upload_scene(const SharcSceneUpload& scene);
+
+    /// 解析床 (D2 チェッカー) の有効化。 upload_scene 済みの時のみ意味を持つ。
+    void set_scene_floor(bool enabled, float floor_y);
+
+    /// hit パスの初期 tMax (シーンの遠方距離)。
+    void set_scene_far(float ray_far);
+
+    /// カメラ基底を UBO へ反映する (hit パスの GPU レイ生成用)。
+    /// fov_scale = tan(fov/2)。 render_width はレイ index → 画素の変換用。
+    void set_camera(const float3& fwd, const float3& right, const float3& up,
+                    float fov_scale, float aspect, uint32_t render_width);
 
     /// フレーム開始: フレーム番号 / カメラを UBO へ反映し、
     /// per-frame カウンタ (hit / request) をリセットする。
@@ -105,6 +132,11 @@ public:
 
     /// 解決済み放射輝度 (vec4 × ray_count)。 GPU 完了後に読むこと。
     const float* output_mapped() const;
+
+    /// 出力バッファの実体 (present 側 fragment が SSBO として直読みする —
+    /// readback レスの全 GPU 経路)。
+    VkBuffer     output_buffer() const { return output_.buf; }
+    VkDeviceSize output_size() const   { return output_.size; }
 
     /// 今フレームの要求セル数 (GPU 完了後に読める、 HUD 用)。
     uint32_t request_count() const;
@@ -129,9 +161,13 @@ private:
 
     bool create_buffer_(Buffer& out, VkDeviceSize size,
                         VkBufferUsageFlags usage);
+    /// device-local バッファ + staging 経由の一括転送 (シーン用、 mapped なし)。
+    bool create_device_buffer_(Buffer& out, const void* data,
+                               VkDeviceSize size);
     void destroy_buffer_(Buffer& b);
     bool create_pass_(Pass& out, const std::string& spv_path);
     void write_params_();
+    void write_scene_descriptors_();
     void barrier_(VkCommandBuffer cmd, VkBuffer buf,
                   VkAccessFlags src, VkAccessFlags dst,
                   VkPipelineStageFlags dst_stage);
@@ -159,16 +195,29 @@ private:
     Buffer cell_pos_;     // グリッド座標逆引き          (binding 11)
     Buffer shade_;        // シェーディング要求          (binding 12)
     Buffer output_;       // 解決結果                    (binding 13)
+    Buffer scene_nodes_;  // BVH ノード (device-local)   (binding 14)
+    Buffer scene_tris_;   // 三角形 (device-local)       (binding 15)
+    Buffer scene_tri_mats_; // per-tri マテリアル id     (binding 16)
+    Buffer scene_materials_; // マテリアル表             (binding 17)
 
     VkDescriptorSetLayout dsl_       = VK_NULL_HANDLE;
     VkPipelineLayout      layout_    = VK_NULL_HANDLE;
     VkDescriptorPool      desc_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet       desc_set_  = VK_NULL_HANDLE;
 
+    Pass hit_;
     Pass march_;
     Pass compact_;
     Pass update_;
     Pass resolve_;
+
+    uint32_t scene_tri_count_ = 0;
+    uint32_t scene_flags_     = 0;
+    float    floor_y_         = 0.0f;
+    float    scene_ray_far_   = 100.0f;
+    float    cam_fwd_[4]      = {0, 0, -1, 1};
+    float    cam_right_[4]    = {1, 0, 0, 1};
+    float    cam_up_[4]       = {0, 1, 0, 0};
 #endif
 
     bool initialized_ = false;

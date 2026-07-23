@@ -31,13 +31,19 @@ public:
     /// 最近交差。 tmax より遠いヒットは無視。
     BvhHit intersect(const float ro[3], const float rd[3], float tmax) const;
 
-private:
     struct Node {
         float    bmin[3];
         float    bmax[3];
         uint32_t left  = 0;   ///< 内部: 子 index / 葉: 三角形開始
         uint32_t count = 0;   ///< 0 = 内部ノード / >0 = 葉の三角形数
     };
+
+    /// GPU アップロード用の内部配列アクセス (フラット DoD レイアウトを
+    /// そのまま SSBO へ転写する)。 左子は「自ノード + 1」規約。
+    const std::vector<Node>&     nodes() const { return nodes_; }
+    const std::vector<uint32_t>& tri_order() const { return tri_order_; }
+
+private:
 
     uint32_t build_recursive_(std::vector<uint32_t>& tris, uint32_t begin,
                               uint32_t end, int depth);

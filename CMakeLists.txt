@@ -426,9 +426,8 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             demo/sharc/ply_mesh.cpp
             demo/sharc/obj_mesh.cpp
             demo/sharc/mesh_bvh.cpp
-            demo/texture2d/texture2d_renderer.cpp
+            demo/sharc/present_renderer.cpp
         )
-        target_include_directories(pictor_sharc_demo PRIVATE demo/texture2d)
         target_link_libraries(pictor_sharc_demo PRIVATE pictor)
 
         # Iter relation-graph demo (instanced/DoD graph view + cull/hit-test + dock)
@@ -595,10 +594,13 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_hit.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_march.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_compact.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_update.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_resolve.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.vert
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})

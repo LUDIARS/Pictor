@@ -80,7 +80,17 @@ layout(set = SHARC_SET, binding = 0) uniform SharcParams {
     uint  sharcRayCount;       // march 入力レイ数
     uint  sharcStaleFrames;    // これより古いセルはエビクション対象
     float sharcHitEpsilon;     // t 区間の数値マージン
+    uint  sharcSceneTriCount;  // GPU シーン (hit パス) の三角形数 (0 = 無効)
+    uint  sharcSceneFlags;     // bit0 = メッシュシーン有効, bit1 = 解析床
+    float sharcFloorY;         // 解析床の高さ
+    float sharcSceneRayFar;    // hit パスの初期 tMax (ミス時の遠方値)
+    vec4  sharcCamFwd;         // xyz = 前方, w = fovScale (tan(fov/2))
+    vec4  sharcCamRight;       // xyz = 右, w = アスペクト比
+    vec4  sharcCamUp;          // xyz = 上, w = レンダリング幅 (float)
 };
+
+const uint SHARC_SCENE_MESH  = 1u;
+const uint SHARC_SCENE_FLOOR = 2u;
 
 // ============================================================
 // ハッシュテーブル / セルストレージ SSBO
@@ -150,6 +160,22 @@ vec3 sharcRgb9e5Decode(uint v) {
 
 vec2 sharcSignNotZero(vec2 v) {
     return vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+}
+
+// --- oct32 方向 (16bit × 2, 高精度法線用) ---
+
+uint sharcOct32Encode(vec3 n) {
+    n /= max(abs(n.x) + abs(n.y) + abs(n.z), SHARC_EPSILON);
+    vec2 p = (n.z >= 0.0) ? n.xy : (1.0 - abs(n.yx)) * sharcSignNotZero(n.xy);
+    uvec2 q = uvec2(clamp(round(p * 32767.0 + 32767.5), 0.0, 65535.0));
+    return (q.y << 16) | q.x;
+}
+
+vec3 sharcOct32Decode(uint v) {
+    vec2 p = (vec2(float(v & 0xFFFFu), float(v >> 16)) - 32767.5) / 32767.0;
+    vec3 n = vec3(p, 1.0 - abs(p.x) - abs(p.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * sharcSignNotZero(n.xy);
+    return normalize(n);
 }
 
 uint sharcOct16Encode(vec3 n) {

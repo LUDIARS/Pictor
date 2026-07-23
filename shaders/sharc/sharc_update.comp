@@ -7,6 +7,10 @@
 // 1 フレーム遅延 + 永続キャッシュ (SHaRC 方式): このパスの結果は
 // 次フレームの resolve が参照する。
 //
+// バッチ統計 (モーメント / ローブ帰属) は shared メモリのツリー縮約で
+// 64 スレッド並列に計算する。 thread0 直列だと要求セル数の多いシーン
+// (Bistro 等) で 1 dispatch が長時間化し TDR / ハングの温床になる。
+//
 // dispatch: indirect (compact が生成, x = 要求セル数)
 
 #version 450
@@ -50,14 +54,26 @@ float sharcRand(inout uint state) {
 }
 
 // ============================================================
-// shared: workgroup 内サンプルバッファ + WRS リダクション
+// shared: サンプルバッファ + 並列縮約バッファ
+//   partial レイアウト (スレッドごとに SHARC_PART_FLOATS 個):
+//     [k*8 + 0]   ローブ k の Σr·w
+//     [k*8 + 1-3] ローブ k の Σr·w·dir
+//     [k*8 + 4-6] ローブ k の Σr·w·rgb
+//     [k*8 + 7]   ローブ k の Σr·w·dist
+//     [L*8 + 0-2] Σ m0 (RGB)
+//     [L*8 + 3-5] Σ m1 (輝度重みフラックス)
+//     [L*8 + 6]   Σ RIS 正規化重み
 // ============================================================
+
+const uint SHARC_PART_FLOATS = uint(SHARC_LOBE_COUNT) * 8u + 7u;
 
 shared vec4  sh_dirLuma[SHARC_SAMPLES_PER_CELL];   // xyz=方向 w=輝度重み
 shared vec4  sh_rgbDist[SHARC_SAMPLES_PER_CELL];   // rgb=放射輝度 w=距離
 shared float sh_weight[SHARC_SAMPLES_PER_CELL];    // RIS 重み
 shared uint  sh_candidate[SHARC_SAMPLES_PER_CELL]; // 候補ライト
 shared float sh_pdfHat[SHARC_SAMPLES_PER_CELL];    // 候補の target pdf
+shared float sh_part[SHARC_SAMPLES_PER_CELL][SHARC_PART_FLOATS];
+shared float sh_orphanScore[SHARC_SAMPLES_PER_CELL]; // 孤児サンプルの強度
 
 // セル中心での未遮蔽寄与 (target pdf 用)
 vec3 sharcLightContribution(SharcLight light, vec3 cellCenter,
@@ -73,6 +89,7 @@ void main() {
     uint reqIdx = gl_WorkGroupID.x;
     uint tid    = gl_LocalInvocationID.x;
     uint slot   = gpu_sharc_requests[reqIdx];
+    // slot は workgroup 内一様 → この return は非分岐 (barrier 安全)
     if (slot >= sharcTableSize || gpu_sharc_keys[slot] == 0u) return;
 
     uint sampleCountPrev, lastFrame, level;
@@ -90,7 +107,7 @@ void main() {
     float resPdf   = uintBitsToFloat(resPrev.w);
 
     // ============================================================
-    // 1. 候補生成 + WRS (thread 並列 → shared 逐次リダクション)
+    // 1. 候補生成 (thread 並列)
     // ============================================================
     uint rng = sharcHashCombine(sharcHashCombine(slot, sharcFrameIndex), tid);
 
@@ -123,8 +140,78 @@ void main() {
     barrier();
 
     // ============================================================
-    // 2. 逐次処理 (thread 0): WRS 決定 + モーメント/ローブのバッチ更新
-    //    64 サンプルの逐次ループはセル更新パスでは十分軽い。
+    // 2. 各スレッドが自分のサンプルの帰属度と部分和を計算
+    // ============================================================
+    SharcLobe lobes[SHARC_LOBE_COUNT];
+    for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
+        lobes[k] = sharcLoadLobe(slot, uint(k));
+    }
+
+    for (uint j = 0u; j < SHARC_PART_FLOATS; j++) sh_part[tid][j] = 0.0;
+    sh_orphanScore[tid] = 0.0;
+
+    {
+        float w = sh_weight[tid];
+        if (w > SHARC_EPSILON) {
+            vec3 dir  = sh_dirLuma[tid].xyz;
+            vec3 rgb  = sh_rgbDist[tid].rgb;
+            float dist = sh_rgbDist[tid].w;
+
+            float r[SHARC_LOBE_COUNT];
+            bool orphan;
+            sharcLobeResponsibilities(lobes, dir, r, orphan);
+            if (orphan) {
+                sh_orphanScore[tid] = sharcLuminance(rgb) * w;
+            } else {
+                for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
+                    float rw = r[k] * w;
+                    uint b = uint(k) * 8u;
+                    sh_part[tid][b + 0u] = rw;
+                    sh_part[tid][b + 1u] = dir.x * rw;
+                    sh_part[tid][b + 2u] = dir.y * rw;
+                    sh_part[tid][b + 3u] = dir.z * rw;
+                    sh_part[tid][b + 4u] = rgb.r * rw;
+                    sh_part[tid][b + 5u] = rgb.g * rw;
+                    sh_part[tid][b + 6u] = rgb.b * rw;
+                    sh_part[tid][b + 7u] = dist * rw;
+                }
+            }
+            // モーメント部分和 (RIS: f/p̂ を重み w で平均)
+            float invPdf = w / max(sh_pdfHat[tid], SHARC_EPSILON);
+            uint mb = uint(SHARC_LOBE_COUNT) * 8u;
+            sh_part[tid][mb + 0u] = rgb.r * invPdf;
+            sh_part[tid][mb + 1u] = rgb.g * invPdf;
+            sh_part[tid][mb + 2u] = rgb.b * invPdf;
+            float luma = sharcLuminance(rgb) * invPdf;
+            sh_part[tid][mb + 3u] = dir.x * luma;
+            sh_part[tid][mb + 4u] = dir.y * luma;
+            sh_part[tid][mb + 5u] = dir.z * luma;
+            sh_part[tid][mb + 6u] = invPdf;
+        }
+    }
+    barrier();
+
+    // ============================================================
+    // 3. ツリー縮約 (log2(64) = 6 ステップ)
+    // ============================================================
+    for (uint stride = SHARC_SAMPLES_PER_CELL / 2u; stride > 0u;
+         stride >>= 1u) {
+        if (tid < stride) {
+            for (uint j = 0u; j < SHARC_PART_FLOATS; j++) {
+                sh_part[tid][j] += sh_part[tid + stride][j];
+            }
+            // 孤児は最強 1 サンプルだけ残す (max 縮約)
+            if (sh_orphanScore[tid + stride] > sh_orphanScore[tid]) {
+                sh_orphanScore[tid] = sh_orphanScore[tid + stride];
+                sh_dirLuma[tid]     = sh_dirLuma[tid + stride];
+                sh_rgbDist[tid]     = sh_rgbDist[tid + stride];
+            }
+        }
+        barrier();
+    }
+
+    // ============================================================
+    // 4. 仕上げ (thread 0 のみ — 残りは軽い定数量の処理)
     // ============================================================
     if (tid != 0u) return;
 
@@ -139,12 +226,9 @@ void main() {
         acc += sh_weight[i];
         if (acc >= pick) { chosen = i; break; }
     }
-
-    // 時間結合 (M 上限つき, ReSTIR 定石)
     const float kMaxM = 512.0;
     float mNew = float(SHARC_SAMPLES_PER_CELL);
     if (resM > 0.0 && resPdf > 0.0) {
-        // 既存 reservoir を 1 候補として再挿入
         float wPrev = resPdf * resM;
         wTotal += wPrev;
         if (sharcRand(rng) * wTotal < wPrev) {
@@ -159,74 +243,39 @@ void main() {
         outLight = sh_candidate[chosen];
         outPdf   = sh_pdfHat[chosen];
     }
-    float outM = min(resM + mNew, kMaxM);
-    gpu_sharc_reservoirs[slot] = uvec4(outLight,
-                                       floatBitsToUint(wTotal),
-                                       floatBitsToUint(outM),
-                                       floatBitsToUint(outPdf));
+    gpu_sharc_reservoirs[slot] =
+        uvec4(outLight, floatBitsToUint(wTotal),
+              floatBitsToUint(min(resM + mNew, kMaxM)),
+              floatBitsToUint(outPdf));
 
-    // --- モーメント蓄積 (全候補の RIS 重み付き平均) ---
+    // --- モーメント EMA (縮約済み部分和から) ---
+    uint mb = uint(SHARC_LOBE_COUNT) * 8u;
+    float wNorm = sh_part[0][mb + 6u];
     vec3 m0 = vec3(0.0);
-    vec3 m1 = vec3(0.0);
-    float wNorm = 0.0;
-    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) {
-        float w = sh_weight[i];
-        if (w <= SHARC_EPSILON) continue;
-        // RIS: 重み w = p̂/p, 推定値は Σ(f/p̂)·w / Σw → f 平均
-        sharcMomentsAccumulate(m0, m1, sh_dirLuma[i].xyz,
-                               sh_rgbDist[i].rgb, w / max(sh_pdfHat[i],
-                                                          SHARC_EPSILON));
-        wNorm += w / max(sh_pdfHat[i], SHARC_EPSILON);
-    }
     if (wNorm > SHARC_EPSILON) {
-        m0 /= wNorm;
-        m1 /= wNorm;
+        m0 = vec3(sh_part[0][mb + 0u], sh_part[0][mb + 1u],
+                  sh_part[0][mb + 2u]) / wNorm;
+        vec3 m1 = vec3(sh_part[0][mb + 3u], sh_part[0][mb + 4u],
+                       sh_part[0][mb + 5u]) / wNorm;
         sharcMomentsBlend(slot, m0, m1, sharcEmaAlpha);
     }
 
-    // --- ローブ EM 更新 (バッチ E ステップ + EMA M ステップ) ---
-    SharcLobe lobes[SHARC_LOBE_COUNT];
-    for (int k = 0; k < SHARC_LOBE_COUNT; k++) lobes[k] = sharcLoadLobe(slot, uint(k));
-
-    float batchW[SHARC_LOBE_COUNT];
-    vec3  batchDir[SHARC_LOBE_COUNT];
-    vec3  batchRgb[SHARC_LOBE_COUNT];
-    float batchDist[SHARC_LOBE_COUNT];
-    for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
-        batchW[k] = 0.0; batchDir[k] = vec3(0.0);
-        batchRgb[k] = vec3(0.0); batchDist[k] = 0.0;
-    }
-
-    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) {
-        float w = sh_weight[i];
-        if (w <= SHARC_EPSILON) continue;
-        vec3 dir = sh_dirLuma[i].xyz;
-        vec3 rgb = sh_rgbDist[i].rgb;
-        float dist = sh_rgbDist[i].w;
-
-        float r[SHARC_LOBE_COUNT];
-        bool orphan;
-        sharcLobeResponsibilities(lobes, dir, r, orphan);
-        if (orphan) {
-            sharcLobeSpawn(lobes, dir, rgb, dist, w);
-            continue;
-        }
-        for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
-            float rw = r[k] * w;
-            batchW[k]    += rw;
-            batchDir[k]  += dir * rw;
-            batchRgb[k]  += rgb * rw;
-            batchDist[k] += dist * rw;
-        }
+    // --- ローブ EMA (縮約済みバッチ統計から) + 孤児 1 本スポーン ---
+    if (sh_orphanScore[0] > SHARC_EPSILON) {
+        sharcLobeSpawn(lobes, sh_dirLuma[0].xyz, sh_rgbDist[0].rgb,
+                       sh_rgbDist[0].w, sh_orphanScore[0]);
     }
     for (int k = 0; k < SHARC_LOBE_COUNT; k++) {
-        lobes[k] = sharcLobeBlendBatch(lobes[k], batchW[k], batchDir[k],
-                                       batchRgb[k], batchDist[k],
-                                       sharcEmaAlpha);
+        uint b = uint(k) * 8u;
+        lobes[k] = sharcLobeBlendBatch(
+            lobes[k], sh_part[0][b + 0u],
+            vec3(sh_part[0][b + 1u], sh_part[0][b + 2u], sh_part[0][b + 3u]),
+            vec3(sh_part[0][b + 4u], sh_part[0][b + 5u], sh_part[0][b + 6u]),
+            sh_part[0][b + 7u], sharcEmaAlpha);
         sharcStoreLobe(slot, uint(k), lobes[k]);
     }
 
-    // --- メタ更新 (輝度統計は分散推定 → 信頼度/適応サンプリングの種) ---
+    // --- メタ更新 ---
     float lumaBatch = sharcLuminance(m0);
     float meanNew = mix(lumaMean, lumaBatch, sharcEmaAlpha);
     float varNew  = mix(lumaVar, (lumaBatch - meanNew) * (lumaBatch - meanNew),

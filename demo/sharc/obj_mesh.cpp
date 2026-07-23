@@ -1,6 +1,7 @@
 #include "obj_mesh.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -81,6 +82,29 @@ std::string dir_of(const std::string& path) {
     return (p == std::string::npos) ? std::string() : path.substr(0, p + 1);
 }
 
+/// マテリアル名から植生 (葉・花) を推定して SSS を付ける。
+/// テクスチャ未対応のため、 Kd が白い葉はクレイ視認性のため緑へ寄せる。
+void tag_foliage(const std::string& name, PlyMaterial& m) {
+    std::string low = name;
+    std::transform(low.begin(), low.end(), low.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const bool leafy =
+        (low.find("leaf") != std::string::npos ||
+         low.find("leaves") != std::string::npos ||
+         low.find("foliage") != std::string::npos ||
+         low.find("flower") != std::string::npos ||
+         low.find("ivy") != std::string::npos ||
+         low.find("hedge") != std::string::npos);
+    const bool woody =
+        (low.find("trunk") != std::string::npos ||
+         low.find("branch") != std::string::npos);
+    if (!leafy || woody) return;
+    m.mfp = 0.03f;   // 葉の透過 (数 cm オーダー)
+    if (m.albedo[0] > 0.7f && m.albedo[1] > 0.7f && m.albedo[2] > 0.7f) {
+        m.albedo = {0.35f, 0.55f, 0.30f};
+    }
+}
+
 } // namespace
 
 PlyMesh load_obj(const std::string& path) {
@@ -148,6 +172,7 @@ PlyMesh load_obj(const std::string& path) {
                 PlyMaterial m;
                 auto mt = mtl_table.find(name);
                 if (mt != mtl_table.end()) m = mt->second;
+                tag_foliage(name, m);
                 current_mat = static_cast<uint32_t>(mesh.materials.size());
                 mesh.materials.push_back(m);
                 mat_index.emplace(name, current_mat);

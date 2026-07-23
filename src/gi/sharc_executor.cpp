@@ -20,7 +20,7 @@ SharcGpuExecutor::~SharcGpuExecutor() {
 
 namespace {
 
-constexpr uint32_t kBindingCount = 14;
+constexpr uint32_t kBindingCount = 18;
 
 VkShaderModule load_shader_module(VkDevice device, const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -90,6 +90,60 @@ void SharcGpuExecutor::destroy_buffer_(Buffer& b) {
     b = Buffer{};
 }
 
+bool SharcGpuExecutor::create_device_buffer_(Buffer& out, const void* data,
+                                             VkDeviceSize size) {
+    // device-local 本体 (シーンは数百 MB 級 — PCIe 越し読みを避ける)
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size        = size;
+    bi.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device_, &bi, nullptr, &out.buf) != VK_SUCCESS)
+        return false;
+    VkMemoryRequirements mr{};
+    vkGetBufferMemoryRequirements(device_, out.buf, &mr);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize  = mr.size;
+    ai.memoryTypeIndex = find_memory_type(
+        vk_->physical_device(), mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device_, &ai, nullptr, &out.mem) != VK_SUCCESS)
+        return false;
+    vkBindBufferMemory(device_, out.buf, out.mem, 0);
+    out.size = size;
+
+    // staging → copy (1 回きりの転送なので同期実行で良い)
+    Buffer staging;
+    if (!create_buffer_(staging, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT))
+        return false;
+    std::memcpy(staging.mapped, data, static_cast<size_t>(size));
+
+    VkCommandBufferAllocateInfo cai{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool        = vk_->command_pool();
+    cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(device_, &cai, &cmd) != VK_SUCCESS) {
+        destroy_buffer_(staging);
+        return false;
+    }
+    VkCommandBufferBeginInfo bgi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bgi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bgi);
+    VkBufferCopy region{0, 0, size};
+    vkCmdCopyBuffer(cmd, staging.buf, out.buf, 1, &region);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &cmd;
+    vkQueueSubmit(vk_->graphics_queue(), 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vk_->graphics_queue());
+    vkFreeCommandBuffers(device_, vk_->command_pool(), 1, &cmd);
+    destroy_buffer_(staging);
+    return true;
+}
+
 bool SharcGpuExecutor::create_pass_(Pass& out, const std::string& spv_path) {
     VkShaderModule cs = load_shader_module(device_, spv_path);
     if (cs == VK_NULL_HANDLE) {
@@ -130,7 +184,94 @@ void SharcGpuExecutor::write_params_() {
     p.ray_count      = ray_count_;
     p.stale_frames   = config_.stale_frames;
     p.hit_epsilon    = config_.hit_epsilon;
+    p.scene_tri_count = scene_tri_count_;
+    p.scene_flags     = scene_flags_;
+    p.floor_y         = floor_y_;
+    p.scene_ray_far   = scene_ray_far_;
+    std::memcpy(p.cam_fwd, cam_fwd_, sizeof(cam_fwd_));
+    std::memcpy(p.cam_right, cam_right_, sizeof(cam_right_));
+    std::memcpy(p.cam_up, cam_up_, sizeof(cam_up_));
     std::memcpy(params_.mapped, &p, sizeof(p));
+}
+
+void SharcGpuExecutor::set_camera(const float3& fwd, const float3& right,
+                                  const float3& up, float fov_scale,
+                                  float aspect, uint32_t render_width) {
+    cam_fwd_[0] = fwd.x;   cam_fwd_[1] = fwd.y;   cam_fwd_[2] = fwd.z;
+    cam_fwd_[3] = fov_scale;
+    cam_right_[0] = right.x; cam_right_[1] = right.y; cam_right_[2] = right.z;
+    cam_right_[3] = aspect;
+    cam_up_[0] = up.x; cam_up_[1] = up.y; cam_up_[2] = up.z;
+    cam_up_[3] = static_cast<float>(render_width);
+    // 反映は次の begin_frame / set_counts の write_params_ で行われる
+}
+
+void SharcGpuExecutor::write_scene_descriptors_() {
+    const Buffer* scene[4] = {&scene_nodes_, &scene_tris_, &scene_tri_mats_,
+                              &scene_materials_};
+    VkDescriptorBufferInfo infos[4]{};
+    VkWriteDescriptorSet writes[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        infos[i] = {scene[i]->buf, 0, scene[i]->size};
+        writes[i] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[i].dstSet          = desc_set_;
+        writes[i].dstBinding      = 14 + i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].pBufferInfo     = &infos[i];
+    }
+    vkUpdateDescriptorSets(device_, 4, writes, 0, nullptr);
+}
+
+bool SharcGpuExecutor::upload_scene(const SharcSceneUpload& scene) {
+    if (!initialized_ || scene.node_count == 0 || scene.tri_count == 0) {
+        return false;
+    }
+    vkDeviceWaitIdle(device_);
+    destroy_buffer_(scene_nodes_);
+    destroy_buffer_(scene_tris_);
+    destroy_buffer_(scene_tri_mats_);
+    destroy_buffer_(scene_materials_);
+    if (!create_device_buffer_(scene_nodes_, scene.nodes,
+                               VkDeviceSize{scene.node_count} *
+                                   sizeof(SharcBvhNodeGpu)) ||
+        !create_device_buffer_(scene_tris_, scene.tris,
+                               VkDeviceSize{scene.tri_count} *
+                                   sizeof(SharcTriGpu)) ||
+        !create_device_buffer_(scene_tri_mats_, scene.tri_materials,
+                               VkDeviceSize{scene.tri_count} *
+                                   sizeof(uint32_t)) ||
+        !create_device_buffer_(scene_materials_, scene.materials,
+                               VkDeviceSize{scene.material_count} *
+                                   sizeof(SharcMaterialGpu))) {
+        std::fprintf(stderr, "[sharc] scene upload failed\n");
+        return false;
+    }
+    write_scene_descriptors_();
+    scene_tri_count_ = scene.tri_count;
+    scene_flags_ |= kSharcSceneMesh;
+    write_params_();
+    std::fprintf(stderr,
+                 "[sharc] scene uploaded: %u nodes, %u tris (%.1f MB "
+                 "device-local)\n",
+                 scene.node_count, scene.tri_count,
+                 static_cast<double>(scene_nodes_.size + scene_tris_.size +
+                                     scene_tri_mats_.size +
+                                     scene_materials_.size) /
+                     (1024.0 * 1024.0));
+    return true;
+}
+
+void SharcGpuExecutor::set_scene_floor(bool enabled, float floor_y) {
+    if (enabled) scene_flags_ |= kSharcSceneFloor;
+    else         scene_flags_ &= ~kSharcSceneFloor;
+    floor_y_ = floor_y;
+    if (initialized_) write_params_();
+}
+
+void SharcGpuExecutor::set_scene_far(float ray_far) {
+    scene_ray_far_ = ray_far;
+    if (initialized_) write_params_();
 }
 
 bool SharcGpuExecutor::initialize(VulkanContext& vk,
@@ -169,7 +310,13 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
         !create_buffer_(shade_, VkDeviceSize{config_.max_rays} *
                         sizeof(SharcShadeRequestGpu), ssbo) ||
         !create_buffer_(output_, VkDeviceSize{config_.max_rays} *
-                        4 * sizeof(float), ssbo)) {
+                        4 * sizeof(float), ssbo) ||
+        // シーンバッファは upload_scene まではプレースホルダ (descriptor の
+        // 有効性のため最小サイズで確保しておく)
+        !create_buffer_(scene_nodes_, 32, ssbo) ||
+        !create_buffer_(scene_tris_, 48, ssbo) ||
+        !create_buffer_(scene_tri_mats_, 16, ssbo) ||
+        !create_buffer_(scene_materials_, 32, ssbo)) {
         std::fprintf(stderr, "[sharc] buffer creation failed\n");
         shutdown();
         return false;
@@ -202,8 +349,9 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
         return false;
     }
 
-    // ── compute pipelines (4 パス) ──
-    if (!create_pass_(march_,   shader_dir + "/sharc_march.comp.spv") ||
+    // ── compute pipelines (hit + 4 パス) ──
+    if (!create_pass_(hit_,     shader_dir + "/sharc_hit.comp.spv") ||
+        !create_pass_(march_,   shader_dir + "/sharc_march.comp.spv") ||
         !create_pass_(compact_, shader_dir + "/sharc_compact.comp.spv") ||
         !create_pass_(update_,  shader_dir + "/sharc_update.comp.spv") ||
         !create_pass_(resolve_, shader_dir + "/sharc_resolve.comp.spv")) {
@@ -237,7 +385,8 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
     const Buffer* ordered[kBindingCount] = {
         &params_, &keys_, &cells_, &rays_, &hits_, &counters_, &requests_,
         &stamps_, &indirect_, &lights_, &reservoirs_, &cell_pos_, &shade_,
-        &output_,
+        &output_, &scene_nodes_, &scene_tris_, &scene_tri_mats_,
+        &scene_materials_,
     };
     VkDescriptorBufferInfo infos[kBindingCount]{};
     VkWriteDescriptorSet writes[kBindingCount]{};
@@ -320,6 +469,19 @@ void SharcGpuExecutor::record(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
                             0, 1, &desc_set_, 0, nullptr);
 
+    // ── Pass 0: Hit (GPU 一次交差、 シーンアップロード済みの時のみ) ──
+    if ((scene_flags_ & kSharcSceneMesh) != 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, hit_.pipeline);
+        vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
+        // hit の rays.tMax / shade 書き込み → march / resolve の読み取り
+        barrier_(cmd, rays_.buf, VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        barrier_(cmd, shade_.buf, VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
+
     // ── Pass 1: March (レイ並列) ──
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, march_.pipeline);
     vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
@@ -364,7 +526,7 @@ void SharcGpuExecutor::shutdown() {
 #ifdef PICTOR_HAS_VULKAN
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
-        for (Pass* p : {&march_, &compact_, &update_, &resolve_}) {
+        for (Pass* p : {&hit_, &march_, &compact_, &update_, &resolve_}) {
             if (p->pipeline) vkDestroyPipeline(device_, p->pipeline, nullptr);
             p->pipeline = VK_NULL_HANDLE;
         }
@@ -378,7 +540,8 @@ void SharcGpuExecutor::shutdown() {
         for (Buffer* b : {&params_, &keys_, &cells_, &rays_, &hits_,
                           &counters_, &requests_, &stamps_, &indirect_,
                           &lights_, &reservoirs_, &cell_pos_, &shade_,
-                          &output_}) {
+                          &output_, &scene_nodes_, &scene_tris_,
+                          &scene_tri_mats_, &scene_materials_}) {
             destroy_buffer_(*b);
         }
         device_ = VK_NULL_HANDLE;
