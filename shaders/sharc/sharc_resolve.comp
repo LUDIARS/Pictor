@@ -1,0 +1,124 @@
+// Pictor — SHaRC 拡張 Pass 4: Resolve
+//
+// キャッシュ参照のみでシェーディングを閉じる (decoupled shading, spec §1/§3)。
+// レイごとのシェーディング要求 (ヒット点 / 法線 / roughness / MFP / albedo) に
+// 対して:
+//   拡散   = 層1 モーメント (φ/4 + E·n/2)
+//   鏡面   = 層2 vMF/SG ローブ × GGX-SG 閉形式 (パララックス再照準込み)
+//   SSS    = MFP 選択レベルの近傍 M0/M1 ギャザー (Burley profile)
+// を合成して出力バッファへ書く。 マーチ/シェーディング中に新規レイは撃たない。
+//
+// dispatch: (rayCount / 64, 1, 1)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#define SHARC_SET 0
+#include "sharc_common.glsl"
+#include "sharc_moments.glsl"
+#include "sharc_lobes.glsl"
+
+// シェーディング要求 (1 レイ = 1 サーフェスヒット)
+struct SharcShadeRequest {
+    vec4 posRough;     // xyz = ヒット点, w = roughness
+    vec4 normalMfp;    // xyz = 法線 (外向き), w = SSS MFP (0 = SSS 無効)
+    vec4 albedoView;   // rgb = albedo, a = 予約
+    vec4 viewDir;      // xyz = ヒット点→カメラ方向, w = 予約
+};
+
+layout(std430, set = SHARC_SET, binding = 12) readonly buffer SharcShadeRequests {
+    SharcShadeRequest gpu_sharc_shade[];
+};
+
+// 出力放射輝度 (rgb) + a = キャッシュヒット率 (デバッグ HUD 用)
+layout(std430, set = SHARC_SET, binding = 13) writeonly buffer SharcOutput {
+    vec4 gpu_sharc_output[];
+};
+
+void main() {
+    uint rayIdx = gl_GlobalInvocationID.x;
+    if (rayIdx >= sharcRayCount) return;
+
+    SharcShadeRequest req = gpu_sharc_shade[rayIdx];
+    vec3  pos       = req.posRough.xyz;
+    float roughness = req.posRough.w;
+    vec3  n         = normalize(req.normalMfp.xyz);
+    float mfp       = req.normalMfp.w;
+    vec3  albedo    = req.albedoView.rgb;
+    vec3  v         = normalize(req.viewDir.xyz);
+
+    // march はセル入口点の距離でレベルを選ぶため、 ヒット点の距離と
+    // レベル境界を跨いでずれることがある。 ±1 レベルで救済して
+    // キャッシュミス (黒斑点) を防ぐ。
+    // レベルは march のヒット点近傍登録と同一式で選択。 ±1 の救済は
+    // 8 近傍が全滅した場合のみ (通常は march が近傍を温めている)。
+    uint levelBase = sharcLevelFromDistance(distance(pos, sharcCameraPos.xyz));
+
+    vec3 radiance = vec3(0.0);
+    float hit = 0.0;
+
+    // --- 拡散 + 鏡面: 8 近傍セルのトライリニア補間評価 ---
+    // 単一セル参照はセル境界がフラットシェーディングの切れ目として見える。
+    // セル中心を格子点とみなし、 周囲 2x2x2 セルを重み付きで評価して
+    // 未確保セルは重み再正規化で落とす。
+    float ndv = max(dot(n, v), SHARC_EPSILON);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+
+    for (uint attempt = 0u; attempt < 3u && hit == 0.0; attempt++) {
+        // attempt 0: levelBase / 1: levelBase-1 / 2: levelBase+1
+        uint level = levelBase;
+        if (attempt == 1u) {
+            if (levelBase == 0u) continue;
+            level = levelBase - 1u;
+        } else if (attempt == 2u) {
+            if (levelBase + 1u >= sharcLevelCount) continue;
+            level = levelBase + 1u;
+        }
+
+        float cell = sharcCellSize(level);
+        vec3 gpos = pos / cell - 0.5;
+        ivec3 base = ivec3(floor(gpos));
+        vec3 f = gpos - vec3(base);
+
+        vec3 acc = vec3(0.0);
+        float wSum = 0.0;
+        for (int c = 0; c < 8; c++) {
+            ivec3 offs = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
+            ivec3 grid = base + offs;
+            uint slot = sharcFindSlot(grid, level);
+            if (slot == SHARC_SLOT_INVALID) continue;
+
+            vec3 w3 = mix(1.0 - f, f, vec3(offs));
+            float w = w3.x * w3.y * w3.z;
+            if (w <= 1e-4) continue;
+
+            // 拡散 (層1 モーメント)
+            vec3 m0, m1Dir, m1Mag; float conf;
+            sharcLoadMoments(slot, m0, m1Dir, m1Mag, conf);
+            vec3 sample_ = albedo * SHARC_INV_PI
+                         * sharcDiffuseIrradiance(m0, m1Dir, m1Mag, n);
+
+            // 鏡面 (層2 ローブ、 セルごとの中心で再照準)
+            vec3 cellCenter = sharcCellCenter(grid, level);
+            sample_ += fresnel * sharcSpecularEvaluate(slot, cellCenter, pos,
+                                                       n, v, roughness);
+
+            acc  += sample_ * w;
+            wSum += w;
+        }
+        if (wSum > 1e-4) {
+            radiance += acc / wSum;
+            hit = 1.0;
+        }
+    }
+
+    // --- SSS (層1, MFP レベルのギャザー) ---
+    if (mfp > 0.0) {
+        vec3 sss = sharcSssGather(pos, n, mfp, sharcLuminance(albedo));
+        radiance += albedo * sss;
+    }
+
+    gpu_sharc_output[rayIdx] = vec4(radiance, hit);
+}

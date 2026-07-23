@@ -12,3 +12,8 @@ compile_commands.json
 # zip) due to size. Keep them local to the working copy only.
 Art/
 .anatomia/
+
+# SHaRC demo scan/scene assets — fetched locally via
+# tools/download_sharc_demo_assets.py, never committed.
+demo/assets/
+
