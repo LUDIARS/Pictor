@@ -1,0 +1,228 @@
+// Pictor — SHaRC 拡張 Pass 0: Hit (GPU レイ生成 + 一次交差)
+//
+// CPU 側 BVH トレースの置き換え。 RT 拡張 (ray query) を使わず、
+// フラット BVH (DoD 配列そのままの SSBO) を compute で辿る —
+// Pascal 世代 (RT 拡張なし) と CI の両方で動く。 RT コア版は
+// SHARC_RAY_QUERY の将来枝 (spec §3)。
+//
+//   入力: カメラ基底 (UBO) — レイは画素 index から GPU 上で生成する。
+//         CPU からのレイ転送・読み戻しはなし (全 GPU 経路)。
+//   出力: rays[] (march 用、 tMax = 実ヒット距離)
+//         shade[] (位置 / 法線 / マテリアル / 視線)
+//
+// BVH 規約は demo/sharc/mesh_bvh.cpp と同一: 左子 = 自ノード + 1、
+// 葉は tri 開始 index + 数。 三角形は葉順に並べ替え済み (連続参照)。
+//
+// dispatch: (rayCount / 64, 1, 1)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#define SHARC_SET 0
+#include "sharc_common.glsl"
+
+struct SharcRay {
+    vec4 originTMin;   // xyz = 原点, w = tMin
+    vec4 dirTMax;      // xyz = 方向 (正規化), w = tMax (hit で更新)
+};
+
+layout(std430, set = SHARC_SET, binding = 3) writeonly buffer SharcRays {
+    SharcRay gpu_sharc_rays[];
+};
+
+struct SharcShadeRequest {
+    vec4 posRough;     // xyz = ヒット点, w = roughness
+    vec4 normalMfp;    // xyz = 法線 (外向き), w = SSS MFP (0 = SSS 無効)
+    vec4 albedoView;   // rgb = albedo, a = 予約
+    vec4 viewDir;      // xyz = ヒット点→カメラ方向, w = 予約
+};
+
+layout(std430, set = SHARC_SET, binding = 12) writeonly buffer SharcShadeRequests {
+    SharcShadeRequest gpu_sharc_shade[];
+};
+
+// ── GPU シーン (フラット DoD 配列) ──
+
+struct SharcBvhNode {
+    vec4 bminLeft;     // xyz = AABB min, w = uintBitsToFloat(left)
+    vec4 bmaxCount;    // xyz = AABB max, w = uintBitsToFloat(count)
+};
+
+layout(std430, set = SHARC_SET, binding = 14) readonly buffer SharcBvhNodes {
+    SharcBvhNode gpu_sharc_bvh[];
+};
+
+struct SharcTri {
+    vec4 v0;           // xyz = 頂点, w = uintBitsToFloat(oct32 法線 n0)
+    vec4 v1;           // w = n1
+    vec4 v2;           // w = n2
+    uvec4 colors;      // xyz = コーナー焼き込み色 (RGB8 リニア), w = 予約
+};
+
+vec3 sharcUnpackRgb8(uint c) {
+    return vec3(float(c & 0xFFu), float((c >> 8) & 0xFFu),
+                float((c >> 16) & 0xFFu)) * (1.0 / 255.0);
+}
+
+layout(std430, set = SHARC_SET, binding = 15) readonly buffer SharcTris {
+    SharcTri gpu_sharc_tris[];
+};
+
+layout(std430, set = SHARC_SET, binding = 16) readonly buffer SharcTriMats {
+    uint gpu_sharc_tri_mat[];
+};
+
+struct SharcMaterial {
+    vec4 albedoRough;  // rgb = albedo, a = roughness
+    vec4 mfpPad;       // x = SSS MFP
+};
+
+layout(std430, set = SHARC_SET, binding = 17) readonly buffer SharcMaterials {
+    SharcMaterial gpu_sharc_materials[];
+};
+
+// ============================================================
+// 交差
+// ============================================================
+
+bool sharcAabbHit(vec3 bmin, vec3 bmax, vec3 ro, vec3 invRd, float tmax) {
+    vec3 t0 = (bmin - ro) * invRd;
+    vec3 t1 = (bmax - ro) * invRd;
+    vec3 tlo = min(t0, t1);
+    vec3 thi = max(t0, t1);
+    float tEnter = max(max(tlo.x, tlo.y), max(tlo.z, 0.0));
+    float tExit  = min(min(thi.x, thi.y), min(thi.z, tmax));
+    return tEnter <= tExit;
+}
+
+// Möller–Trumbore。 ヒット時 t/u/v を返す。
+bool sharcTriHit(SharcTri tri, vec3 ro, vec3 rd, float tmax,
+                 out float outT, out float outU, out float outV) {
+    vec3 e1 = tri.v1.xyz - tri.v0.xyz;
+    vec3 e2 = tri.v2.xyz - tri.v0.xyz;
+    vec3 pv = cross(rd, e2);
+    float det = dot(e1, pv);
+    if (abs(det) < 1e-12) return false;
+    float invDet = 1.0 / det;
+    vec3 tv = ro - tri.v0.xyz;
+    float u = dot(tv, pv) * invDet;
+    if (u < 0.0 || u > 1.0) return false;
+    vec3 qv = cross(tv, e1);
+    float v = dot(rd, qv) * invDet;
+    if (v < 0.0 || u + v > 1.0) return false;
+    float t = dot(e2, qv) * invDet;
+    if (t <= 1e-4 || t >= tmax) return false;
+    outT = t; outU = u; outV = v;
+    return true;
+}
+
+void main() {
+    uint rayIdx = gl_GlobalInvocationID.x;
+    if (rayIdx >= sharcRayCount) return;
+    if ((sharcSceneFlags & SHARC_SCENE_MESH) == 0u) return;
+
+    // ── GPU レイ生成: 画素 index → カメラレイ (CPU 転送なし) ──
+    uint renderW = uint(sharcCamUp.w);
+    uint px = rayIdx % renderW;
+    uint py = rayIdx / renderW;
+    uint renderH = sharcRayCount / renderW;
+    float fovScale = sharcCamFwd.w;
+    float aspect   = sharcCamRight.w;
+    float u = (2.0 * (float(px) + 0.5) / float(renderW) - 1.0)
+            * fovScale * aspect;
+    float v = (1.0 - 2.0 * (float(py) + 0.5) / float(renderH)) * fovScale;
+    vec3 ro = sharcCameraPos.xyz;
+    vec3 rd = normalize(sharcCamFwd.xyz + sharcCamRight.xyz * u
+                        + sharcCamUp.xyz * v);
+    vec3 invRd = 1.0 / vec3(
+        abs(rd.x) > 1e-12 ? rd.x : 1e-12,
+        abs(rd.y) > 1e-12 ? rd.y : 1e-12,
+        abs(rd.z) > 1e-12 ? rd.z : 1e-12);
+
+    // 初期 tMax は params の遠方値から取る (rays.tMax は前フレームの hit で
+    // 締まっているため、 それを初期値にすると等値棄却で自己ミスする)。
+    float best = sharcSceneRayFar;
+    uint bestTri = 0xFFFFFFFFu;
+    float bestU = 0.0, bestV = 0.0;
+
+    // ── BVH トラバーサル (私有スタック) ──
+    uint stack[48];
+    int sp = 0;
+    stack[sp++] = 0u;
+    while (sp > 0) {
+        uint ni = stack[--sp];
+        SharcBvhNode node = gpu_sharc_bvh[ni];
+        if (!sharcAabbHit(node.bminLeft.xyz, node.bmaxCount.xyz, ro, invRd,
+                          best)) {
+            continue;
+        }
+        uint count = floatBitsToUint(node.bmaxCount.w);
+        if (count > 0u) {
+            uint first = floatBitsToUint(node.bminLeft.w);
+            for (uint i = 0u; i < count; i++) {
+                float t, u, v;
+                if (sharcTriHit(gpu_sharc_tris[first + i], ro, rd, best,
+                                t, u, v)) {
+                    best = t;
+                    bestTri = first + i;
+                    bestU = u; bestV = v;
+                }
+            }
+        } else if (sp + 2 <= 48) {
+            stack[sp++] = floatBitsToUint(node.bminLeft.w);   // right
+            stack[sp++] = ni + 1u;                            // left
+        }
+    }
+
+    // ── 解析床 (D2 用チェッカー。 Bistro は実地面があるので flags off) ──
+    bool floorHit = false;
+    if ((sharcSceneFlags & SHARC_SCENE_FLOOR) != 0u && rd.y < -1e-5) {
+        float t = (sharcFloorY - ro.y) / rd.y;
+        if (t > 1e-4 && t < best) {
+            best = t;
+            bestTri = 0xFFFFFFFFu;
+            floorHit = true;
+        }
+    }
+
+    SharcShadeRequest req;
+    if (bestTri != 0xFFFFFFFFu) {
+        SharcTri tri = gpu_sharc_tris[bestTri];
+        vec3 pos = ro + rd * best;
+        float w = 1.0 - bestU - bestV;
+        vec3 n = normalize(
+            w * sharcOct32Decode(floatBitsToUint(tri.v0.w)) +
+            bestU * sharcOct32Decode(floatBitsToUint(tri.v1.w)) +
+            bestV * sharcOct32Decode(floatBitsToUint(tri.v2.w)));
+        if (dot(n, rd) > 0.0) n = -n;   // 裏面ヒット (逆光透過) は視線側へ
+        SharcMaterial mat = gpu_sharc_materials[gpu_sharc_tri_mat[bestTri]];
+        // albedo はコーナー焼き込み色 (map_Kd) の重心補間
+        vec3 albedo = w * sharcUnpackRgb8(tri.colors.x) +
+                      bestU * sharcUnpackRgb8(tri.colors.y) +
+                      bestV * sharcUnpackRgb8(tri.colors.z);
+        req.posRough   = vec4(pos, mat.albedoRough.a);
+        req.normalMfp  = vec4(n, mat.mfpPad.x);
+        req.albedoView = vec4(albedo, 0.0);
+        req.viewDir    = vec4(-rd, 0.0);
+    } else if (floorHit) {
+        vec3 pos = ro + rd * best;
+        int cx = int(floor(pos.x));
+        int cz = int(floor(pos.z));
+        float c = (((cx ^ cz) & 1) == 0) ? 0.55 : 0.30;
+        req.posRough   = vec4(pos, 0.35);
+        req.normalMfp  = vec4(0.0, 1.0, 0.0, 0.0);
+        req.albedoView = vec4(c, c, c, 0.0);
+        req.viewDir    = vec4(-rd, 0.0);
+    } else {
+        // ミス: albedo 0 → 出力 0 (空)。 march はセルを温める
+        req.posRough   = vec4(0.0, 0.0, 0.0, 1.0);
+        req.normalMfp  = vec4(0.0, 1.0, 0.0, 0.0);
+        req.albedoView = vec4(0.0);
+        req.viewDir    = vec4(0.0, 1.0, 0.0, 0.0);
+    }
+    gpu_sharc_shade[rayIdx] = req;
+    // march 用レイを書き出す (tMax = 実ヒット距離で区間を締める)
+    gpu_sharc_rays[rayIdx] = SharcRay(vec4(ro, 0.0), vec4(rd, best));
+}
