@@ -17,10 +17,13 @@ layout(push_constant) uniform PresentParams {
     uint  renderWidth;
     uint  renderHeight;
     float exposure;
-    float pad0;
+    float albedoMode;   // > 0.5 = アルベド素通し (gamma のみ、 露出なし)
 };
 
 vec3 tonemap(vec3 hdr) {
+    if (albedoMode > 0.5) {
+        return pow(max(hdr, vec3(0.0)), vec3(1.0 / 2.2));
+    }
     vec3 v = max(hdr * exposure, vec3(0.0));
     v = v / (1.0 + v);
     return pow(v, vec3(1.0 / 2.2));

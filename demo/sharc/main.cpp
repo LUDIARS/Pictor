@@ -230,6 +230,8 @@ Vec3 g_prop_back{0.0f, 0.0f, -1.0f};   // head からカメラと反対向き (�
 bool g_has_prop = false;
 Vec3 g_scene_target{0.0f, 1.0f, 0.0f}; // B キー復帰用 (シーン既定ターゲット)
 float g_scene_dist = 10.0f;
+bool  g_albedo_view = false;           // T: アルベド素通し (リファレンス比較)
+float g_fov_deg = 60.0f;               // F/G で増減
 
 void mouse_button_cb(GLFWwindow* w, int button, int action, int) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
@@ -271,6 +273,43 @@ void key_cb(GLFWwindow* w, int key, int, int action, int) {
         g_orbit.dist  = g_scene_dist * 1.5f;
         g_orbit.pitch = 0.55f;
         std::printf("[cam] preset: scene overview\n");
+    }
+    if (key == GLFW_KEY_T) {
+        g_albedo_view = !g_albedo_view;
+        std::printf("[cam] albedo view: %s\n", g_albedo_view ? "on" : "off");
+    }
+    if (key == GLFW_KEY_V) {
+        // ORCA 公式スクリーンショット Bistro_Exterior_1.png と同構図
+        // (カフェ角 Le Petit Coin、 手動合わせ込み値)
+        g_target = {-0.48f, 2.08f, -0.30f};
+        g_orbit.yaw   = 3.75f;
+        g_orbit.pitch = 0.40f;
+        g_orbit.dist  = 15.22f;
+        g_fov_deg     = 60.0f;
+        std::printf("[cam] preset: reference (Bistro_Exterior_1)\n");
+    }
+    // ── リファレンス合わせ込み用ナッジ (P で現在値をプリント) ──
+    const float fwd_x = std::sin(g_orbit.yaw);
+    const float fwd_z = std::cos(g_orbit.yaw);
+    if (key == GLFW_KEY_LEFT)  g_orbit.yaw   -= 0.05f;
+    if (key == GLFW_KEY_RIGHT) g_orbit.yaw   += 0.05f;
+    if (key == GLFW_KEY_UP)    g_orbit.pitch = std::min(g_orbit.pitch + 0.03f, 1.5f);
+    if (key == GLFW_KEY_DOWN)  g_orbit.pitch = std::max(g_orbit.pitch - 0.03f, 0.02f);
+    if (key == GLFW_KEY_PAGE_UP)   g_orbit.dist = std::max(g_orbit.dist * 0.9f, g_orbit.dist_min);
+    if (key == GLFW_KEY_PAGE_DOWN) g_orbit.dist = std::min(g_orbit.dist * 1.1f, g_orbit.dist_max);
+    if (key == GLFW_KEY_I) { g_target.x -= fwd_x; g_target.z -= fwd_z; }
+    if (key == GLFW_KEY_K) { g_target.x += fwd_x; g_target.z += fwd_z; }
+    if (key == GLFW_KEY_J) { g_target.x -= fwd_z; g_target.z += fwd_x; }
+    if (key == GLFW_KEY_M) { g_target.x += fwd_z; g_target.z -= fwd_x; }
+    if (key == GLFW_KEY_U) g_target.y += 0.5f;
+    if (key == GLFW_KEY_O) g_target.y -= 0.5f;
+    if (key == GLFW_KEY_F) g_fov_deg = std::max(g_fov_deg - 5.0f, 20.0f);
+    if (key == GLFW_KEY_G) g_fov_deg = std::min(g_fov_deg + 5.0f, 110.0f);
+    if (key == GLFW_KEY_P) {
+        std::printf("[cam] target=(%.2f %.2f %.2f) yaw=%.3f pitch=%.3f "
+                    "dist=%.2f fov=%.0f\n",
+                    g_target.x, g_target.y, g_target.z, g_orbit.yaw,
+                    g_orbit.pitch, g_orbit.dist, g_fov_deg);
     }
 }
 
@@ -660,11 +699,11 @@ int main(int argc, char** argv) {
         //    カメラ静止中は 92 万レイ × BVH の CPU 再トレースを丸ごと省き、
         //    フレームを GPU 4 パス + 読み戻しのみにする (最大の軽量化)。
         const Vec3 target = g_target;
-        static float prev_cam[6] = {1e30f, 0, 0, 0, 0, 0};
-        const float cam_now[6] = {g_orbit.yaw, g_orbit.pitch, g_orbit.dist,
-                                  target.x, target.y, target.z};
+        static float prev_cam[7] = {1e30f, 0, 0, 0, 0, 0, 0};
+        const float cam_now[7] = {g_orbit.yaw, g_orbit.pitch, g_orbit.dist,
+                                  target.x, target.y, target.z, g_fov_deg};
         bool scene_dirty = false;
-        for (int a = 0; a < 6; ++a) {
+        for (int a = 0; a < 7; ++a) {
             if (cam_now[a] != prev_cam[a]) { scene_dirty = true; break; }
         }
         std::memcpy(prev_cam, cam_now, sizeof(cam_now));
@@ -675,7 +714,7 @@ int main(int argc, char** argv) {
         const Vec3 fwd   = norm(target - eye);
         const Vec3 right = norm(cross(fwd, Vec3{0, 1, 0}));
         const Vec3 up    = cross(right, fwd);
-        const float fov_scale = std::tan(0.5f * 60.0f * 3.14159265f / 180.0f);
+        const float fov_scale = std::tan(0.5f * g_fov_deg * 3.14159265f / 180.0f);
         const float aspect = static_cast<float>(kRenderW) /
                              static_cast<float>(kRenderH);
 
@@ -797,6 +836,7 @@ int main(int argc, char** argv) {
             for (auto& th : workers) th.join();
             sharc.commit_cpu_geometry();   // staging → 本体は次の record()
         }
+        sharc.set_albedo_view(g_albedo_view);
         sharc.set_camera(float3{fwd.x, fwd.y, fwd.z},
                          float3{right.x, right.y, right.z},
                          float3{up.x, up.y, up.z}, fov_scale, aspect,
@@ -838,7 +878,8 @@ int main(int argc, char** argv) {
         rp.pClearValues    = &clear;
         vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
         present.render(cmd, ext, static_cast<uint32_t>(kRenderW),
-                       static_cast<uint32_t>(kRenderH), kExposure);
+                       static_cast<uint32_t>(kRenderH), kExposure,
+                       g_albedo_view);
         vkCmdEndRenderPass(cmd);
         vkEndCommandBuffer(cmd);
 

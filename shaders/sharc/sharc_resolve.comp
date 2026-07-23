@@ -49,6 +49,14 @@ void main() {
     vec3  albedo    = req.albedoView.rgb;
     vec3  v         = normalize(req.viewDir.xyz);
 
+    // アルベドビュー: ライティングを一切載せずテクスチャ色を素通しする
+    // (リファレンス画像との「同カメラ・同色」検証用。 present 側も
+    //  Reinhard/露出を飛ばして gamma のみになる)
+    if ((sharcSceneFlags & SHARC_SCENE_ALBEDO) != 0u) {
+        gpu_sharc_output[rayIdx] = vec4(albedo, 1.0);
+        return;
+    }
+
     // march はセル入口点の距離でレベルを選ぶため、 ヒット点の距離と
     // レベル境界を跨いでずれることがある。 ±1 レベルで救済して
     // キャッシュミス (黒斑点) を防ぐ。

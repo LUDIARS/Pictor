@@ -297,6 +297,12 @@ void SharcGpuExecutor::set_scene_far(float ray_far) {
     if (initialized_) write_params_();
 }
 
+void SharcGpuExecutor::set_albedo_view(bool enabled) {
+    if (enabled) scene_flags_ |= kSharcSceneAlbedo;
+    else         scene_flags_ &= ~kSharcSceneAlbedo;
+    if (initialized_) write_params_();
+}
+
 void SharcGpuExecutor::destroy_atlas_() {
     if (atlas_view_)  vkDestroyImageView(device_, atlas_view_, nullptr);
     if (atlas_image_) vkDestroyImage(device_, atlas_image_, nullptr);

@@ -178,7 +178,7 @@ bool PresentRenderer::initialize(pictor::VulkanContext& vk,
 
 void PresentRenderer::render(VkCommandBuffer cmd, VkExtent2D extent,
                              uint32_t render_w, uint32_t render_h,
-                             float exposure) {
+                             float exposure, bool albedo_mode) {
     if (!initialized_) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0,
@@ -188,7 +188,7 @@ void PresentRenderer::render(VkCommandBuffer cmd, VkExtent2D extent,
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    PushParams pc{render_w, render_h, exposure, 0.0f};
+    PushParams pc{render_w, render_h, exposure, albedo_mode ? 1.0f : 0.0f};
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);

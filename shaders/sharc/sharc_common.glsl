@@ -89,8 +89,9 @@ layout(set = SHARC_SET, binding = 0) uniform SharcParams {
     vec4  sharcCamUp;          // xyz = 上, w = レンダリング幅 (float)
 };
 
-const uint SHARC_SCENE_MESH  = 1u;
-const uint SHARC_SCENE_FLOOR = 2u;
+const uint SHARC_SCENE_MESH   = 1u;
+const uint SHARC_SCENE_FLOOR  = 2u;
+const uint SHARC_SCENE_ALBEDO = 4u;   // アルベド素通し (ライティング検証用)
 
 // ============================================================
 // ハッシュテーブル / セルストレージ SSBO
