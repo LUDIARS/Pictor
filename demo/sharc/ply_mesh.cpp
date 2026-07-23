@@ -214,11 +214,38 @@ PlyMesh load_ply(const std::string& path) {
         mesh = PlyMesh{};
         return mesh;
     }
-    accumulate_normals(mesh);
-    compute_bounds(mesh);
+    finalize_mesh(mesh);
     std::fprintf(stderr, "[ply] loaded %s: %zu verts, %zu tris\n",
                  path.c_str(), mesh.positions.size(), mesh.triangles.size());
     return mesh;
+}
+
+void finalize_mesh(PlyMesh& mesh) {
+    accumulate_normals(mesh);
+    compute_bounds(mesh);
+}
+
+void scale_mesh(PlyMesh& mesh, float scale) {
+    if (mesh.empty()) return;
+    for (auto& p : mesh.positions) {
+        p[0] *= scale;
+        p[1] *= scale;
+        p[2] *= scale;
+    }
+    compute_bounds(mesh);
+}
+
+void recenter_mesh(PlyMesh& mesh) {
+    if (mesh.empty()) return;
+    const float cx = 0.5f * (mesh.bounds_min[0] + mesh.bounds_max[0]);
+    const float cz = 0.5f * (mesh.bounds_min[2] + mesh.bounds_max[2]);
+    const float y0 = mesh.bounds_min[1];
+    for (auto& p : mesh.positions) {
+        p[0] -= cx;
+        p[1] -= y0;
+        p[2] -= cz;
+    }
+    compute_bounds(mesh);
 }
 
 void fit_mesh(PlyMesh& mesh, float target_extent) {

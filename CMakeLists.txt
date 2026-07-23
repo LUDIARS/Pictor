@@ -424,6 +424,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         add_executable(pictor_sharc_demo
             demo/sharc/main.cpp
             demo/sharc/ply_mesh.cpp
+            demo/sharc/obj_mesh.cpp
             demo/sharc/mesh_bvh.cpp
             demo/texture2d/texture2d_renderer.cpp
         )

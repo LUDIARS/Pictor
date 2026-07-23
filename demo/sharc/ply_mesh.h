@@ -16,10 +16,21 @@
 
 namespace sharc_demo {
 
+/// メッシュのマテリアル (OBJ/MTL 由来。 テクスチャは未対応 — Kd/Ns のみ)。
+struct PlyMaterial {
+    std::array<float, 3> albedo{0.75f, 0.75f, 0.75f};
+    float roughness = 0.6f;
+};
+
 struct PlyMesh {
     std::vector<std::array<float, 3>> positions;
     std::vector<std::array<float, 3>> normals;    ///< 頂点スムーズ法線
     std::vector<std::array<uint32_t, 3>> triangles;
+
+    /// materials が空 = 呼び出し側の単一マテリアル (PLY 経路)。
+    /// 非空なら tri_material が triangles と同数で対応する。
+    std::vector<PlyMaterial> materials;
+    std::vector<uint32_t>    tri_material;
 
     std::array<float, 3> bounds_min{};
     std::array<float, 3> bounds_max{};
@@ -31,8 +42,18 @@ struct PlyMesh {
 /// 失敗時は empty() な PlyMesh (理由は stderr へ)。
 PlyMesh load_ply(const std::string& path);
 
+/// 位置 + 三角形が入ったメッシュのスムーズ法線と AABB を計算する
+/// (各ローダの後処理共通部)。
+void finalize_mesh(PlyMesh& mesh);
+
 /// メッシュを一様スケール + 平行移動する (デモのワールド配置用)。
 /// target_extent = 最大軸の長さ (m)、 底面 y=0 / x=z=0 中心に置く。
 void fit_mesh(PlyMesh& mesh, float target_extent);
+
+/// スケールせず平行移動のみ (実寸シーン用): 底面 y=0 / x=z 重心を原点へ。
+void recenter_mesh(PlyMesh& mesh);
+
+/// 一様スケールのみ (単位系変換用、 例: cm → m は 0.01)。
+void scale_mesh(PlyMesh& mesh, float scale);
 
 }  // namespace sharc_demo

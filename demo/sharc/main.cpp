@@ -6,6 +6,8 @@
 ///   D2 (引数に PLY): スキャンモデル + 背面光源 (逆光)
 ///     検証対象: SSS の screen-space 破綻ケース (画面外光源動線)
 ///     例: pictor_sharc_demo ../demo/assets/sharc/dragon/dragon_recon/dragon_vrip_res2.ply
+///   Hero (引数に OBJ): Bistro クレイレンダ (MTL Kd/Ns のみ、 テクスチャ未対応)
+///     例: pictor_sharc_demo ../demo/assets/sharc/bistro/Exterior/exterior.obj
 ///
 /// 構成 (decoupled shading の最小配線):
 ///   1. CPU が低解像度グリッドの一次レイを解析交差 (球 / 床 / メッシュ BVH)
@@ -25,6 +27,7 @@
 #include "pictor/surface/glfw_surface_provider.h"
 #include "texture2d_renderer.h"
 #include "mesh_bvh.h"
+#include "obj_mesh.h"
 #include "ply_mesh.h"
 #include <GLFW/glfw3.h>
 
@@ -73,7 +76,9 @@ constexpr int   kSphereCount = 8;
 constexpr float kFloorY      = 0.0f;
 constexpr int   kRenderW     = 320;
 constexpr int   kRenderH     = 180;
-constexpr float kRayTMax     = 40.0f;
+
+// シーンモードで変わる範囲 (D1/D2 = 40m、 Bistro = 250m)
+float g_ray_tmax = 40.0f;
 
 std::vector<Sphere> build_scene() {
     std::vector<Sphere> s;
@@ -99,11 +104,12 @@ struct HitInfo {
     float mfp = 0.0f;
 };
 
-/// D2 メッシュシーン (PLY 指定時のみ使用)。
+/// メッシュシーン (D2: PLY / Bistro: OBJ)。
 struct MeshScene {
     sharc_demo::PlyMesh mesh;
     sharc_demo::MeshBvh bvh;
-    bool active = false;
+    bool active    = false;
+    bool use_floor = false;   ///< PLY (単体モデル) のみチェッカー床を敷く
 };
 
 // D2: 翡翠風 SSS マテリアル (MFP はワールドスケール、 fit 後 3m モデル基準)
@@ -128,7 +134,7 @@ bool ray_sphere(Vec3 ro, Vec3 rd, const Sphere& s, float& t) {
 HitInfo trace_scene(Vec3 ro, Vec3 rd, const std::vector<Sphere>& scene,
                     const MeshScene& mesh_scene) {
     HitInfo hit;
-    float best = kRayTMax;
+    float best = g_ray_tmax;
     if (mesh_scene.active) {
         const float o[3] = {ro.x, ro.y, ro.z};
         const float d[3] = {rd.x, rd.y, rd.z};
@@ -138,9 +144,19 @@ HitInfo trace_scene(Vec3 ro, Vec3 rd, const std::vector<Sphere>& scene,
             hit.t = mh.t;
             hit.pos = ro + rd * mh.t;
             hit.normal = {mh.normal[0], mh.normal[1], mh.normal[2]};
-            hit.albedo = kMeshAlbedo;
-            hit.roughness = kMeshRoughness;
-            hit.mfp = kMeshMfp;
+            if (!mesh_scene.mesh.materials.empty()) {
+                // OBJ: MTL 由来のマテリアル (Bistro クレイレンダ、 SSS なし)
+                const auto& m = mesh_scene.mesh.materials
+                    [mesh_scene.mesh.tri_material[mh.triangle]];
+                hit.albedo = {m.albedo[0], m.albedo[1], m.albedo[2]};
+                hit.roughness = m.roughness;
+                hit.mfp = 0.0f;
+            } else {
+                // PLY: 単一 SSS マテリアル (D2 逆光透過)
+                hit.albedo = kMeshAlbedo;
+                hit.roughness = kMeshRoughness;
+                hit.mfp = kMeshMfp;
+            }
         }
     }
     for (const auto& s : scene) {
@@ -155,8 +171,8 @@ HitInfo trace_scene(Vec3 ro, Vec3 rd, const std::vector<Sphere>& scene,
             hit.mfp = s.mfp;
         }
     }
-    // 床 (y = kFloorY, チェッカー albedo)
-    if (rd.y < -1e-5f) {
+    // 床 (y = kFloorY, チェッカー albedo)。 Bistro (OBJ) は実地面があるので省く
+    if ((!mesh_scene.active || mesh_scene.use_floor) && rd.y < -1e-5f) {
         float t = (kFloorY - ro.y) / rd.y;
         if (t > 1e-3f && t < best) {
             hit.t = t;
@@ -179,11 +195,13 @@ HitInfo trace_scene(Vec3 ro, Vec3 rd, const std::vector<Sphere>& scene,
 
 struct OrbitState {
     float yaw = 0.35f, pitch = 0.42f, dist = 10.0f;
+    float dist_min = 3.0f, dist_max = 30.0f;
     bool  dragging = false;
     double last_x = 0, last_y = 0;
     bool  light_anim = true;
 };
 OrbitState g_orbit;
+Vec3 g_target{0.0f, 1.0f, 0.0f};
 
 void mouse_button_cb(GLFWwindow* w, int button, int action, int) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
@@ -203,7 +221,7 @@ void cursor_pos_cb(GLFWwindow*, double x, double y) {
 
 void scroll_cb(GLFWwindow*, double, double dy) {
     g_orbit.dist = std::clamp(g_orbit.dist - static_cast<float>(dy) * 0.8f,
-                              3.0f, 30.0f);
+                              g_orbit.dist_min, g_orbit.dist_max);
 }
 
 void key_cb(GLFWwindow* w, int key, int, int action, int) {
@@ -228,31 +246,75 @@ uint8_t tonemap_channel(float v) {
 } // namespace
 
 int main(int argc, char** argv) {
-    // ── シーン選択: 引数に PLY があれば D2 (逆光透過)、 なければ D1 ──
+    // ── シーン選択: .ply = D2 (逆光透過) / .obj = Bistro / なし = D1 ──
     MeshScene mesh_scene;
+    bool obj_scene = false;
+    std::string title = "Pictor SHaRC D1 - Roughness Ladder";
     if (argc > 1) {
-        mesh_scene.mesh = sharc_demo::load_ply(argv[1]);
+        const std::string path = argv[1];
+        obj_scene = (path.size() > 4 &&
+                     path.compare(path.size() - 4, 4, ".obj") == 0);
+        if (obj_scene) {
+            mesh_scene.mesh = sharc_demo::load_obj(path);
+        } else {
+            mesh_scene.mesh = sharc_demo::load_ply(path);
+        }
         if (mesh_scene.mesh.empty()) {
-            std::fprintf(stderr, "[init] FATAL: PLY load failed: %s\n",
+            std::fprintf(stderr, "[init] FATAL: mesh load failed: %s\n",
                          argv[1]);
             return 1;
         }
-        sharc_demo::fit_mesh(mesh_scene.mesh, 3.0f);
+        if (obj_scene) {
+            auto& m = mesh_scene.mesh;
+            // 単位系検出: extent が 1km 超なら cm 単位とみなして m へ変換
+            // (Bistro Exterior は extent ≈ 11,526 = cm、 実寸 ≈ 115m)。
+            float extent = 0.0f;
+            for (int a = 0; a < 3; ++a) {
+                extent = std::max(extent, m.bounds_max[a] - m.bounds_min[a]);
+            }
+            if (extent > 1000.0f) {
+                sharc_demo::scale_mesh(m, 0.01f);
+                extent *= 0.01f;
+                std::fprintf(stderr, "[scene] assumed cm units, scaled x0.01\n");
+            }
+            // AABB はバックドロップ等の外れジオメトリで歪むため、 カメラ
+            // ターゲットは頂点重心 (= ジオメトリ密度の中心 ≒ 街路部) に置く。
+            double cx = 0.0, cy = 0.0, cz = 0.0;
+            for (const auto& p : m.positions) {
+                cx += p[0]; cy += p[1]; cz += p[2];
+            }
+            const double inv = 1.0 / static_cast<double>(m.positions.size());
+            g_target = {static_cast<float>(cx * inv),
+                        static_cast<float>(cy * inv),
+                        static_cast<float>(cz * inv)};
+            std::fprintf(stderr,
+                         "[scene] bounds (%.1f %.1f %.1f)-(%.1f %.1f %.1f) "
+                         "centroid (%.1f %.1f %.1f) extent %.1f\n",
+                         m.bounds_min[0], m.bounds_min[1], m.bounds_min[2],
+                         m.bounds_max[0], m.bounds_max[1], m.bounds_max[2],
+                         g_target.x, g_target.y, g_target.z, extent);
+            g_ray_tmax        = 400.0f;
+            g_orbit.dist      = 30.0f;
+            g_orbit.dist_min  = 5.0f;
+            g_orbit.dist_max  = 200.0f;
+            g_orbit.pitch     = 0.35f;
+            title = "Pictor SHaRC Hero - Bistro (clay)";
+        } else {
+            sharc_demo::fit_mesh(mesh_scene.mesh, 3.0f);
+            mesh_scene.use_floor = true;
+            title = "Pictor SHaRC D2 - Backlit Transmission";
+        }
         mesh_scene.bvh.build(mesh_scene.mesh);
         mesh_scene.active = true;
     }
-    std::printf(mesh_scene.active
-                    ? "=== Pictor SHaRC Demo D2: Backlit Transmission ===\n"
-                    : "=== Pictor SHaRC Demo D1: Roughness Ladder ===\n");
+    std::printf("=== %s ===\n", title.c_str());
 
     // ── window + Vulkan ──
     GlfwSurfaceProvider surface;
     GlfwWindowConfig win_cfg;
     win_cfg.width  = 1280;
     win_cfg.height = 720;
-    win_cfg.title  = mesh_scene.active
-                         ? "Pictor SHaRC D2 - Backlit Transmission"
-                         : "Pictor SHaRC D1 - Roughness Ladder";
+    win_cfg.title  = title;
     if (!surface.create(win_cfg)) {
         std::fprintf(stderr, "[init] FATAL: window creation failed\n");
         return 1;
@@ -269,6 +331,11 @@ int main(int argc, char** argv) {
     // ── SHaRC executor ──
     SharcConfig cfg;
     cfg.max_rays = kRenderW * kRenderH;
+    if (obj_scene) {
+        // 街路スケールは可視セル数が桁違い — テーブルを 262k slots へ拡張
+        // (線形走査の飽和 = 挿入失敗による黒領域を防ぐ)
+        cfg.table_size = 1u << 18;
+    }
     SharcGpuExecutor sharc;
     if (!sharc.initialize(vk, "shaders", cfg)) {
         std::fprintf(stderr, "[init] FATAL: SHaRC executor init failed\n");
@@ -326,7 +393,7 @@ int main(int argc, char** argv) {
         if (g_orbit.light_anim) light_time += dt;
 
         // ── カメラ (orbit) ──
-        const Vec3 target{0.0f, 1.0f, 0.0f};
+        const Vec3 target = g_target;
         const Vec3 eye{
             target.x + g_orbit.dist * std::cos(g_orbit.pitch) * std::sin(g_orbit.yaw),
             target.y + g_orbit.dist * std::sin(g_orbit.pitch),
@@ -340,7 +407,16 @@ int main(int argc, char** argv) {
 
         sharc.begin_frame(float3{eye.x, eye.y, eye.z});
         auto* lights = sharc.lights_mapped();
-        if (mesh_scene.active) {
+        if (obj_scene) {
+            // ── Bistro: 高所の太陽light + 街路を漂う暖色光源 (ターゲット基準) ──
+            lights[0] = SharcLightGpu{
+                {target.x + 60.0f, target.y + 80.0f, target.z - 40.0f, 1.0f},
+                {1.0f, 0.92f, 0.8f, 9000.0f}};                       // 太陽風
+            const float lx = std::sin(light_time * 0.3f) * 8.0f;
+            lights[1] = SharcLightGpu{
+                {target.x + lx, target.y + 4.0f, target.z + 5.0f, 0.3f},
+                {1.0f, 0.7f, 0.4f, 300.0f}};                         // 街灯風
+        } else if (mesh_scene.active) {
             // ── D2: 背面光源 (逆光)。 カメラの反対側を横断し、 モデル越しの
             //    透過 (SSS) を見る。 画面外に出る動線も含む ──
             const Vec3 behind = norm(target - eye);
@@ -370,7 +446,7 @@ int main(int argc, char** argv) {
                 const float v = (1.0f - 2.0f * (y + 0.5f) / kRenderH) * fov_scale;
                 const Vec3 rd = norm(fwd + right * u + up * v);
                 const HitInfo hit = trace_scene(eye, rd, scene, mesh_scene);
-                const float tmax = (hit.t > 0.0f) ? hit.t : kRayTMax;
+                const float tmax = (hit.t > 0.0f) ? hit.t : g_ray_tmax;
 
                 rays[idx] = SharcRayGpu{{eye.x, eye.y, eye.z, 0.0f},
                                         {rd.x, rd.y, rd.z, tmax}};

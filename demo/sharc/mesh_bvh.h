@@ -15,8 +15,9 @@
 namespace sharc_demo {
 
 struct BvhHit {
-    float t = -1.0f;
-    float normal[3] = {0.0f, 1.0f, 0.0f};   ///< スムーズ法線 (重心補間)
+    float    t = -1.0f;
+    float    normal[3] = {0.0f, 1.0f, 0.0f};  ///< スムーズ法線 (重心補間)
+    uint32_t triangle = 0;                    ///< ヒット三角形 (マテリアル引き用)
     bool valid() const { return t > 0.0f; }
 };
 

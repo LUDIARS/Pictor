@@ -172,6 +172,7 @@ BvhHit MeshBvh::intersect(const float ro[3], const float rd[3],
 
                 best = t;
                 hit.t = t;
+                hit.triangle = tri;
                 const float w = 1.0f - u - v;
                 const auto& n0 = mesh_->normals[idx[0]];
                 const auto& n1 = mesh_->normals[idx[1]];
