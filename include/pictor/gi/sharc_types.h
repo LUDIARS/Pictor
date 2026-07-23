@@ -76,8 +76,9 @@ struct alignas(16) SharcParamsGpu {
 static_assert(sizeof(SharcParamsGpu) == 128, "GLSL SharcParams と一致させる");
 
 /// scene_flags (GLSL SHARC_SCENE_* と一致)。
-constexpr uint32_t kSharcSceneMesh  = 1u;
-constexpr uint32_t kSharcSceneFloor = 2u;
+constexpr uint32_t kSharcSceneMesh   = 1u;
+constexpr uint32_t kSharcSceneFloor  = 2u;
+constexpr uint32_t kSharcSceneAlbedo = 4u;   ///< アルベド素通し (検証用)
 
 // ============================================================
 // GPU シーン (hit パス) のレイアウト — sharc_hit.comp と一致

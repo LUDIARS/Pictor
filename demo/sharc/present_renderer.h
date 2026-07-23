@@ -35,8 +35,9 @@ public:
     void shutdown();
 
     /// render pass 内で呼ぶ。 レンダバッファ解像度と露出を push constant で渡す。
+    /// albedo_mode = true でアルベド素通し (gamma のみ、 露出/Reinhard なし)。
     void render(VkCommandBuffer cmd, VkExtent2D extent, uint32_t render_w,
-                uint32_t render_h, float exposure);
+                uint32_t render_h, float exposure, bool albedo_mode = false);
 
     bool is_initialized() const { return initialized_; }
 
@@ -45,7 +46,7 @@ private:
         uint32_t render_width;
         uint32_t render_height;
         float    exposure;
-        float    pad0;
+        float    albedo_mode;
     };
 
     VkShaderModule load_shader_(const char* path);
