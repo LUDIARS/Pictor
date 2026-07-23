@@ -1,11 +1,14 @@
-/// Pictor SHaRC 拡張デモ D1 — Roughness Ladder + 近接光源
+/// Pictor SHaRC 拡張デモ — D1 Roughness Ladder / D2 逆光透過
 ///
 /// spec: pictor-sharc-ext-design.md §6
-///   検証対象: 鏡面パララックス / 近接光源のハイライト肥大
-///   アセット: プロシージャル (roughness スイープの球 ×8 + 床)
+///   D1 (既定): roughness スイープ球 ×8 + 床 + 近接光源
+///     検証対象: 鏡面パララックス / 近接光源のハイライト肥大
+///   D2 (引数に PLY): スキャンモデル + 背面光源 (逆光)
+///     検証対象: SSS の screen-space 破綻ケース (画面外光源動線)
+///     例: pictor_sharc_demo ../demo/assets/sharc/dragon/dragon_recon/dragon_vrip_res2.ply
 ///
 /// 構成 (decoupled shading の最小配線):
-///   1. CPU が低解像度グリッドの一次レイを球 / 床と解析交差
+///   1. CPU が低解像度グリッドの一次レイを解析交差 (球 / 床 / メッシュ BVH)
 ///      → SharcRay + SharcShadeRequest を mapped 直書き
 ///   2. SharcGpuExecutor が 4 パス (march/compact/update/resolve) を dispatch
 ///   3. 解決済み放射輝度を読み戻し → トーンマップ → Texture2DRenderer で表示
@@ -21,6 +24,8 @@
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 #include "texture2d_renderer.h"
+#include "mesh_bvh.h"
+#include "ply_mesh.h"
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
@@ -94,6 +99,18 @@ struct HitInfo {
     float mfp = 0.0f;
 };
 
+/// D2 メッシュシーン (PLY 指定時のみ使用)。
+struct MeshScene {
+    sharc_demo::PlyMesh mesh;
+    sharc_demo::MeshBvh bvh;
+    bool active = false;
+};
+
+// D2: 翡翠風 SSS マテリアル (MFP はワールドスケール、 fit 後 3m モデル基準)
+constexpr float kMeshMfp       = 0.08f;
+constexpr float kMeshRoughness = 0.35f;
+const Vec3      kMeshAlbedo{0.35f, 0.68f, 0.45f};
+
 bool ray_sphere(Vec3 ro, Vec3 rd, const Sphere& s, float& t) {
     Vec3 oc = ro - s.center;
     float b = dot(oc, rd);
@@ -108,9 +125,24 @@ bool ray_sphere(Vec3 ro, Vec3 rd, const Sphere& s, float& t) {
     return false;
 }
 
-HitInfo trace_scene(Vec3 ro, Vec3 rd, const std::vector<Sphere>& scene) {
+HitInfo trace_scene(Vec3 ro, Vec3 rd, const std::vector<Sphere>& scene,
+                    const MeshScene& mesh_scene) {
     HitInfo hit;
     float best = kRayTMax;
+    if (mesh_scene.active) {
+        const float o[3] = {ro.x, ro.y, ro.z};
+        const float d[3] = {rd.x, rd.y, rd.z};
+        const auto mh = mesh_scene.bvh.intersect(o, d, best);
+        if (mh.valid()) {
+            best = mh.t;
+            hit.t = mh.t;
+            hit.pos = ro + rd * mh.t;
+            hit.normal = {mh.normal[0], mh.normal[1], mh.normal[2]};
+            hit.albedo = kMeshAlbedo;
+            hit.roughness = kMeshRoughness;
+            hit.mfp = kMeshMfp;
+        }
+    }
     for (const auto& s : scene) {
         float t;
         if (ray_sphere(ro, rd, s, t) && t < best) {
@@ -195,15 +227,32 @@ uint8_t tonemap_channel(float v) {
 
 } // namespace
 
-int main() {
-    std::printf("=== Pictor SHaRC Demo D1: Roughness Ladder ===\n");
+int main(int argc, char** argv) {
+    // ── シーン選択: 引数に PLY があれば D2 (逆光透過)、 なければ D1 ──
+    MeshScene mesh_scene;
+    if (argc > 1) {
+        mesh_scene.mesh = sharc_demo::load_ply(argv[1]);
+        if (mesh_scene.mesh.empty()) {
+            std::fprintf(stderr, "[init] FATAL: PLY load failed: %s\n",
+                         argv[1]);
+            return 1;
+        }
+        sharc_demo::fit_mesh(mesh_scene.mesh, 3.0f);
+        mesh_scene.bvh.build(mesh_scene.mesh);
+        mesh_scene.active = true;
+    }
+    std::printf(mesh_scene.active
+                    ? "=== Pictor SHaRC Demo D2: Backlit Transmission ===\n"
+                    : "=== Pictor SHaRC Demo D1: Roughness Ladder ===\n");
 
     // ── window + Vulkan ──
     GlfwSurfaceProvider surface;
     GlfwWindowConfig win_cfg;
     win_cfg.width  = 1280;
     win_cfg.height = 720;
-    win_cfg.title  = "Pictor SHaRC D1 - Roughness Ladder";
+    win_cfg.title  = mesh_scene.active
+                         ? "Pictor SHaRC D2 - Backlit Transmission"
+                         : "Pictor SHaRC D1 - Roughness Ladder";
     if (!surface.create(win_cfg)) {
         std::fprintf(stderr, "[init] FATAL: window creation failed\n");
         return 1;
@@ -255,7 +304,9 @@ int main() {
     glfwSetScrollCallback(win, scroll_cb);
     glfwSetKeyCallback(win, key_cb);
 
-    const auto scene = build_scene();
+    // D2 はメッシュのみ (球ラダーは D1 専用)
+    const auto scene = mesh_scene.active ? std::vector<Sphere>{}
+                                         : build_scene();
     std::vector<uint8_t> rgba(kRenderW * kRenderH * 4);
 
     std::printf("[loop] %ux%u rays, %d spheres. Drag=orbit Scroll=zoom "
@@ -287,14 +338,27 @@ int main() {
         const float aspect = static_cast<float>(kRenderW) /
                              static_cast<float>(kRenderH);
 
-        // ── ライト: 1 灯は球列の直上を横断する近接光源 (ハイライト肥大検証) ──
         sharc.begin_frame(float3{eye.x, eye.y, eye.z});
         auto* lights = sharc.lights_mapped();
-        const float lx = std::sin(light_time * 0.6f) * 5.5f;
-        lights[0] = SharcLightGpu{{lx, 2.6f, 1.2f, 0.15f},
-                                  {1.0f, 0.85f, 0.6f, 60.0f}};   // 近接・暖色
-        lights[1] = SharcLightGpu{{0.0f, 8.0f, 6.0f, 0.5f},
-                                  {0.4f, 0.5f, 0.8f, 120.0f}};   // フィル・寒色
+        if (mesh_scene.active) {
+            // ── D2: 背面光源 (逆光)。 カメラの反対側を横断し、 モデル越しの
+            //    透過 (SSS) を見る。 画面外に出る動線も含む ──
+            const Vec3 behind = norm(target - eye);
+            const float lx = std::sin(light_time * 0.4f) * 2.5f;
+            lights[0] = SharcLightGpu{
+                {target.x + behind.x * 4.0f + lx, 1.8f,
+                 target.z + behind.z * 4.0f, 0.2f},
+                {1.0f, 0.75f, 0.5f, 90.0f}};                       // 逆光・暖色
+            lights[1] = SharcLightGpu{{eye.x, eye.y + 2.0f, eye.z, 0.5f},
+                                      {0.3f, 0.35f, 0.5f, 15.0f}}; // 弱い前面フィル
+        } else {
+            // ── D1: 球列の直上を横断する近接光源 (ハイライト肥大検証) ──
+            const float lx = std::sin(light_time * 0.6f) * 5.5f;
+            lights[0] = SharcLightGpu{{lx, 2.6f, 1.2f, 0.15f},
+                                      {1.0f, 0.85f, 0.6f, 60.0f}};  // 近接・暖色
+            lights[1] = SharcLightGpu{{0.0f, 8.0f, 6.0f, 0.5f},
+                                      {0.4f, 0.5f, 0.8f, 120.0f}};  // フィル・寒色
+        }
 
         // ── CPU 一次レイ: 交差 → ray + shade request 直書き ──
         auto* rays  = sharc.rays_mapped();
@@ -305,7 +369,7 @@ int main() {
                 const float u = (2.0f * (x + 0.5f) / kRenderW - 1.0f) * fov_scale * aspect;
                 const float v = (1.0f - 2.0f * (y + 0.5f) / kRenderH) * fov_scale;
                 const Vec3 rd = norm(fwd + right * u + up * v);
-                const HitInfo hit = trace_scene(eye, rd, scene);
+                const HitInfo hit = trace_scene(eye, rd, scene, mesh_scene);
                 const float tmax = (hit.t > 0.0f) ? hit.t : kRayTMax;
 
                 rays[idx] = SharcRayGpu{{eye.x, eye.y, eye.z, 0.0f},

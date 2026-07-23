@@ -52,41 +52,66 @@ void main() {
     // march はセル入口点の距離でレベルを選ぶため、 ヒット点の距離と
     // レベル境界を跨いでずれることがある。 ±1 レベルで救済して
     // キャッシュミス (黒斑点) を防ぐ。
+    // レベルは march のヒット点近傍登録と同一式で選択。 ±1 の救済は
+    // 8 近傍が全滅した場合のみ (通常は march が近傍を温めている)。
     uint levelBase = sharcLevelFromDistance(distance(pos, sharcCameraPos.xyz));
-    uint level = levelBase;
-    ivec3 grid = sharcGridCoord(pos, level);
-    uint slot  = sharcFindSlot(grid, level);
-    if (slot == SHARC_SLOT_INVALID && levelBase > 0u) {
-        level = levelBase - 1u;
-        grid  = sharcGridCoord(pos, level);
-        slot  = sharcFindSlot(grid, level);
-    }
-    if (slot == SHARC_SLOT_INVALID && levelBase + 1u < sharcLevelCount) {
-        level = levelBase + 1u;
-        grid  = sharcGridCoord(pos, level);
-        slot  = sharcFindSlot(grid, level);
-    }
 
     vec3 radiance = vec3(0.0);
     float hit = 0.0;
 
-    if (slot != SHARC_SLOT_INVALID) {
-        hit = 1.0;
+    // --- 拡散 + 鏡面: 8 近傍セルのトライリニア補間評価 ---
+    // 単一セル参照はセル境界がフラットシェーディングの切れ目として見える。
+    // セル中心を格子点とみなし、 周囲 2x2x2 セルを重み付きで評価して
+    // 未確保セルは重み再正規化で落とす。
+    float ndv = max(dot(n, v), SHARC_EPSILON);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
 
-        // --- 拡散 (層1 モーメント) ---
-        vec3 m0, m1Dir, m1Mag; float conf;
-        sharcLoadMoments(slot, m0, m1Dir, m1Mag, conf);
-        vec3 irradiance = sharcDiffuseIrradiance(m0, m1Dir, m1Mag, n);
-        radiance += albedo * SHARC_INV_PI * irradiance;
+    for (uint attempt = 0u; attempt < 3u && hit == 0.0; attempt++) {
+        // attempt 0: levelBase / 1: levelBase-1 / 2: levelBase+1
+        uint level = levelBase;
+        if (attempt == 1u) {
+            if (levelBase == 0u) continue;
+            level = levelBase - 1u;
+        } else if (attempt == 2u) {
+            if (levelBase + 1u >= sharcLevelCount) continue;
+            level = levelBase + 1u;
+        }
 
-        // --- 鏡面 (層2 ローブ) ---
-        vec3 cellCenter = sharcCellCenter(grid, level);
-        vec3 spec = sharcSpecularEvaluate(slot, cellCenter, pos, n, v,
-                                          roughness);
-        // 簡易 Fresnel (F0 = 0.04 誘電体既定。 金属対応は material 結線時)
-        float ndv = max(dot(n, v), SHARC_EPSILON);
-        float f = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
-        radiance += spec * f;
+        float cell = sharcCellSize(level);
+        vec3 gpos = pos / cell - 0.5;
+        ivec3 base = ivec3(floor(gpos));
+        vec3 f = gpos - vec3(base);
+
+        vec3 acc = vec3(0.0);
+        float wSum = 0.0;
+        for (int c = 0; c < 8; c++) {
+            ivec3 offs = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
+            ivec3 grid = base + offs;
+            uint slot = sharcFindSlot(grid, level);
+            if (slot == SHARC_SLOT_INVALID) continue;
+
+            vec3 w3 = mix(1.0 - f, f, vec3(offs));
+            float w = w3.x * w3.y * w3.z;
+            if (w <= 1e-4) continue;
+
+            // 拡散 (層1 モーメント)
+            vec3 m0, m1Dir, m1Mag; float conf;
+            sharcLoadMoments(slot, m0, m1Dir, m1Mag, conf);
+            vec3 sample_ = albedo * SHARC_INV_PI
+                         * sharcDiffuseIrradiance(m0, m1Dir, m1Mag, n);
+
+            // 鏡面 (層2 ローブ、 セルごとの中心で再照準)
+            vec3 cellCenter = sharcCellCenter(grid, level);
+            sample_ += fresnel * sharcSpecularEvaluate(slot, cellCenter, pos,
+                                                       n, v, roughness);
+
+            acc  += sample_ * w;
+            wSum += w;
+        }
+        if (wSum > 1e-4) {
+            radiance += acc / wSum;
+            hit = 1.0;
+        }
     }
 
     // --- SSS (層1, MFP レベルのギャザー) ---

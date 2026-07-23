@@ -420,9 +420,11 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
         target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
 
-        # SHaRC 拡張 D1 デモ (roughness ladder + 近接光源、 4 パス compute)
+        # SHaRC 拡張デモ (D1 roughness ladder / D2 逆光透過、 4 パス compute)
         add_executable(pictor_sharc_demo
             demo/sharc/main.cpp
+            demo/sharc/ply_mesh.cpp
+            demo/sharc/mesh_bvh.cpp
             demo/texture2d/texture2d_renderer.cpp
         )
         target_include_directories(pictor_sharc_demo PRIVATE demo/texture2d)

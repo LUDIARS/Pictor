@@ -117,4 +117,17 @@ void main() {
 
         t = tExit + sharcHitEpsilon;
     }
+
+    // レイ終端 (= ヒット点) の周囲 2x2x2 セルを追加登録する。
+    // resolve のトライリニア補間評価 (セル境界の切れ目対策) が
+    // 近傍セルのデータを必要とするため。 レベル選択は resolve と同一式。
+    vec3 endPos = ro + rd * tMax;
+    uint endLevel = sharcLevelFromDistance(distance(endPos,
+                                                    sharcCameraPos.xyz));
+    float endCell = sharcCellSize(endLevel);
+    ivec3 endBase = ivec3(floor(endPos / endCell - 0.5));
+    for (int c = 0; c < 8; c++) {
+        ivec3 offs = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
+        sharcRegisterCell(endBase + offs, endLevel);
+    }
 }
