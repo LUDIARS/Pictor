@@ -114,6 +114,7 @@ add_library(pictor STATIC
     src/gi/gi_scene_proxy.cpp
     src/gi/gi_probe_field.cpp
     src/gi/gi_gpu_executor.cpp
+    src/gi/sharc_executor.cpp
     src/gi/gi_shadow_atlas.cpp
     src/gi/gi_ssao_compute.cpp
     src/gi/gi_reflection_probe.cpp
@@ -419,6 +420,18 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
         target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
 
+        # SHaRC 拡張デモ (D1 roughness ladder / D2 逆光透過、 4 パス compute)
+        add_executable(pictor_sharc_demo
+            demo/sharc/main.cpp
+            demo/sharc/ply_mesh.cpp
+            demo/sharc/obj_mesh.cpp
+            demo/sharc/mesh_bvh.cpp
+            demo/sharc/present_renderer.cpp
+            third_party/stb/stb_image_impl.cpp
+        )
+        target_include_directories(pictor_sharc_demo PRIVATE third_party/stb)
+        target_link_libraries(pictor_sharc_demo PRIVATE pictor)
+
         # Iter relation-graph demo (instanced/DoD graph view + cull/hit-test + dock)
         add_executable(pictor_graph_demo
             demo/graph/main.cpp
@@ -458,7 +471,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             pictor_text_effects_demo pictor_material_serializer_demo
             pictor_fbx_viewer pictor_demo pictor_graphics_demo
             pictor_ocean_demo pictor_text_demo pictor_postprocess_demo
-            pictor_rive_demo pictor_texture2d_demo)
+            pictor_rive_demo pictor_texture2d_demo pictor_sharc_demo)
             if(TARGET ${_demo})
                 target_compile_options(${_demo} PRIVATE /utf-8)
             endif()
@@ -583,6 +596,13 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_hit.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_march.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_compact.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_update.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_resolve.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.vert
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.frag
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
@@ -624,6 +644,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_shaders)
+    endif()
+    if(TARGET pictor_sharc_demo)
+        add_dependencies(pictor_sharc_demo pictor_shaders)
     endif()
 endif()
 

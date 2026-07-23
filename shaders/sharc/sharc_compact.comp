@@ -1,0 +1,54 @@
+// Pictor — SHaRC 拡張 Pass 2: Compact
+//
+// march が積んだ要求セルリストを indirect dispatch 引数に変換する (spec §3)。
+// 要求リスト自体は march 側で atomic 追記 + スタンプ重複排除済みなので、
+// ここでは (1) dispatch 引数生成 (2) 古いセルのエビクション を行う。
+// エビクションは LRU 的: 最終更新が sharcStaleFrames より古いスロットの
+// キーを解放する (層3 メタデータ, spec §2)。
+//
+// dispatch: (tableSize / 256, 1, 1)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 256) in;
+
+#define SHARC_SET 0
+#include "sharc_common.glsl"
+
+// カウンタ群: [0]=hitCount [1]=requestCount (march と共有)
+layout(std430, set = SHARC_SET, binding = 5) buffer SharcCounters {
+    uint gpu_sharc_counters[];
+};
+
+// VkDispatchIndirectCommand {x, y, z}
+layout(std430, set = SHARC_SET, binding = 8) writeonly buffer SharcIndirect {
+    uint gpu_sharc_indirect[];
+};
+
+void main() {
+    uint slot = gl_GlobalInvocationID.x;
+
+    // --- (1) indirect 引数生成 (先頭スレッドのみ) ---
+    if (slot == 0u) {
+        uint requestCount = min(gpu_sharc_counters[1], sharcTableSize);
+        gpu_sharc_indirect[0] = requestCount;   // 1 workgroup = 1 要求セル
+        gpu_sharc_indirect[1] = 1u;
+        gpu_sharc_indirect[2] = 1u;
+    }
+
+    // --- (2) エビクション ---
+    if (slot >= sharcTableSize) return;
+    if (gpu_sharc_keys[slot] == 0u) return;
+
+    uint sampleCount, lastFrame, level;
+    float lumaMean, lumaVar;
+    sharcLoadMeta(slot, sampleCount, lastFrame, lumaMean, lumaVar, level);
+
+    // フレーム番号は 16bit 巡回。 巡回差で経過を測る。
+    uint now = sharcFrameIndex & 0xFFFFu;
+    uint age = (now - lastFrame) & 0xFFFFu;
+    if (age > sharcStaleFrames) {
+        gpu_sharc_keys[slot] = 0u;   // キー解放 (セル本体は再確保時に初期化)
+    }
+}
