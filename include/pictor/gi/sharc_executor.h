@@ -114,6 +114,9 @@ public:
     /// hit パスの初期 tMax (シーンの遠方距離)。
     void set_scene_far(float ray_far);
 
+    /// アルベド素通しビュー (ライティングなし — リファレンス比較用)。
+    void set_albedo_view(bool enabled);
+
     /// カメラ基底を UBO へ反映する (hit パスの GPU レイ生成用)。
     /// fov_scale = tan(fov/2)。 render_width はレイ index → 画素の変換用。
     void set_camera(const float3& fwd, const float3& right, const float3& up,
