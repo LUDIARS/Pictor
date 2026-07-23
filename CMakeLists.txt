@@ -427,6 +427,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             demo/sharc/obj_mesh.cpp
             demo/sharc/mesh_bvh.cpp
             demo/sharc/present_renderer.cpp
+            demo/sharc/texture_atlas.cpp
             third_party/stb/stb_image_impl.cpp
         )
         target_include_directories(pictor_sharc_demo PRIVATE third_party/stb)
@@ -459,6 +460,34 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d, graph)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
+    endif()
+
+    # SHaRC 拡張 D3D12 移植 headless テスト (Windows のみ、 Vulkan/GLFW 非依存)。
+    # HLSL は D3DCompile (d3dcompiler_47) でランタイムコンパイルするため dxc /
+    # pictor_shaders (SPIR-V) には依存しない。 Bistro OBJ を読み込み固定カメラで
+    # 60 フレーム実行し、 出力を sharc_dx12_out.ppm へ書き出す。
+    if(WIN32)
+        add_executable(pictor_sharc_dx12_test
+            demo/sharc/dx12_test_main.cpp
+            demo/sharc/ply_mesh.cpp
+            demo/sharc/obj_mesh.cpp
+            demo/sharc/mesh_bvh.cpp
+            demo/sharc/texture_atlas.cpp
+            src/gi/sharc_dx12_executor.cpp
+            third_party/stb/stb_image_impl.cpp
+        )
+        target_include_directories(pictor_sharc_dx12_test PRIVATE include third_party/stb)
+        target_link_libraries(pictor_sharc_dx12_test PRIVATE d3d12 dxgi d3dcompiler)
+        target_compile_definitions(pictor_sharc_dx12_test PRIVATE
+            NOMINMAX=1
+            PICTOR_SHARC_HLSL_DIR="${CMAKE_SOURCE_DIR}/shaders/sharc/hlsl")
+        if(MSVC)
+            # /utf-8 does not propagate from the pictor lib to demo targets
+            # ([[feedback_msvc_utf8_test_targets]]). 公開ヘッダ/ソースは日本語
+            # コメント込み UTF-8 のため必須。
+            target_compile_options(pictor_sharc_dx12_test PRIVATE /utf-8)
+        endif()
+        message(STATUS "Pictor: pictor_sharc_dx12_test enabled (D3D12 SHaRC headless test)")
     endif()
 
     # MSVC: /utf-8 は pictor lib から demo target へ伝播しない

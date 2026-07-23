@@ -92,21 +92,27 @@ struct SharcBvhNodeGpu {
 };
 static_assert(sizeof(SharcBvhNodeGpu) == 32, "GLSL SharcBvhNode と一致させる");
 
-/// 三角形 (64B)。 n = oct32 頂点法線、 c = コーナー焼き込み色 (RGB8 リニア)。
+/// 三角形 (80B)。 n = oct32 頂点法線、 uv = コーナー UV (texture2DArray
+/// を REPEAT サンプルするため生値、 [0,1] 超のタイルも保持する)。
 struct SharcTriGpu {
     float v0[3]; uint32_t n0;
     float v1[3]; uint32_t n1;
     float v2[3]; uint32_t n2;
-    uint32_t c0, c1, c2, pad;
+    float uv0[2];
+    float uv1[2];
+    float uv2[2];
+    uint32_t pad0, pad1;
 };
-static_assert(sizeof(SharcTriGpu) == 64, "GLSL SharcTri と一致させる");
+static_assert(sizeof(SharcTriGpu) == 80, "GLSL SharcTri と一致させる");
 
-/// マテリアル (32B)。
+/// マテリアル (32B)。 atlas_layer_plus1 は 0 = テクスチャなし、
+/// N > 0 = texture2DArray のレイヤ N-1 (float 格納、 ≤256 なので厳密)。
 struct SharcMaterialGpu {
     float albedo[3];
     float roughness;
     float mfp;
-    float pad[3];
+    float atlas_layer_plus1;
+    float pad[2];
 };
 static_assert(sizeof(SharcMaterialGpu) == 32, "GLSL SharcMaterial と一致させる");
 

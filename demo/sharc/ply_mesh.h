@@ -34,9 +34,9 @@ struct PlyMesh {
     std::vector<PlyMaterial> materials;
     std::vector<uint32_t>    tri_material;
 
-    /// 三角形コーナーごとの焼き込み色 (RGB8 packed、 リニア空間)。
-    /// map_Kd を UV サンプルして OBJ ローダが生成する。 空 = albedo 一色。
-    std::vector<std::array<uint32_t, 3>> tri_corner_colors;
+    /// 三角形コーナーごとの UV (OBJ の vt)。 空 = UV なし (PLY 等)。
+    /// GPU 側は texture2DArray + REPEAT サンプラでタイルする。
+    std::vector<std::array<std::array<float, 2>, 3>> tri_corner_uvs;
 
     std::array<float, 3> bounds_min{};
     std::array<float, 3> bounds_max{};

@@ -58,13 +58,9 @@ struct SharcTri {
     vec4 v0;           // xyz = 頂点, w = uintBitsToFloat(oct32 法線 n0)
     vec4 v1;           // w = n1
     vec4 v2;           // w = n2
-    uvec4 colors;      // xyz = コーナー焼き込み色 (RGB8 リニア), w = 予約
+    vec4 uv01;         // xy = uv0, zw = uv1
+    vec4 uv2Pad;       // xy = uv2, zw = 予約
 };
-
-vec3 sharcUnpackRgb8(uint c) {
-    return vec3(float(c & 0xFFu), float((c >> 8) & 0xFFu),
-                float((c >> 16) & 0xFFu)) * (1.0 / 255.0);
-}
 
 layout(std430, set = SHARC_SET, binding = 15) readonly buffer SharcTris {
     SharcTri gpu_sharc_tris[];
@@ -82,6 +78,10 @@ struct SharcMaterial {
 layout(std430, set = SHARC_SET, binding = 17) readonly buffer SharcMaterials {
     SharcMaterial gpu_sharc_materials[];
 };
+
+// アルベドテクスチャ配列 (1 レイヤ = 1 map_Kd、 REPEAT でタイル)。
+// 未使用時は 1x1 白ダミーが結線される。
+layout(set = SHARC_SET, binding = 18) uniform sampler2DArray sharcAlbedoAtlas;
 
 // ============================================================
 // 交差
@@ -198,10 +198,40 @@ void main() {
             bestV * sharcOct32Decode(floatBitsToUint(tri.v2.w)));
         if (dot(n, rd) > 0.0) n = -n;   // 裏面ヒット (逆光透過) は視線側へ
         SharcMaterial mat = gpu_sharc_materials[gpu_sharc_tri_mat[bestTri]];
-        // albedo はコーナー焼き込み色 (map_Kd) の重心補間
-        vec3 albedo = w * sharcUnpackRgb8(tri.colors.x) +
-                      bestU * sharcUnpackRgb8(tri.colors.y) +
-                      bestV * sharcUnpackRgb8(tri.colors.z);
+        // albedo: テクスチャあり = 重心補間 UV で配列サンプル (Kd は乗数)。
+        //         なし = マテリアル albedo (クレイ / PLY / 葉の緑)
+        vec3 albedo = mat.albedoRough.rgb;
+        float layerPlus1 = mat.mfpPad.y;
+        vec2 uv = w * tri.uv01.xy + bestU * tri.uv01.zw
+                + bestV * tri.uv2Pad.xy;
+        if (layerPlus1 > 0.5) {
+            // テクセルフットプリント LOD: 三角形の UV 面積 / ワールド面積比
+            // から texel 密度を推定し、 1 ピクセルが覆う texel 数で選ぶ。
+            // (絶対距離 log2 だと街路距離で mip 5-7 に飛びテクスチャが
+            //  マテリアル平均色へ潰れる)
+            vec3 e1w = tri.v1.xyz - tri.v0.xyz;
+            vec3 e2w = tri.v2.xyz - tri.v0.xyz;
+            float worldArea = max(length(cross(e1w, e2w)), 1e-12);
+            vec2 e1t = tri.uv01.zw - tri.uv01.xy;
+            vec2 e2t = tri.uv2Pad.xy - tri.uv01.xy;
+            float uvArea = max(abs(e1t.x * e2t.y - e1t.y * e2t.x), 1e-12);
+            float texelPerMeter = 512.0 * sqrt(uvArea / worldArea);
+            float pixelMeter = best * (2.0 * sharcCamFwd.w / float(renderH));
+            float lod = clamp(log2(max(pixelMeter * texelPerMeter, 1.0)),
+                              0.0, 9.0);
+            albedo *= textureLod(sharcAlbedoAtlas,
+                                 vec3(uv, layerPlus1 - 1.0), lod).rgb;
+        }
+#ifdef SHARC_DEBUG_ATLAS
+        // 縦 3 分割デバッグ: 左 = 通常 / 中 = 生サンプル LOD0 / 右 = UV+layer
+        uint band = (px * 3u) / renderW;
+        if (band == 1u) {
+            albedo = textureLod(sharcAlbedoAtlas,
+                                vec3(uv, max(layerPlus1 - 1.0, 0.0)), 0.0).rgb;
+        } else if (band == 2u) {
+            albedo = vec3(fract(uv), layerPlus1 / 128.0);
+        }
+#endif
         req.posRough   = vec4(pos, mat.albedoRough.a);
         req.normalMfp  = vec4(n, mat.mfpPad.x);
         req.albedoView = vec4(albedo, 0.0);

@@ -20,7 +20,9 @@ SharcGpuExecutor::~SharcGpuExecutor() {
 
 namespace {
 
-constexpr uint32_t kBindingCount = 18;
+// 0 = UBO, 1..17 = SSBO, 18 = combined image sampler (アルベド配列)
+constexpr uint32_t kBindingCount = 19;
+constexpr uint32_t kSsboBindingCount = 18;
 
 VkShaderModule load_shader_module(VkDevice device, const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -260,6 +262,15 @@ bool SharcGpuExecutor::upload_scene(const SharcSceneUpload& scene) {
         return false;
     }
     write_scene_descriptors_();
+    if (scene.atlas_pixels != nullptr && scene.atlas_layers > 0) {
+        if (!create_atlas_(scene.atlas_pixels, scene.atlas_size,
+                           scene.atlas_layers)) {
+            std::fprintf(stderr, "[sharc] atlas upload failed\n");
+            return false;
+        }
+        std::fprintf(stderr, "[sharc] atlas: %u layers @ %ux%u\n",
+                     scene.atlas_layers, scene.atlas_size, scene.atlas_size);
+    }
     scene_tri_count_ = scene.tri_count;
     scene_flags_ |= kSharcSceneMesh;
     write_params_();
@@ -284,6 +295,157 @@ void SharcGpuExecutor::set_scene_floor(bool enabled, float floor_y) {
 void SharcGpuExecutor::set_scene_far(float ray_far) {
     scene_ray_far_ = ray_far;
     if (initialized_) write_params_();
+}
+
+void SharcGpuExecutor::destroy_atlas_() {
+    if (atlas_view_)  vkDestroyImageView(device_, atlas_view_, nullptr);
+    if (atlas_image_) vkDestroyImage(device_, atlas_image_, nullptr);
+    if (atlas_mem_)   vkFreeMemory(device_, atlas_mem_, nullptr);
+    atlas_view_  = VK_NULL_HANDLE;
+    atlas_image_ = VK_NULL_HANDLE;
+    atlas_mem_   = VK_NULL_HANDLE;
+}
+
+bool SharcGpuExecutor::create_atlas_(const uint8_t* pixels, uint32_t size,
+                                     uint32_t layers) {
+    destroy_atlas_();
+    uint32_t mips = 1;
+    while ((size >> mips) >= 1u && mips < 10u) ++mips;
+
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType     = VK_IMAGE_TYPE_2D;
+    ici.format        = VK_FORMAT_R8G8B8A8_SRGB;
+    ici.extent        = {size, size, 1};
+    ici.mipLevels     = mips;
+    ici.arrayLayers   = layers;
+    ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device_, &ici, nullptr, &atlas_image_) != VK_SUCCESS)
+        return false;
+
+    VkMemoryRequirements mr{};
+    vkGetImageMemoryRequirements(device_, atlas_image_, &mr);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize  = mr.size;
+    ai.memoryTypeIndex = find_memory_type(vk_->physical_device(),
+                                          mr.memoryTypeBits,
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device_, &ai, nullptr, &atlas_mem_) != VK_SUCCESS)
+        return false;
+    vkBindImageMemory(device_, atlas_image_, atlas_mem_, 0);
+
+    // ── staging → mip0 転送 + blit でミップ生成 ──
+    const VkDeviceSize bytes =
+        VkDeviceSize{size} * size * 4 * layers;
+    Buffer staging;
+    if (!create_buffer_(staging, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT))
+        return false;
+    std::memcpy(staging.mapped, pixels, static_cast<size_t>(bytes));
+
+    VkCommandBufferAllocateInfo cai{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool        = vk_->command_pool();
+    cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(device_, &cai, &cmd) != VK_SUCCESS) {
+        destroy_buffer_(staging);
+        return false;
+    }
+    VkCommandBufferBeginInfo bgi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bgi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bgi);
+
+    auto image_barrier = [&](uint32_t base_mip, uint32_t mip_count,
+                             VkImageLayout from, VkImageLayout to,
+                             VkAccessFlags src, VkAccessFlags dst) {
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.srcAccessMask       = src;
+        b.dstAccessMask       = dst;
+        b.oldLayout           = from;
+        b.newLayout           = to;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image               = atlas_image_;
+        b.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, base_mip,
+                                 mip_count, 0, layers};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+    };
+
+    image_barrier(0, mips, VK_IMAGE_LAYOUT_UNDEFINED,
+                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                  VK_ACCESS_TRANSFER_WRITE_BIT);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layers};
+    region.imageExtent      = {size, size, 1};
+    vkCmdCopyBufferToImage(cmd, staging.buf, atlas_image_,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    // mip チェーン: m-1 (SRC) → m (DST) の blit を層まとめて
+    for (uint32_t m = 1; m < mips; ++m) {
+        image_barrier(m - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_ACCESS_TRANSFER_READ_BIT);
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m - 1, 0, layers};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0, layers};
+        const auto dim = [size](uint32_t mip) {
+            return static_cast<int32_t>(std::max(size >> mip, 1u));
+        };
+        blit.srcOffsets[1] = {dim(m - 1), dim(m - 1), 1};
+        blit.dstOffsets[1] = {dim(m), dim(m), 1};
+        vkCmdBlitImage(cmd, atlas_image_,
+                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, atlas_image_,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                       VK_FILTER_LINEAR);
+    }
+    // 0..mips-2 = SRC, 最終 mip = DST → 全て SHADER_READ_ONLY へ
+    if (mips > 1) {
+        image_barrier(0, mips - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+    image_barrier(mips - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &cmd;
+    vkQueueSubmit(vk_->graphics_queue(), 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vk_->graphics_queue());
+    vkFreeCommandBuffers(device_, vk_->command_pool(), 1, &cmd);
+    destroy_buffer_(staging);
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image            = atlas_image_;
+    vci.viewType         = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    vci.format           = VK_FORMAT_R8G8B8A8_SRGB;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, layers};
+    if (vkCreateImageView(device_, &vci, nullptr, &atlas_view_) !=
+        VK_SUCCESS) {
+        return false;
+    }
+
+    VkDescriptorImageInfo dii{atlas_sampler_, atlas_view_,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet          = desc_set_;
+    write.dstBinding      = 18;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo      = &dii;
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    return true;
 }
 
 bool SharcGpuExecutor::initialize(VulkanContext& vk,
@@ -377,14 +539,16 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
         vkFreeCommandBuffers(device_, vk.command_pool(), 1, &cmd);
     }
 
-    // ── descriptor set layout (UBO + SSBO×13) ──
+    // ── descriptor set layout (UBO + SSBO×17 + sampler2DArray) ──
     VkDescriptorSetLayoutBinding bindings[kBindingCount]{};
     bindings[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    for (uint32_t i = 1; i < kBindingCount; ++i) {
+    for (uint32_t i = 1; i < kSsboBindingCount; ++i) {
         bindings[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     }
+    bindings[18] = {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo dli{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     dli.bindingCount = kBindingCount;
@@ -414,13 +578,14 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
     }
 
     // ── descriptor pool + set ──
-    VkDescriptorPoolSize sizes[2] = {
+    VkDescriptorPoolSize sizes[3] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kBindingCount - 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSsboBindingCount - 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
     };
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets       = 1;
-    dpi.poolSizeCount = 2;
+    dpi.poolSizeCount = 3;
     dpi.pPoolSizes    = sizes;
     if (vkCreateDescriptorPool(device_, &dpi, nullptr, &desc_pool_) !=
         VK_SUCCESS) {
@@ -436,15 +601,15 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
         return false;
     }
 
-    const Buffer* ordered[kBindingCount] = {
+    const Buffer* ordered[kSsboBindingCount] = {
         &params_, &keys_, &cells_, &rays_, &hits_, &counters_, &requests_,
         &stamps_, &indirect_, &lights_, &reservoirs_, &cell_pos_, &shade_,
         &output_, &scene_nodes_, &scene_tris_, &scene_tri_mats_,
         &scene_materials_,
     };
-    VkDescriptorBufferInfo infos[kBindingCount]{};
-    VkWriteDescriptorSet writes[kBindingCount]{};
-    for (uint32_t i = 0; i < kBindingCount; ++i) {
+    VkDescriptorBufferInfo infos[kSsboBindingCount]{};
+    VkWriteDescriptorSet writes[kSsboBindingCount]{};
+    for (uint32_t i = 0; i < kSsboBindingCount; ++i) {
         infos[i] = {ordered[i]->buf, 0, ordered[i]->size};
         writes[i] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         writes[i].dstSet          = desc_set_;
@@ -454,7 +619,29 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
                                              : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[i].pBufferInfo     = &infos[i];
     }
-    vkUpdateDescriptorSets(device_, kBindingCount, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device_, kSsboBindingCount, writes, 0, nullptr);
+
+    // ── binding 18: アルベド配列 (初期は 1x1 白ダミー) + サンプラ ──
+    {
+        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sci.magFilter    = VK_FILTER_LINEAR;
+        sci.minFilter    = VK_FILTER_LINEAR;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.maxLod       = VK_LOD_CLAMP_NONE;
+        if (vkCreateSampler(device_, &sci, nullptr, &atlas_sampler_) !=
+            VK_SUCCESS) {
+            shutdown();
+            return false;
+        }
+        const uint8_t white[4] = {255, 255, 255, 255};
+        if (!create_atlas_(white, 1, 1)) {
+            shutdown();
+            return false;
+        }
+    }
 
     initialized_ = true;
     std::fprintf(stderr,
@@ -611,6 +798,9 @@ void SharcGpuExecutor::shutdown() {
         dsl_       = VK_NULL_HANDLE;
         desc_pool_ = VK_NULL_HANDLE;
         desc_set_  = VK_NULL_HANDLE;
+        destroy_atlas_();
+        if (atlas_sampler_) vkDestroySampler(device_, atlas_sampler_, nullptr);
+        atlas_sampler_ = VK_NULL_HANDLE;
         for (Buffer* b : {&params_, &keys_, &cells_, &rays_, &hits_,
                           &counters_, &requests_, &stamps_, &indirect_,
                           &lights_, &reservoirs_, &cell_pos_, &shade_,
