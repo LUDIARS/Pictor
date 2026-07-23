@@ -215,7 +215,8 @@ void main() {
             vec2 e1t = tri.uv01.zw - tri.uv01.xy;
             vec2 e2t = tri.uv2Pad.xy - tri.uv01.xy;
             float uvArea = max(abs(e1t.x * e2t.y - e1t.y * e2t.x), 1e-12);
-            float texelPerMeter = 512.0 * sqrt(uvArea / worldArea);
+            float texelPerMeter = float(textureSize(sharcAlbedoAtlas, 0).x)
+                                * sqrt(uvArea / worldArea);
             float pixelMeter = best * (2.0 * sharcCamFwd.w / float(renderH));
             float lod = clamp(log2(max(pixelMeter * texelPerMeter, 1.0)),
                               0.0, 9.0);

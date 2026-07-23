@@ -282,10 +282,10 @@ void key_cb(GLFWwindow* w, int key, int, int action, int) {
         // ORCA 公式スクリーンショット Bistro_Exterior_1.png と同構図
         // (カフェ角 Le Petit Coin、 手動合わせ込み値)
         g_target = {-0.48f, 2.08f, -0.30f};
-        g_orbit.yaw   = 3.75f;
-        g_orbit.pitch = 0.40f;
-        g_orbit.dist  = 15.22f;
-        g_fov_deg     = 60.0f;
+        g_orbit.yaw   = 4.50f;
+        g_orbit.pitch = 0.49f;
+        g_orbit.dist  = 13.43f;
+        g_fov_deg     = 75.0f;
         std::printf("[cam] preset: reference (Bistro_Exterior_1)\n");
     }
     // ── リファレンス合わせ込み用ナッジ (P で現在値をプリント) ──
@@ -313,8 +313,8 @@ void key_cb(GLFWwindow* w, int key, int, int action, int) {
     }
 }
 
-// トーンマップ (Reinhard + gamma 2.2) は present 側 GPU (sharc_present.frag)
-constexpr float kExposure = 0.25f;   // 白飛び防止
+// トーンマップ (輝度 Reinhard + gamma 2.2) は present 側 GPU (sharc_present.frag)
+constexpr float kExposure = 1.4f;   // 日中太陽 (intensity 4) 基準
 
 } // namespace
 
@@ -584,7 +584,8 @@ int main(int argc, char** argv) {
 
         // ── アルベドテクスチャ配列 (512^2 × ≤192 層) + マテリアルへの
         //    レイヤ割当。 UV は REPEAT でタイルするため配列方式 ──
-        const auto atlas = sharc_demo::build_texture_atlas(atlas_mats, 512,
+        // 1024^2: 看板文字等のディテール確保 (115 層 ≈ 460MB device-local)
+        const auto atlas = sharc_demo::build_texture_atlas(atlas_mats, 1024,
                                                            192);
         for (size_t i = 0; i < gpu_mats.size(); ++i) {
             const auto& tex = atlas_mats[i].texture;
@@ -722,44 +723,35 @@ int main(int argc, char** argv) {
         auto* lights = sharc.lights_mapped();
         uint32_t n_lights = 2;
         if (obj_scene) {
-            // ── Bistro 夕暮れ: 低い太陽 + 街灯列 + アクセント + プロップ照明 ──
-            // 多灯は per-cell reservoir (ReSTIR 簡易版) の効果確認も兼ねる
+            // ── Bistro 日中 (リファレンス Bistro_Exterior_1 と同一構成):
+            //    太陽 (Directional) + 実配置の街灯 (Point、 OBJ の
+            //    Paris_Streetlight_Glass_* 抽出座標) + 空光 ──
             uint32_t li = 0;
+            // 太陽: posRadius.w < 0 = directional、 xyz = to-sun 方向
             lights[li++] = SharcLightGpu{
-                {target.x + 90.0f, target.y + 45.0f, target.z - 60.0f, 1.0f},
-                {1.0f, 0.55f, 0.3f, 7000.0f}};    // 低い夕日 (暖色・長い影)
+                {-0.55f, 0.78f, 0.23f, -1.0f},
+                {1.0f, 0.96f, 0.88f, 4.0f}};
+            // 空光 (弱い寒色 directional、 天頂から)
             lights[li++] = SharcLightGpu{
-                {target.x - 40.0f, target.y + 70.0f, target.z + 50.0f, 2.0f},
-                {0.4f, 0.5f, 0.9f, 2500.0f}};     // 空の照り返し (寒色)
-            // 街灯列: 街路軸に沿って左右交互に 8 灯
-            for (int i = 0; i < 8; ++i) {
-                const float along = (static_cast<float>(i) - 3.5f) * 9.0f;
-                const float side  = (i & 1) ? 6.0f : -6.0f;
+                {0.0f, 1.0f, 0.0f, -1.0f},
+                {0.45f, 0.55f, 0.75f, 0.8f}};
+            // 街灯 (カフェ広場周辺 7 基、 発光部 = Glass 実座標)
+            static const float kLampPos[7][3] = {
+                {-2.09f, 4.51f, 4.65f},  {-4.33f, 4.51f, -4.19f},
+                {-9.65f, 4.51f, 2.09f},  {-1.76f, 4.51f, 10.04f},
+                {7.81f, 4.51f, 8.66f},   {-13.4f, 4.14f, 1.21f},
+                {-8.43f, 4.16f, -11.41f}};
+            for (const auto& lp : kLampPos) {
                 lights[li++] = SharcLightGpu{
-                    {target.x + along, target.y - 1.0f, target.z + side, 0.2f},
-                    {1.0f, 0.72f, 0.42f, 120.0f}};
+                    {lp[0], lp[1], lp[2], 0.15f},
+                    {1.0f, 0.78f, 0.5f, 15.0f}};
             }
-            // 店先アクセント (ネオン風 2 色) + 動く提灯風
-            lights[li++] = SharcLightGpu{
-                {target.x + 6.0f, target.y + 1.0f, target.z - 8.0f, 0.2f},
-                {0.2f, 0.85f, 0.8f, 80.0f}};      // ティール
-            lights[li++] = SharcLightGpu{
-                {target.x - 10.0f, target.y + 2.0f, target.z + 3.0f, 0.2f},
-                {0.9f, 0.25f, 0.55f, 80.0f}};     // マゼンタ
-            const float lx = std::sin(light_time * 0.3f) * 8.0f;
-            lights[li++] = SharcLightGpu{
-                {target.x + lx, target.y + 4.0f, target.z + 5.0f, 0.3f},
-                {1.0f, 0.7f, 0.4f, 200.0f}};      // 移動街灯
             if (g_has_prop) {
-                // 人物 head の背後光 (肌の透過を出す) + 前面弱フィル
+                // 人物 head の背後光 (肌の透過を出す)
                 const Vec3 back = g_prop_pos + g_prop_back * 1.2f;
-                const Vec3 fill = g_prop_pos - g_prop_back * 1.5f;
                 lights[li++] = SharcLightGpu{
                     {back.x, back.y + 0.4f, back.z, 0.05f},
                     {1.0f, 0.8f, 0.6f, 30.0f}};
-                lights[li++] = SharcLightGpu{
-                    {fill.x + 0.5f, fill.y + 0.6f, fill.z, 0.1f},
-                    {0.5f, 0.55f, 0.7f, 8.0f}};
             }
             n_lights = li;
         } else if (mesh_scene.active) {

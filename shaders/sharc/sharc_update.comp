@@ -75,9 +75,16 @@ shared float sh_pdfHat[SHARC_SAMPLES_PER_CELL];    // 候補の target pdf
 shared float sh_part[SHARC_SAMPLES_PER_CELL][SHARC_PART_FLOATS];
 shared float sh_orphanScore[SHARC_SAMPLES_PER_CELL]; // 孤児サンプルの強度
 
-// セル中心での未遮蔽寄与 (target pdf 用)
+// セル中心での未遮蔽寄与 (target pdf 用)。
+// posRadius.w < 0 は Directional Light (太陽): xyz = 光源方向 (to-sun)、
+// 距離減衰なし、 ローブ実効距離は疑似無限遠。
 vec3 sharcLightContribution(SharcLight light, vec3 cellCenter,
                             out vec3 outDir, out float outDist) {
+    if (light.posRadius.w < 0.0) {
+        outDir  = normalize(light.posRadius.xyz);
+        outDist = 1.0e4;
+        return light.colorIntensity.rgb * light.colorIntensity.a;
+    }
     vec3 toLight = light.posRadius.xyz - cellCenter;
     float d2 = max(dot(toLight, toLight), 1e-4);
     outDist = sqrt(d2);

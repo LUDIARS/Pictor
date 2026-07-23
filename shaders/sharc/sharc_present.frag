@@ -24,9 +24,12 @@ vec3 tonemap(vec3 hdr) {
     if (albedoMode > 0.5) {
         return pow(max(hdr, vec3(0.0)), vec3(1.0 / 2.2));
     }
+    // 輝度ベース Reinhard: 明るさのみ圧縮し色相・彩度 (テクスチャ色) を
+    // 保存する。 チャネル別 Reinhard は高輝度で白へ収束し色が消える。
     vec3 v = max(hdr * exposure, vec3(0.0));
-    v = v / (1.0 + v);
-    return pow(v, vec3(1.0 / 2.2));
+    float luma = dot(v, vec3(0.2126, 0.7152, 0.0722));
+    float scale = (luma > 1e-6) ? (luma / (1.0 + luma)) / luma : 0.0;
+    return pow(clamp(v * scale, 0.0, 1.0), vec3(1.0 / 2.2));
 }
 
 void main() {
