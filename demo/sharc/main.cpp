@@ -501,6 +501,9 @@ int main(int argc, char** argv) {
     VulkanContext vk;
     VulkanContextConfig vk_cfg;
     vk_cfg.app_name = "pictor_sharc_demo";
+    // PICTOR_SHARC_VALIDATE=1 で Khronos validation layer を有効化
+    // (Gate 2 完了条件: 同期警告ゼロの機械確認用)
+    vk_cfg.validation = std::getenv("PICTOR_SHARC_VALIDATE") != nullptr;
     if (!vk.initialize(&surface, vk_cfg)) {
         std::fprintf(stderr, "[init] FATAL: Vulkan context init failed\n");
         surface.destroy();

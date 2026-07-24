@@ -20,6 +20,8 @@ set(PICTOR_TESTS
     unit_pipeline_tiers_test
     unit_postprocess_chain_test
     unit_gi_probe_field_test
+    unit_sharc_hash_test
+    unit_sharc_estimator_test
     unit_gi_bake_test
     unit_attachment_def_test
     unit_pipeline_registries_test
