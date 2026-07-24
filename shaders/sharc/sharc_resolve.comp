@@ -37,6 +37,16 @@ layout(std430, set = SHARC_SET, binding = 13) writeonly buffer SharcOutput {
     vec4 gpu_sharc_output[];
 };
 
+// ライト (太陽 = lights[0] directional の解析直接光用)
+struct SharcLight {
+    vec4 posRadius;        // xyz = 位置 / 方向, w = 半径 (< 0 = directional)
+    vec4 colorIntensity;
+};
+
+layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
+    SharcLight gpu_sharc_lights[];
+};
+
 void main() {
     uint rayIdx = gl_GlobalInvocationID.x;
     if (rayIdx >= sharcRayCount) return;
@@ -124,6 +134,18 @@ void main() {
             radiance += acc / wSum;
             hit = 1.0;
         }
+    }
+
+    // --- 太陽の解析直接光 (シャドウレイ付き — シャープな影) ---
+    // 太陽はキャッシュから除外されており (update 側)、 ここでピクセル精度の
+    // 可視性 (hit パスの BVH any-hit、 albedoView.a) を掛けて加算する。
+    if (sharcLightCount > 0u && gpu_sharc_lights[0].posRadius.w < 0.0) {
+        float sunVis = req.albedoView.a;
+        vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
+        float ndl = max(dot(n, toSun), 0.0);
+        radiance += albedo * SHARC_INV_PI *
+                    gpu_sharc_lights[0].colorIntensity.rgb *
+                    gpu_sharc_lights[0].colorIntensity.a * ndl * sunVis;
     }
 
     // --- SSS (層1, MFP レベルのギャザー) ---

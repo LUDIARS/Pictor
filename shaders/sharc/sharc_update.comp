@@ -4,8 +4,10 @@
 //   1. per-cell reservoir (ReSTIR DI 簡易版) からライトを importance sampling
 //   2. (SHARC_RAY_QUERY 時) 可視性レイ → 既定はアンシャドウ
 //   3. M0/M1 蓄積 + vMF ローブ EM 更新 → EMA でセルへブレンド
-// 1 フレーム遅延 + 永続キャッシュ (SHaRC 方式): このパスの結果は
-// 次フレームの resolve が参照する。
+// フレーム意味論: **同フレーム評価** — update の EMA 結果を同フレームの
+// resolve が読む (パス間 barrier で保証)。 時間蓄積は EMA が担う。
+// 公式 SHaRC の accumulation / resolved 分離 (1 フレーム遅延) とは
+// 意図的に異なる簡易方式 (review P0-06 で契約として明文化)。
 //
 // バッチ統計 (モーメント / ローブ帰属) は shared メモリのツリー縮約で
 // 64 スレッド並列に計算する。 thread0 直列だと要求セル数の多いシーン
@@ -125,10 +127,15 @@ void main() {
     vec3  candRgb = vec3(0.0);
     float candDist = 0.0;
 
-    if (sharcLightCount > 0u) {
-        candIdx = min(uint(sharcRand(rng) * float(sharcLightCount)),
-                      sharcLightCount - 1u);
-        float pSource = 1.0 / float(sharcLightCount);
+    // lights[0] が directional (太陽) の場合はキャッシュから除外する —
+    // 太陽は resolve がシャドウレイ付きの解析直接光として扱う (二重計上防止)
+    uint lightBase = (sharcLightCount > 0u &&
+                      gpu_sharc_lights[0].posRadius.w < 0.0) ? 1u : 0u;
+    uint candCount = sharcLightCount - lightBase;
+    if (candCount > 0u) {
+        candIdx = lightBase +
+                  min(uint(sharcRand(rng) * float(candCount)), candCount - 1u);
+        float pSource = 1.0 / float(candCount);
         SharcLight light = gpu_sharc_lights[candIdx];
         vec3 dir; float dist;
         vec3 contrib = sharcLightContribution(light, cellCenter, dir, dist);
@@ -256,14 +263,17 @@ void main() {
               floatBitsToUint(outPdf));
 
     // --- モーメント EMA (縮約済み部分和から) ---
+    // 推定量は Σ(f/q)/N (サンプル数正規化)。 Σ(f/q)/Σ(1/q) だと多灯の
+    // 総和ではなく平均になり、 ライト数 N で 1/N に暗くなる (review P0-01)。
     uint mb = uint(SHARC_LOBE_COUNT) * 8u;
     float wNorm = sh_part[0][mb + 6u];
     vec3 m0 = vec3(0.0);
     if (wNorm > SHARC_EPSILON) {
+        const float invN = 1.0 / float(SHARC_SAMPLES_PER_CELL);
         m0 = vec3(sh_part[0][mb + 0u], sh_part[0][mb + 1u],
-                  sh_part[0][mb + 2u]) / wNorm;
+                  sh_part[0][mb + 2u]) * invN;
         vec3 m1 = vec3(sh_part[0][mb + 3u], sh_part[0][mb + 4u],
-                       sh_part[0][mb + 5u]) / wNorm;
+                       sh_part[0][mb + 5u]) * invN;
         sharcMomentsBlend(slot, m0, m1, sharcEmaAlpha);
     }
 

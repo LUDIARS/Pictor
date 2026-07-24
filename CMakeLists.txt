@@ -633,6 +633,17 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.vert
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.frag
     )
+    # include される共通 GLSL — 変更時に consumer SPIR-V を再生成させる
+    # (DEPENDS がトップレベル shader のみだと古い SPIR-V が残る)
+    set(PICTOR_GLSL_INCLUDES
+        ${CMAKE_SOURCE_DIR}/shaders/common.glsl
+        ${CMAKE_SOURCE_DIR}/shaders/gi.glsl
+        ${CMAKE_SOURCE_DIR}/shaders/shadow.glsl
+        ${CMAKE_SOURCE_DIR}/shaders/velocity.glsl
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_common.glsl
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_moments.glsl
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_lobes.glsl
+    )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
         get_filename_component(SHADER_NAME ${SHADER} NAME)
@@ -641,7 +652,7 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
             OUTPUT ${SPIRV_OUT}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders
             COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SPIRV_OUT}
-            DEPENDS ${SHADER}
+            DEPENDS ${SHADER} ${PICTOR_GLSL_INCLUDES}
             COMMENT "Compiling ${SHADER_NAME} -> SPIR-V"
         )
         list(APPEND PICTOR_SPIRV_FILES ${SPIRV_OUT})

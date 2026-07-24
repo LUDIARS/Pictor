@@ -20,16 +20,19 @@ layout(push_constant) uniform PresentParams {
     float albedoMode;   // > 0.5 = アルベド素通し (gamma のみ、 露出なし)
 };
 
+// 出力はリニアのまま返す — swapchain は B8G8R8A8_SRGB 優先
+// (vulkan_context.cpp:596) で attachment 側が sRGB エンコードするため、
+// 手動 pow(1/2.2) を掛けると二重ガンマで白く washed になる (P1-10)。
 vec3 tonemap(vec3 hdr) {
     if (albedoMode > 0.5) {
-        return pow(max(hdr, vec3(0.0)), vec3(1.0 / 2.2));
+        return max(hdr, vec3(0.0));
     }
     // 輝度ベース Reinhard: 明るさのみ圧縮し色相・彩度 (テクスチャ色) を
     // 保存する。 チャネル別 Reinhard は高輝度で白へ収束し色が消える。
     vec3 v = max(hdr * exposure, vec3(0.0));
     float luma = dot(v, vec3(0.2126, 0.7152, 0.0722));
     float scale = (luma > 1e-6) ? (luma / (1.0 + luma)) / luma : 0.0;
-    return pow(clamp(v * scale, 0.0, 1.0), vec3(1.0 / 2.2));
+    return clamp(v * scale, 0.0, 1.0);
 }
 
 void main() {

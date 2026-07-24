@@ -79,6 +79,16 @@ layout(std430, set = SHARC_SET, binding = 17) readonly buffer SharcMaterials {
     SharcMaterial gpu_sharc_materials[];
 };
 
+// ライト (太陽シャドウレイ用に lights[0] を参照)
+struct SharcLight {
+    vec4 posRadius;        // xyz = 位置 / 方向, w = 半径 (< 0 = directional)
+    vec4 colorIntensity;
+};
+
+layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
+    SharcLight gpu_sharc_lights[];
+};
+
 // アルベドテクスチャ配列 (1 レイヤ = 1 map_Kd、 REPEAT でタイル)。
 // 未使用時は 1x1 白ダミーが結線される。
 layout(set = SHARC_SET, binding = 18) uniform sampler2DArray sharcAlbedoAtlas;
@@ -96,6 +106,9 @@ bool sharcAabbHit(vec3 bmin, vec3 bmax, vec3 ro, vec3 invRd, float tmax) {
     float tExit  = min(min(thi.x, thi.y), min(thi.z, tmax));
     return tEnter <= tExit;
 }
+
+// any-hit トラバーサル (シャドウレイ用 — 最初のヒットで打ち切り)。
+bool sharcAnyHit(vec3 ro, vec3 rd, float tmax);
 
 // Möller–Trumbore。 ヒット時 t/u/v を返す。
 bool sharcTriHit(SharcTri tri, vec3 ro, vec3 rd, float tmax,
@@ -116,6 +129,39 @@ bool sharcTriHit(SharcTri tri, vec3 ro, vec3 rd, float tmax,
     if (t <= 1e-4 || t >= tmax) return false;
     outT = t; outU = u; outV = v;
     return true;
+}
+
+bool sharcAnyHit(vec3 ro, vec3 rd, float tmax) {
+    vec3 invRd = 1.0 / vec3(
+        abs(rd.x) > 1e-12 ? rd.x : 1e-12,
+        abs(rd.y) > 1e-12 ? rd.y : 1e-12,
+        abs(rd.z) > 1e-12 ? rd.z : 1e-12);
+    uint stack[48];
+    int sp = 0;
+    stack[sp++] = 0u;
+    while (sp > 0) {
+        uint ni = stack[--sp];
+        SharcBvhNode node = gpu_sharc_bvh[ni];
+        if (!sharcAabbHit(node.bminLeft.xyz, node.bmaxCount.xyz, ro, invRd,
+                          tmax)) {
+            continue;
+        }
+        uint count = floatBitsToUint(node.bmaxCount.w);
+        if (count > 0u) {
+            uint first = floatBitsToUint(node.bminLeft.w);
+            for (uint i = 0u; i < count; i++) {
+                float t, u, v;
+                if (sharcTriHit(gpu_sharc_tris[first + i], ro, rd, tmax,
+                                t, u, v)) {
+                    return true;
+                }
+            }
+        } else if (sp + 2 <= 48) {
+            stack[sp++] = floatBitsToUint(node.bminLeft.w);
+            stack[sp++] = ni + 1u;
+        }
+    }
+    return false;
 }
 
 void main() {
@@ -233,9 +279,21 @@ void main() {
             albedo = vec3(fract(uv), layerPlus1 / 128.0);
         }
 #endif
+        // 太陽シャドウレイ (lights[0] が directional の場合):
+        // 可視性をピクセル精度で求め、 resolve の解析直接光がシャープな
+        // 影を落とす (シャドウマップ相当を BVH any-hit で代替)
+        float sunVis = 1.0;
+        if (sharcLightCount > 0u &&
+            gpu_sharc_lights[0].posRadius.w < 0.0) {
+            vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
+            if (dot(n, toSun) > 0.0 &&
+                sharcAnyHit(pos + n * 1.5e-2, toSun, 1.0e4)) {
+                sunVis = 0.0;
+            }
+        }
         req.posRough   = vec4(pos, mat.albedoRough.a);
         req.normalMfp  = vec4(n, mat.mfpPad.x);
-        req.albedoView = vec4(albedo, 0.0);
+        req.albedoView = vec4(albedo, sunVis);
         req.viewDir    = vec4(-rd, 0.0);
     } else if (floorHit) {
         vec3 pos = ro + rd * best;

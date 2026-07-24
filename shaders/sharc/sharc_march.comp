@@ -26,21 +26,17 @@ layout(std430, set = SHARC_SET, binding = 3) readonly buffer SharcRays {
     SharcRay gpu_sharc_rays[];
 };
 
-// ヒット列 (SoA 保存, resolve が再走査する)
-struct SharcHit {
-    uint  rayIdx;
-    uint  slot;
-    float t0;
-    float t1;
-};
-
-layout(std430, set = SHARC_SET, binding = 4) writeonly buffer SharcHits {
-    SharcHit gpu_sharc_hits[];
-};
-
-// カウンタ群: [0]=hitCount [1]=requestCount [2..3]=予約
+// カウンタ群: [0]=予約 [1]=requestCount [2..3]=予約
+// (ヒット列は resolve が読まないため廃止 — 最大 5900 万 atomic/frame の
+//  無駄だった。 review P1-05。 volume 積分フェーズで必要になれば
+//  tile queue として再設計する)
 layout(std430, set = SHARC_SET, binding = 5) buffer SharcCounters {
     uint gpu_sharc_counters[];
+};
+
+// per-cell reservoir (新規スロットの payload 初期化用)
+layout(std430, set = SHARC_SET, binding = 10) buffer SharcReservoirs {
+    uvec4 gpu_sharc_reservoirs[];
 };
 
 // 今フレームの要求セルリスト (compact が indirect 引数化する)
@@ -53,7 +49,6 @@ layout(std430, set = SHARC_SET, binding = 7) buffer SharcRequestStamps {
     uint gpu_sharc_stamps[];
 };
 
-const uint SHARC_HIT_CAPACITY_MARGIN = 1u;
 
 // 触れたセルを登録し、 今フレーム初出なら要求リストに積む。
 uint sharcRegisterCell(ivec3 grid, uint level) {
@@ -62,7 +57,14 @@ uint sharcRegisterCell(ivec3 grid, uint level) {
     if (slot == SHARC_SLOT_INVALID) return slot;
 
     if (inserted) {
-        // 新規セルはメタ + 逆引き座標を初期化 (CAS 勝者のみが書く)
+        // 新規セルは全 payload を初期化 (CAS 勝者のみが書く)。
+        // スロット再利用時に旧空間の moments/lobes/reservoir を約 95%
+        // 継承してしまう光漏れ・残像対策 (review P0-03)
+        uint base = sharcCellBase(slot);
+        for (uint i = 0u; i < SHARC_CELL_UINTS; i++) {
+            gpu_sharc_cells[base + i] = 0u;
+        }
+        gpu_sharc_reservoirs[slot] = uvec4(0u);
         sharcStoreMeta(slot, 0u, sharcFrameIndex & 0xFFFFu, 0.0, 0.0, level);
         gpu_sharc_cell_pos[slot] = sharcPackGridLevel(grid, level);
     }
@@ -106,18 +108,7 @@ void main() {
         }
         float tExit = min(min(tExit3.x, tExit3.y), min(tExit3.z, tMax));
 
-        uint slot = sharcRegisterCell(grid, level);
-        if (slot != SHARC_SLOT_INVALID) {
-            uint hitIdx = atomicAdd(gpu_sharc_counters[0], 1u);
-            if (hitIdx + SHARC_HIT_CAPACITY_MARGIN < gpu_sharc_hits.length()) {
-                SharcHit h;
-                h.rayIdx = rayIdx;
-                h.slot   = slot;
-                h.t0     = t;
-                h.t1     = tExit;
-                gpu_sharc_hits[hitIdx] = h;
-            }
-        }
+        sharcRegisterCell(grid, level);
 
         t = tExit + sharcHitEpsilon;
     }
