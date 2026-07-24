@@ -1,0 +1,40 @@
+// Pictor — SHaRC ポストプロセス: Bloom アップサンプル + 加算合成
+//
+// 下段 (小さい方) をテントフィルタ 9-tap で持ち上げ、 同段のダウン
+// サンプル結果へ加算する: up[i] = down[i] + tent(up[i+1])。
+// 最下段から逆順に呼ばれ、 up[0] が present の合成入力になる。
+//
+// dispatch: (dstW/8, dstH/8, 1)
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D bloomLower;   // up[i+1]
+layout(set = 0, binding = 1) uniform sampler2D bloomSame;    // down[i]
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D bloomDst;
+
+void main() {
+    ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dim = imageSize(bloomDst);
+    if (dst.x >= dim.x || dst.y >= dim.y) return;
+
+    vec2 texel = 1.0 / vec2(textureSize(bloomLower, 0));
+    vec2 uv = (vec2(dst) + 0.5) / vec2(dim);
+
+    // 3x3 テントフィルタ (1 2 1 / 2 4 2 / 1 2 1) / 16
+    vec3 up =
+        texture(bloomLower, uv + texel * vec2(-1, -1)).rgb * 1.0 +
+        texture(bloomLower, uv + texel * vec2( 0, -1)).rgb * 2.0 +
+        texture(bloomLower, uv + texel * vec2( 1, -1)).rgb * 1.0 +
+        texture(bloomLower, uv + texel * vec2(-1,  0)).rgb * 2.0 +
+        texture(bloomLower, uv).rgb                        * 4.0 +
+        texture(bloomLower, uv + texel * vec2( 1,  0)).rgb * 2.0 +
+        texture(bloomLower, uv + texel * vec2(-1,  1)).rgb * 1.0 +
+        texture(bloomLower, uv + texel * vec2( 0,  1)).rgb * 2.0 +
+        texture(bloomLower, uv + texel * vec2( 1,  1)).rgb * 1.0;
+    up *= (1.0 / 16.0);
+
+    vec3 same = texelFetch(bloomSame, dst, 0).rgb;
+    imageStore(bloomDst, dst, vec4(same + up, 1.0));
+}

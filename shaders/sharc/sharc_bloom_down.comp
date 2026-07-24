@@ -1,0 +1,43 @@
+// Pictor — SHaRC ポストプロセス: Bloom ダウンサンプル
+//
+// 13-tap (Jimenez, SIGGRAPH 2014) で 1 段下の mip へ。 bilinear サンプラ
+// 前提の重み付き 13 点参照で、 単純 box よりエイリアシング/明滅が少ない。
+//
+// dispatch: (dstW/8, dstH/8, 1)
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D bloomSrc;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D bloomDst;
+
+void main() {
+    ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dim = imageSize(bloomDst);
+    if (dst.x >= dim.x || dst.y >= dim.y) return;
+
+    vec2 texel = 1.0 / vec2(textureSize(bloomSrc, 0));
+    vec2 uv = (vec2(dst) + 0.5) / vec2(dim);
+
+    vec3 a = texture(bloomSrc, uv + texel * vec2(-2, -2)).rgb;
+    vec3 b = texture(bloomSrc, uv + texel * vec2( 0, -2)).rgb;
+    vec3 c = texture(bloomSrc, uv + texel * vec2( 2, -2)).rgb;
+    vec3 d = texture(bloomSrc, uv + texel * vec2(-1, -1)).rgb;
+    vec3 e = texture(bloomSrc, uv + texel * vec2( 1, -1)).rgb;
+    vec3 f = texture(bloomSrc, uv + texel * vec2(-2,  0)).rgb;
+    vec3 g = texture(bloomSrc, uv).rgb;
+    vec3 h = texture(bloomSrc, uv + texel * vec2( 2,  0)).rgb;
+    vec3 i = texture(bloomSrc, uv + texel * vec2(-1,  1)).rgb;
+    vec3 j = texture(bloomSrc, uv + texel * vec2( 1,  1)).rgb;
+    vec3 k = texture(bloomSrc, uv + texel * vec2(-2,  2)).rgb;
+    vec3 l = texture(bloomSrc, uv + texel * vec2( 0,  2)).rgb;
+    vec3 m = texture(bloomSrc, uv + texel * vec2( 2,  2)).rgb;
+
+    vec3 result = (d + e + i + j) * 0.125
+                + (a + b + f + g) * 0.03125
+                + (b + c + g + h) * 0.03125
+                + (f + g + k + l) * 0.03125
+                + (g + h + l + m) * 0.03125;
+    imageStore(bloomDst, dst, vec4(result, 1.0));
+}

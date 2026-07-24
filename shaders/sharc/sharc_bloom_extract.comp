@@ -1,0 +1,64 @@
+// Pictor — SHaRC ポストプロセス: Bloom 抽出 (パイプライン初段)
+//
+// resolve の HDR 出力 (SSBO) から露出スケール済みの高輝度成分を
+// ソフトニー閾値で抽出し、 半解像度 mip0 へ書く。 2x2 の Karis average
+// (1/(1+luma) 重み) でファイアフライ (孤立高輝度画素) の明滅を抑える。
+// トーンマップ前の HDR に対して行うのが要点 (Reinhard 後では強度情報が
+// 消えて全部同じ滲みになる)。
+//
+// dispatch: (halfW/8, halfH/8, 1)
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer SharcOutput {
+    vec4 gpu_output[];
+};
+
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D bloomDst;
+
+layout(push_constant) uniform BloomPush {
+    uint  renderW;
+    uint  renderH;
+    float exposure;
+    float threshold;   // 露出スケール後の輝度閾値
+    float knee;        // ソフトニー幅
+};
+
+float lumaOf(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+vec3 fetch(ivec2 p) {
+    p = clamp(p, ivec2(0), ivec2(int(renderW) - 1, int(renderH) - 1));
+    return max(gpu_output[uint(p.y) * renderW + uint(p.x)].rgb, vec3(0.0))
+         * exposure;
+}
+
+// ソフトニー付き閾値 (Unity/Jimenez 流)
+vec3 applyThreshold(vec3 c) {
+    float l = lumaOf(c);
+    float soft = clamp(l - threshold + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee + 1e-5);
+    float contrib = max(soft, l - threshold) / max(l, 1e-5);
+    return c * clamp(contrib, 0.0, 1.0);
+}
+
+void main() {
+    ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dim = imageSize(bloomDst);
+    if (dst.x >= dim.x || dst.y >= dim.y) return;
+
+    // 2x2 → 1 (半解像度化) + Karis average
+    ivec2 src = dst * 2;
+    vec3 c0 = applyThreshold(fetch(src));
+    vec3 c1 = applyThreshold(fetch(src + ivec2(1, 0)));
+    vec3 c2 = applyThreshold(fetch(src + ivec2(0, 1)));
+    vec3 c3 = applyThreshold(fetch(src + ivec2(1, 1)));
+    float w0 = 1.0 / (1.0 + lumaOf(c0));
+    float w1 = 1.0 / (1.0 + lumaOf(c1));
+    float w2 = 1.0 / (1.0 + lumaOf(c2));
+    float w3 = 1.0 / (1.0 + lumaOf(c3));
+    vec3 avg = (c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3)
+             / max(w0 + w1 + w2 + w3, 1e-5);
+    imageStore(bloomDst, dst, vec4(avg, 1.0));
+}
