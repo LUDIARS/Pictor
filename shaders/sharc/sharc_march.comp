@@ -68,17 +68,23 @@ uint sharcRegisterCell(ivec3 grid, uint level) {
         for (uint i = 0u; i < SHARC_ACCUM_UINTS; i++) {
             gpu_sharc_accum[slot * SHARC_ACCUM_UINTS + i] = 0u;
         }
-        sharcStoreMeta(slot, 0u, sharcFrameIndex & 0xFFFFu, 0.0, 0.0, level, 1.0);
+        sharcStoreMeta(slot, 0u, sharcFrameIndex & 0xFFFFu, 0.0, 0.0, level,
+                       1.0, 1.0);
         gpu_sharc_cell_pos[slot] = sharcPackGridLevel(grid, level);
-    }
-    // 収束セルの凍結: 履歴が十分 (4096 サンプル ≈ 64 フレーム) なら
-    // 要求を出さない — 静的シーン + 静的ライトでは update コストが
-    // 漸近ゼロになる (実行時の事前計算化)。 ライト変更時はキャッシュ
-    // クリアで解凍する (将来: light revision 連動)
-    {
-        uint metaCount = gpu_sharc_cells[sharcCellBase(slot)
-                                         + SHARC_CELL_OFFSET_META] & 0xFFFFu;
-        if (metaCount >= 4096u) return slot;
+        // 近傍スロットテーブルの相互リンク: 自分の 27 行を解決しつつ、
+        // 既存の近傍へ自分を逆登録する (対称 index 26-i)。 挿入 race で
+        // 稀に取りこぼしても、 読む側の指紋検証 + 自己修復で無害。
+        uint nb = slot * SHARC_NEIGHBOR_UINTS;
+        for (int i = 0; i < 27; i++) {
+            ivec3 offs = ivec3(i % 3, (i / 3) % 3, i / 9) - ivec3(1);
+            if (i == 13) { gpu_sharc_neighbors[nb + 13u] = slot; continue; }
+            uint ns = sharcFindSlot(grid + offs, level);
+            gpu_sharc_neighbors[nb + uint(i)] = ns;
+            if (ns != SHARC_SLOT_INVALID) {
+                gpu_sharc_neighbors[ns * SHARC_NEIGHBOR_UINTS
+                                    + uint(26 - i)] = slot;
+            }
+        }
     }
     // 通常読みで既登録なら atomic を踏まない (多数派の fast path)
     if (gpu_sharc_stamps[slot] != sharcFrameIndex) {

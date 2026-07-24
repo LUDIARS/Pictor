@@ -42,6 +42,13 @@ layout(std430, set = SHARC_SET, binding = 17) readonly buffer SharcMaterials {
     SharcMaterial gpu_sharc_materials[];
 };
 
+// ロード時ベイクの頂点 AO (三角形ごとに 3 コーナー × unorm8、 bits 0-23)。
+// sharc_ao_bake.comp が書き、 hit パスが重心補間で読む (実行時 AO レイの
+// 置き換え — 静的ジオメトリの事前計算)。 未ベイク時は 0xFFFFFFFF (= AO 1.0)。
+layout(std430, set = SHARC_SET, binding = 20) buffer SharcTriAo {
+    uint gpu_sharc_tri_ao[];
+};
+
 bool sharcAabbHit(vec3 bmin, vec3 bmax, vec3 ro, vec3 invRd, float tmax) {
     vec3 t0 = (bmin - ro) * invRd;
     vec3 t1 = (bmax - ro) * invRd;
