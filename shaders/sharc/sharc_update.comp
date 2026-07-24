@@ -6,10 +6,10 @@
 //      採択サンプル y と W = wSum/(M・pHat(y)) を評価へ接続する設計から)
 //   2. (SHARC_RAY_QUERY 時) 可視性レイ → 既定はアンシャドウ
 //   3. M0/M1 蓄積 + vMF ローブ EM 更新 → EMA でセルへブレンド
-// フレーム意味論: **同フレーム評価** — update の EMA 結果を同フレームの
-// resolve が読む (パス間 barrier で保証)。 時間蓄積は EMA が担う。
-// 公式 SHaRC の accumulation / resolved 分離 (1 フレーム遅延) とは
-// 意図的に異なる簡易方式 (review P0-06 で契約として明文化)。
+// フレーム意味論 (Phase 2 — NVIDIA 公式流): update は蓄積バッファへ
+// 固定小数点で **加算のみ**。 翌フレームの compact が per-element に
+// 履歴と結合してリセットする (正式な 1 フレーム遅延、 read-after-write
+// バイアスなし)。 ローブは線形蓄積できないため適応 EMA を維持。
 //
 // バッチ統計 (モーメント / ローブ帰属) は shared メモリのツリー縮約で
 // 64 スレッド並列に計算する。 thread0 直列だと要求セル数の多いシーン
@@ -150,8 +150,12 @@ void main() {
     barrier();
 
     // ── セル AO (SHaRC ロジックの AO): セル中心から球面 16 レイの
-    //    短距離遮蔽率をキャッシュする。 到達距離はセルサイズ連動 ──
-    if (tid < SHARC_AO_RAYS && (sharcSceneFlags & SHARC_SCENE_MESH) != 0u) {
+    //    短距離遮蔽率をキャッシュする。 到達距離はセルサイズ連動。
+    //    静的ジオメトリでは不変のため、 収束後 (履歴 512 レイ) は打たない
+    //    (事前計算化 — 実行時コストが漸近ゼロ) ──
+    bool aoActive = (sharcSceneFlags & SHARC_SCENE_MESH) != 0u &&
+                    sampleCountPrev < 2048u;
+    if (tid < SHARC_AO_RAYS && aoActive) {
         uint aoRng = sharcHashCombine(slot * 31u + tid, sharcFrameIndex);
         float z = 1.0 - 2.0 * sharcRand(aoRng);
         float phi = 2.0 * SHARC_PI * sharcRand(aoRng);
@@ -239,26 +243,36 @@ void main() {
     // ============================================================
     if (tid != 0u) return;
 
-    // 適応ブレンド係数 (NVIDIA SHaRC の sample-count 正規化に相当):
-    // コールドセルは α≈1 で即応し、 履歴が溜まると sharcEmaAlpha を下限に
-    // 収束する。 新規セルが ~20 フレーム暗い問題を解消する。
+    // 適応ブレンド係数 (ローブ EM 用 — ローブは線形蓄積できないため
+    // EMA を維持。 モーメント/AO は蓄積バッファ経由で compact が結合する)
     float alpha = max(1.0 / (1.0 + float(sampleCountPrev) /
                                    float(SHARC_SAMPLES_PER_CELL)),
                       sharcEmaAlpha);
 
-    // --- モーメント EMA (縮約済み部分和から) ---
-    // 推定量は Σ(f/q)/N (サンプル数正規化)。 Σ(f/q)/Σ(1/q) だと多灯の
-    // 総和ではなく平均になり、 ライト数 N で 1/N に暗くなる (review P0-01)。
+    // --- モーメント/AO: 蓄積バッファへ固定小数点加算 (Phase 2) ---
+    // 推定量 Σ(f/q) をそのまま積む。 正規化 (÷サンプル数) は compact 側。
+    uint ab = slot * SHARC_ACCUM_UINTS;
     uint mb = uint(SHARC_LOBE_COUNT) * 8u;
     float wNorm = sh_part[0][mb + 6u];
     vec3 m0 = vec3(0.0);
     if (wNorm > SHARC_EPSILON) {
-        const float invN = 1.0 / float(SHARC_SAMPLES_PER_CELL);
+        gpu_sharc_accum[ab + 0u] += sharcFixedEncode(sh_part[0][mb + 0u]);
+        gpu_sharc_accum[ab + 1u] += sharcFixedEncode(sh_part[0][mb + 1u]);
+        gpu_sharc_accum[ab + 2u] += sharcFixedEncode(sh_part[0][mb + 2u]);
+        gpu_sharc_accum[ab + 4u] = uint(int(gpu_sharc_accum[ab + 4u])
+                                        + sharcFixedEncodeS(sh_part[0][mb + 3u]));
+        gpu_sharc_accum[ab + 5u] = uint(int(gpu_sharc_accum[ab + 5u])
+                                        + sharcFixedEncodeS(sh_part[0][mb + 4u]));
+        gpu_sharc_accum[ab + 6u] = uint(int(gpu_sharc_accum[ab + 6u])
+                                        + sharcFixedEncodeS(sh_part[0][mb + 5u]));
         m0 = vec3(sh_part[0][mb + 0u], sh_part[0][mb + 1u],
-                  sh_part[0][mb + 2u]) * invN;
-        vec3 m1 = vec3(sh_part[0][mb + 3u], sh_part[0][mb + 4u],
-                       sh_part[0][mb + 5u]) * invN;
-        sharcMomentsBlend(slot, m0, m1, alpha);
+                  sh_part[0][mb + 2u]) / float(SHARC_SAMPLES_PER_CELL);
+    }
+    gpu_sharc_accum[ab + 3u] += SHARC_SAMPLES_PER_CELL;
+    // AO: 遮蔽数/レイ数を low16/high16 に加算 (収束済みならレイを打って
+    // いないので加算なし — 静的ジオメトリの事前計算化)
+    if (aoActive) {
+        gpu_sharc_accum[ab + 7u] += sh_aoHits | (SHARC_AO_RAYS << 16);
     }
 
     // --- ローブ EMA (縮約済みバッチ統計から) + 孤児 1 本スポーン ---
@@ -276,15 +290,13 @@ void main() {
         sharcStoreLobe(slot, uint(k), lobes[k]);
     }
 
-    // --- メタ更新 (輝度統計 + セル AO の時間蓄積) ---
+    // --- メタ更新: 輝度統計のみ (モーメント/AO の履歴結合は compact) ---
     float lumaBatch = sharcLuminance(m0);
     float meanNew = mix(lumaMean, lumaBatch, alpha);
     float varNew  = mix(lumaVar, (lumaBatch - meanNew) * (lumaBatch - meanNew),
                         alpha);
-    float aoOld = sharcLoadCellAo(slot);
-    float aoNew = 1.0 - float(sh_aoHits) / float(SHARC_AO_RAYS);
-    float aoB = ((sharcSceneFlags & SHARC_SCENE_MESH) != 0u)
-              ? mix(aoOld, aoNew, alpha) : 1.0;
-    sharcStoreMeta(slot, sampleCountPrev + SHARC_SAMPLES_PER_CELL,
-                   sharcFrameIndex & 0xFFFFu, meanNew, varNew, level, aoB);
+    // サンプルカウンタの増分は compact (履歴結合) が所有する
+    sharcStoreMeta(slot, sampleCountPrev,
+                   sharcFrameIndex & 0xFFFFu, meanNew, varNew, level,
+                   sharcLoadCellAo(slot));
 }
