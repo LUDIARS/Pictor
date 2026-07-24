@@ -641,6 +641,7 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/shadow.glsl
         ${CMAKE_SOURCE_DIR}/shaders/velocity.glsl
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_common.glsl
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_scene.glsl
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_moments.glsl
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_lobes.glsl
     )

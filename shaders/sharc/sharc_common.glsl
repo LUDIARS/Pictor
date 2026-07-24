@@ -344,13 +344,20 @@ void sharcLoadMeta(uint slot, out uint sampleCount, out uint lastFrame,
     level = gpu_sharc_cells[b + 2u] & 0xFFu;
 }
 
+// セル AO (unorm8、 meta word2 bits 8-15)。 1.0 = 遮蔽なし。
+float sharcLoadCellAo(uint slot) {
+    uint b = sharcCellBase(slot) + SHARC_CELL_OFFSET_META;
+    return float((gpu_sharc_cells[b + 2u] >> 8) & 0xFFu) / 255.0;
+}
+
 void sharcStoreMeta(uint slot, uint sampleCount, uint lastFrame,
-                    float lumaMean, float lumaVar, uint level) {
+                    float lumaMean, float lumaVar, uint level, float ao) {
     uint b = sharcCellBase(slot) + SHARC_CELL_OFFSET_META;
     gpu_sharc_cells[b + 0u] = (min(sampleCount, 0xFFFFu))
                             | ((lastFrame & 0xFFFFu) << 16);
     gpu_sharc_cells[b + 1u] = sharcHalf2Pack(lumaMean, lumaVar);
-    gpu_sharc_cells[b + 2u] = level & 0xFFu;
+    uint ao8 = uint(clamp(ao, 0.0, 1.0) * 255.0 + 0.5);
+    gpu_sharc_cells[b + 2u] = (level & 0xFFu) | (ao8 << 8);
     gpu_sharc_cells[b + 3u] = 0u;
 }
 
