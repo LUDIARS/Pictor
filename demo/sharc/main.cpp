@@ -34,6 +34,7 @@
 #include "mesh_bvh.h"
 #include "obj_mesh.h"
 #include "ply_mesh.h"
+#include "bloom_pipeline.h"
 #include "gbuffer_renderer.h"
 #include "present_renderer.h"
 #include "texture_atlas.h"
@@ -328,9 +329,13 @@ void key_cb(GLFWwindow* w, int key, int, int action, int) {
 // 1.7: 多灯化で全体光量を下げた分を露出で持ち上げ、 日陰の視認性を確保
 constexpr float kExposure = 1.7f;
 
-// 太陽方向 (to-sun)。 日中ライトリグ (lights[0]) とシャドウマップ ortho の
-// 両方がこれを参照する — 二重定義でズレると影が割れる
-const Vec3 kSunDir{-0.55f, 0.78f, 0.23f};
+// Bloom 合成強度 (トーンマップ前、 露出スケール済み bloom に乗算)
+constexpr float kBloomStrength = 0.08f;
+
+// 太陽方向 (to-sun)。 ライトリグ (lights[0]) とシャドウマップ ortho の
+// 両方がこれを参照する — 二重定義でズレると影が割れる。
+// 夕方の終わりかけ (低仰角 ~13°、 西日) — 街灯/提灯の効果を見せる時間帯
+const Vec3 kSunDir{-0.78f, 0.22f, 0.32f};
 
 // ============================================================
 // ハイブリッド経路の行列 (column-major、 GLSL mat4 互換)
@@ -750,11 +755,24 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── 表示: resolve 出力 SSBO を fragment が直読み (readback レス) ──
+    // ── ポストプロセス: Bloom (extract → down ×4 → up ×4、 compute) ──
+    sharc_demo::BloomPipeline bloom;
+    if (!bloom.initialize(vk, "shaders", kRenderW, kRenderH,
+                          sharc.output_buffer(), sharc.output_size())) {
+        std::fprintf(stderr, "[init] FATAL: BloomPipeline init failed\n");
+        sharc.shutdown();
+        vk.shutdown();
+        surface.destroy();
+        return 1;
+    }
+
+    // ── 表示: resolve 出力 SSBO を fragment が直読み + bloom 合成 ──
     sharc_demo::PresentRenderer present;
     if (!present.initialize(vk, "shaders", sharc.output_buffer(),
-                            sharc.output_size())) {
+                            sharc.output_size(), bloom.result_view(),
+                            bloom.result_sampler())) {
         std::fprintf(stderr, "[init] FATAL: PresentRenderer init failed\n");
+        bloom.shutdown();
         sharc.shutdown();
         vk.shutdown();
         surface.destroy();
@@ -843,17 +861,16 @@ int main(int argc, char** argv) {
             //    提灯 1.0 (直径 2m)。 全体光量はライト増に合わせ減 ──
             uint32_t li = 0;
             // 太陽: posRadius.w < 0 = directional、 xyz = to-sun 方向。
-            // 街全体の視認性は太陽/空が担い、 街灯/提灯は GI の暖色
-            // プールが確認できる程度に載せる (neco 調整指示)
+            // 夕方の終わりかけ: オレンジやや弱め、 全体は日中より一段暗く
+            // して街灯/提灯の効果を見せる (neco 指示)
             lights[li++] = SharcLightGpu{
                 {kSunDir.x, kSunDir.y, kSunDir.z, -1.0f},
-                {1.0f, 0.96f, 0.88f, 3.8f}};
-            // 空光 (寒色 directional、 天頂から)。 シャドウマップ化で
-            // 日陰が正確に沈むようになったため、 街全体の視認性は
-            // 空光→キャッシュ GI の間接で持ち上げる
+                {1.0f, 0.52f, 0.28f, 1.6f}};
+            // 空光 (夕暮れの青紫 directional、 天頂から)。 日陰の視認性は
+            // 空光→キャッシュ GI の間接が担う
             lights[li++] = SharcLightGpu{
                 {0.0f, 1.0f, 0.0f, -1.0f},
-                {0.45f, 0.55f, 0.75f, 1.1f}};
+                {0.40f, 0.42f, 0.62f, 0.9f}};
             const uint32_t max_li = 256;
             for (const auto& e : g_emissives) {
                 if (li >= max_li) break;
@@ -987,6 +1004,17 @@ int main(int argc, char** argv) {
         }
         sharc.record(cmd);
 
+        // resolve の出力 → bloom (compute) の読み取り
+        {
+            VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                                 &mb, 0, nullptr, 0, nullptr);
+        }
+        bloom.record(cmd, kExposure);
+
         // resolve の出力 → fragment 読み
         VkBufferMemoryBarrier out_barrier{
             VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
@@ -1011,7 +1039,8 @@ int main(int argc, char** argv) {
         vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
         present.render(cmd, ext, static_cast<uint32_t>(kRenderW),
                        static_cast<uint32_t>(kRenderH), kExposure,
-                       g_albedo_view);
+                       g_albedo_view,
+                       g_albedo_view ? 0.0f : kBloomStrength);
         vkCmdEndRenderPass(cmd);
         vkEndCommandBuffer(cmd);
 
@@ -1061,6 +1090,7 @@ int main(int argc, char** argv) {
     // 収束済みキャッシュを直列化 (次回起動の温間スタート用)
     if (gpu_scene && !cache_path.empty()) sharc.save_cache(cache_path);
     present.shutdown();
+    bloom.shutdown();
     gbr.shutdown();
     sharc.shutdown();
     vk.shutdown();
