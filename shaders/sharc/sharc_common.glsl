@@ -107,6 +107,29 @@ layout(std430, set = SHARC_SET, binding = 2) buffer SharcCells {
     uint gpu_sharc_cells[];        // [tableSize * SHARC_CELL_UINTS]
 };
 
+// 蓄積バッファ (NVIDIA 公式流の accumulation/resolved 分離 — Phase 2)。
+// update が固定小数点で加算し、 翌フレームの compact が履歴と結合して
+// リセットする (正式な 1 フレーム遅延)。 レイアウト (8 uint / slot):
+//   [0..2] M0 RGB (unsigned fixed, ×SHARC_RADIANCE_SCALE)
+//   [3]    サンプル数
+//   [4..6] M1 xyz (signed fixed, int bitcast)
+//   [7]    AO: 遮蔽数 (low16) | レイ数 (high16)
+layout(std430, set = SHARC_SET, binding = 4) buffer SharcAccum {
+    uint gpu_sharc_accum[];        // [tableSize * 8]
+};
+
+const uint  SHARC_ACCUM_UINTS    = 8u;
+const float SHARC_RADIANCE_SCALE = 1024.0;
+
+uint sharcFixedEncode(float v) {
+    return uint(clamp(v, 0.0, 4.0e6) * SHARC_RADIANCE_SCALE + 0.5);
+}
+float sharcFixedDecode(uint v) { return float(v) / SHARC_RADIANCE_SCALE; }
+int sharcFixedEncodeS(float v) {
+    return int(clamp(v, -2.0e6, 2.0e6) * SHARC_RADIANCE_SCALE);
+}
+float sharcFixedDecodeS(int v) { return float(v) / SHARC_RADIANCE_SCALE; }
+
 // スロット → グリッド座標の逆引き (セル本体 80B の外の補助データ)。
 // 書くのは sharcInsertSlot の CAS 勝者のみ → 同フレーム内 race なし
 // (読むのは後続パスのみ)。 x/y/z 各 signed 20bit + level 4bit を uvec2 に詰める。

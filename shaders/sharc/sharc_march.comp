@@ -65,8 +65,20 @@ uint sharcRegisterCell(ivec3 grid, uint level) {
             gpu_sharc_cells[base + i] = 0u;
         }
         gpu_sharc_reservoirs[slot] = uvec4(0u);
+        for (uint i = 0u; i < SHARC_ACCUM_UINTS; i++) {
+            gpu_sharc_accum[slot * SHARC_ACCUM_UINTS + i] = 0u;
+        }
         sharcStoreMeta(slot, 0u, sharcFrameIndex & 0xFFFFu, 0.0, 0.0, level, 1.0);
         gpu_sharc_cell_pos[slot] = sharcPackGridLevel(grid, level);
+    }
+    // 収束セルの凍結: 履歴が十分 (4096 サンプル ≈ 64 フレーム) なら
+    // 要求を出さない — 静的シーン + 静的ライトでは update コストが
+    // 漸近ゼロになる (実行時の事前計算化)。 ライト変更時はキャッシュ
+    // クリアで解凍する (将来: light revision 連動)
+    {
+        uint metaCount = gpu_sharc_cells[sharcCellBase(slot)
+                                         + SHARC_CELL_OFFSET_META] & 0xFFFFu;
+        if (metaCount >= 4096u) return slot;
     }
     // 通常読みで既登録なら atomic を踏まない (多数派の fast path)
     if (gpu_sharc_stamps[slot] != sharcFrameIndex) {
