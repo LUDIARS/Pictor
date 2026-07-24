@@ -245,13 +245,17 @@ uint sharcHashCombine(uint seed, uint v) {
     return seed ^ (sharcHashUint(v) + 0x9E3779B9u + (seed << 6) + (seed >> 2));
 }
 
-// (grid, level) → 32bit 指紋。 0 は空スロット識別に予約するので回避。
+// スロットキーの予約値: 0 = 空、 TOMBSTONE = 削除済み (probe chain 維持、
+// open addressing の削除でチェインを切らないため — review P0-02)。
+const uint SHARC_KEY_TOMBSTONE = 0xFFFFFFFEu;
+
+// (grid, level) → 32bit 指紋。 予約値 (0 / TOMBSTONE) は回避。
 uint sharcFingerprint(ivec3 grid, uint level) {
     uint h = sharcHashCombine(0x811C9DC5u, uint(grid.x));
     h = sharcHashCombine(h, uint(grid.y));
     h = sharcHashCombine(h, uint(grid.z));
     h = sharcHashCombine(h, level);
-    return (h == 0u) ? 1u : h;
+    return (h == 0u || h == SHARC_KEY_TOMBSTONE) ? 1u : h;
 }
 
 // (grid, level) → テーブル開始スロット (指紋とは独立のハッシュ)。
@@ -267,6 +271,7 @@ const uint SHARC_PROBE_LIMIT = 16u;     // 線形走査の上限
 const uint SHARC_SLOT_INVALID = 0xFFFFFFFFu;
 
 // 検索のみ (挿入なし)。 見つからなければ SHARC_SLOT_INVALID。
+// TOMBSTONE は「占有扱いで読み飛ばし」 — 探索は空 (0) でのみ打ち切る。
 uint sharcFindSlot(ivec3 grid, uint level) {
     uint fp = sharcFingerprint(grid, level);
     uint slot = sharcSlotHash(grid, level);
@@ -281,7 +286,7 @@ uint sharcFindSlot(ivec3 grid, uint level) {
 
 // 挿入。 戻り値 = スロット。 満杯なら SHARC_SLOT_INVALID。
 // outInserted = このスレッドが新規確保したか (要求リスト登録の重複排除)。
-// 既存スロットは通常読みで返し、 空きの時だけ atomicCAS を踏む —
+// 既存スロットは通常読みで返し、 空き/墓標の時だけ atomicCAS を踏む —
 // 大量レイが同一セルを歩く march では atomic RMW が支配的コストになるため。
 uint sharcInsertSlot(ivec3 grid, uint level, out bool outInserted) {
     uint fp = sharcFingerprint(grid, level);
@@ -291,9 +296,9 @@ uint sharcInsertSlot(ivec3 grid, uint level, out bool outInserted) {
         uint s = (slot + i) & (sharcTableSize - 1u);
         uint cur = gpu_sharc_keys[s];
         if (cur == fp) return s;                 // 既存 (atomic 不要の多数派)
-        if (cur == 0u) {
-            uint prev = atomicCompSwap(gpu_sharc_keys[s], 0u, fp);
-            if (prev == 0u) { outInserted = true; return s; }
+        if (cur == 0u || cur == SHARC_KEY_TOMBSTONE) {
+            uint prev = atomicCompSwap(gpu_sharc_keys[s], cur, fp);
+            if (prev == cur) { outInserted = true; return s; }
             if (prev == fp) return s;
             // 別セルが先に確保 → 次スロットへ線形続行
         }

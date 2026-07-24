@@ -238,7 +238,36 @@ void SharcGpuExecutor::write_scene_descriptors_() {
 }
 
 bool SharcGpuExecutor::upload_scene(const SharcSceneUpload& scene) {
-    if (!initialized_ || scene.node_count == 0 || scene.tri_count == 0) {
+    // 入力検証 (review P1-06)
+    if (!initialized_ || scene.node_count == 0 || scene.tri_count == 0 ||
+        scene.nodes == nullptr || scene.tris == nullptr ||
+        scene.tri_materials == nullptr || scene.materials == nullptr ||
+        scene.material_count == 0) {
+        std::fprintf(stderr, "[sharc] upload_scene: invalid input\n");
+        return false;
+    }
+    // 新バッファ群を一時所有で全て完成させてから旧を破棄して切り替える —
+    // 途中失敗で旧シーンと descriptor が壊れないように (review P1-06)
+    Buffer new_nodes, new_tris, new_tri_mats, new_materials;
+    const bool ok =
+        create_device_buffer_(new_nodes, scene.nodes,
+                              VkDeviceSize{scene.node_count} *
+                                  sizeof(SharcBvhNodeGpu)) &&
+        create_device_buffer_(new_tris, scene.tris,
+                              VkDeviceSize{scene.tri_count} *
+                                  sizeof(SharcTriGpu)) &&
+        create_device_buffer_(new_tri_mats, scene.tri_materials,
+                              VkDeviceSize{scene.tri_count} *
+                                  sizeof(uint32_t)) &&
+        create_device_buffer_(new_materials, scene.materials,
+                              VkDeviceSize{scene.material_count} *
+                                  sizeof(SharcMaterialGpu));
+    if (!ok) {
+        std::fprintf(stderr, "[sharc] scene upload failed (kept old scene)\n");
+        destroy_buffer_(new_nodes);
+        destroy_buffer_(new_tris);
+        destroy_buffer_(new_tri_mats);
+        destroy_buffer_(new_materials);
         return false;
     }
     vkDeviceWaitIdle(device_);
@@ -246,21 +275,10 @@ bool SharcGpuExecutor::upload_scene(const SharcSceneUpload& scene) {
     destroy_buffer_(scene_tris_);
     destroy_buffer_(scene_tri_mats_);
     destroy_buffer_(scene_materials_);
-    if (!create_device_buffer_(scene_nodes_, scene.nodes,
-                               VkDeviceSize{scene.node_count} *
-                                   sizeof(SharcBvhNodeGpu)) ||
-        !create_device_buffer_(scene_tris_, scene.tris,
-                               VkDeviceSize{scene.tri_count} *
-                                   sizeof(SharcTriGpu)) ||
-        !create_device_buffer_(scene_tri_mats_, scene.tri_materials,
-                               VkDeviceSize{scene.tri_count} *
-                                   sizeof(uint32_t)) ||
-        !create_device_buffer_(scene_materials_, scene.materials,
-                               VkDeviceSize{scene.material_count} *
-                                   sizeof(SharcMaterialGpu))) {
-        std::fprintf(stderr, "[sharc] scene upload failed\n");
-        return false;
-    }
+    scene_nodes_     = new_nodes;
+    scene_tris_      = new_tris;
+    scene_tri_mats_  = new_tri_mats;
+    scene_materials_ = new_materials;
     write_scene_descriptors_();
     if (scene.atlas_pixels != nullptr && scene.atlas_layers > 0) {
         if (!create_atlas_(scene.atlas_pixels, scene.atlas_size,
@@ -745,34 +763,37 @@ void SharcGpuExecutor::record(VkCommandBuffer cmd) {
                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
 
+    // パス間はグローバル memory barrier で全 SSBO を可視化する
+    // (review P0-05 — 個別バッファ指定では cells/cell_pos/reservoirs の
+    //  可視化が漏れていた。 パス数が少ないため全域バリアのコストは軽微)
+    const auto global_barrier = [&cmd](VkPipelineStageFlags dst_stage,
+                                       VkAccessFlags dst_access) {
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = dst_access;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             dst_stage, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    };
+
     // ── Pass 1: March (レイ並列) ──
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, march_.pipeline);
     vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
-
-    // march の書き込み (キー / 要求リスト / カウンタ) → compact の読み取り
-    barrier_(cmd, counters_.buf, VK_ACCESS_SHADER_WRITE_BIT,
-             VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-    barrier_(cmd, keys_.buf, VK_ACCESS_SHADER_WRITE_BIT,
-             VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    global_barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 
     // ── Pass 2: Compact (テーブル並列 — indirect 引数生成 + エビクション) ──
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compact_.pipeline);
     vkCmdDispatch(cmd, (config_.table_size + 255u) / 256u, 1, 1);
-
-    // compact の indirect 書き込み → indirect dispatch 読み取り
-    barrier_(cmd, indirect_.buf, VK_ACCESS_SHADER_WRITE_BIT,
-             VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
-    barrier_(cmd, requests_.buf, VK_ACCESS_SHADER_WRITE_BIT,
-             VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    global_barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                       VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                       VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
 
     // ── Pass 3: Light / Update (1 workgroup = 1 要求セル, indirect) ──
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, update_.pipeline);
     vkCmdDispatchIndirect(cmd, indirect_.buf, 0);
-
-    // update のセル書き込み → resolve の読み取り
-    barrier_(cmd, cells_.buf, VK_ACCESS_SHADER_WRITE_BIT,
-             VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    global_barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 
     // ── Pass 4: Resolve (レイ並列, キャッシュ参照のみ) ──
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.pipeline);

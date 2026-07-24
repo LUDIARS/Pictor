@@ -49,7 +49,10 @@ void sharcStoreLobe(uint slot, uint lobeIdx, SharcLobe l) {
                                                  SHARC_KAPPA_MAX))) & 0xFFFF0000u;
     gpu_sharc_cells[b + 0u] = sharcOct16Encode(l.dir) | kappaHalf;
     gpu_sharc_cells[b + 1u] = sharcRgb9e5Encode(l.mu);
-    gpu_sharc_cells[b + 2u] = sharcHalf2Pack(l.dist, l.weight);
+    // half 範囲 (65504) を超えると Inf → 次フレームの responsibility で
+    // NaN 伝播するため clamp する (review P1-02)
+    gpu_sharc_cells[b + 2u] = sharcHalf2Pack(clamp(l.dist, 0.0, 6.0e4),
+                                             clamp(l.weight, 0.0, 6.0e4));
 }
 
 // ============================================================
