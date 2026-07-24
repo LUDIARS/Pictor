@@ -875,15 +875,18 @@ int main(int argc, char** argv) {
             for (const auto& e : g_emissives) {
                 if (li >= max_li) break;
                 if (e.kind == 0) {
-                    // 街灯: 暖色、 影響直径 15m
+                    // 街灯: 暖色。 窓関数が中距離 (灯下の地面 ~4.5m) を
+                    // 削るため、 半径 9m + 強度 18 で路面プールを出す
+                    // (neco 指示: 地面の陰に影響が見えること)
                     lights[li++] = SharcLightGpu{
-                        {e.center[0], e.center[1], e.center[2], 7.5f},
-                        {1.0f, 0.78f, 0.5f, 8.0f}};
+                        {e.center[0], e.center[1], e.center[2], 9.0f},
+                        {1.0f, 0.78f, 0.5f, 18.0f}};
                 } else {
-                    // 提灯 / 電飾玉: 濃い暖色、 影響直径 2m
+                    // 提灯 / 電飾玉: 濃い暖色。 吊り高さ ~3m から地面に
+                    // 届くよう半径 4m へ拡大 (直径 2m だと路面に不達)
                     lights[li++] = SharcLightGpu{
-                        {e.center[0], e.center[1], e.center[2], 1.0f},
-                        {1.0f, 0.62f, 0.38f, 2.0f}};
+                        {e.center[0], e.center[1], e.center[2], 4.0f},
+                        {1.0f, 0.62f, 0.38f, 4.0f}};
                 }
             }
             if (g_has_prop && li < max_li) {
