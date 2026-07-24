@@ -138,7 +138,17 @@ inline uint32_t sharc_oct32_encode(float nx, float ny, float nz) {
 /// per-cell reservoir (uvec4): {lightIdx, wSum(f32), M(f32), targetPdf(f32)}。
 constexpr uint32_t kSharcReservoirUints = 4;
 
-/// ヒットレコード {rayIdx, slot, t0, t1} (std430)。
+/// 蓄積バッファ (Phase 2, GLSL SHARC_ACCUM_UINTS と一致):
+/// [0..2] M0 RGB 固定小数点 / [3] サンプル数 / [4..6] M1 xyz (signed) /
+/// [7] AO 遮蔽|レイ数 / [8] 太陽可視 遮蔽|レイ数 / [9] 予約。
+constexpr uint32_t kSharcAccumUints = 10;
+
+/// 近傍スロットテーブル: セルごとに 27 近傍 (自身含む 3x3x3) の slot を
+/// 事前解決して持つ (resolve のハッシュ検索 8 回/画素 → 配列参照化)。
+constexpr uint32_t kSharcNeighborUints = 27;
+
+/// ヒットレコード {rayIdx, slot, t0, t1} (std430)。 Vulkan 経路は蓄積
+/// バッファに置き換え済み — DX12 ポート (旧スナップショット) のみ使用。
 constexpr uint32_t kSharcHitRecordBytes = 16;
 
 // ============================================================

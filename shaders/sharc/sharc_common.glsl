@@ -109,16 +109,18 @@ layout(std430, set = SHARC_SET, binding = 2) buffer SharcCells {
 
 // 蓄積バッファ (NVIDIA 公式流の accumulation/resolved 分離 — Phase 2)。
 // update が固定小数点で加算し、 翌フレームの compact が履歴と結合して
-// リセットする (正式な 1 フレーム遅延)。 レイアウト (8 uint / slot):
+// リセットする (正式な 1 フレーム遅延)。 レイアウト (10 uint / slot):
 //   [0..2] M0 RGB (unsigned fixed, ×SHARC_RADIANCE_SCALE)
 //   [3]    サンプル数
 //   [4..6] M1 xyz (signed fixed, int bitcast)
 //   [7]    AO: 遮蔽数 (low16) | レイ数 (high16)
+//   [8]    太陽可視: 遮蔽数 (low16) | レイ数 (high16)
+//   [9]    予約
 layout(std430, set = SHARC_SET, binding = 4) buffer SharcAccum {
-    uint gpu_sharc_accum[];        // [tableSize * 8]
+    uint gpu_sharc_accum[];        // [tableSize * SHARC_ACCUM_UINTS]
 };
 
-const uint  SHARC_ACCUM_UINTS    = 8u;
+const uint  SHARC_ACCUM_UINTS    = 10u;
 const float SHARC_RADIANCE_SCALE = 1024.0;
 
 uint sharcFixedEncode(float v) {
@@ -136,6 +138,22 @@ float sharcFixedDecodeS(int v) { return float(v) / SHARC_RADIANCE_SCALE; }
 layout(std430, set = SHARC_SET, binding = 11) buffer SharcCellPositions {
     uvec2 gpu_sharc_cell_pos[];    // [tableSize]
 };
+
+// 近傍スロットテーブル: セルごとに 3x3x3 = 27 近傍の slot を事前解決して
+// 持つ (resolve のトライリニア 8 コーナーがハッシュ検索なしで引ける)。
+// エントリは「ヒント」 — 読む側は必ず keys[slot] == 指紋 で検証する
+// (エビクション / スロット再利用 / 挿入 race による陳腐化を無害化)。
+// 検証失敗時はハッシュ検索へフォールバックし、 結果を書き戻して自己修復する。
+layout(std430, set = SHARC_SET, binding = 19) buffer SharcNeighbors {
+    uint gpu_sharc_neighbors[];    // [tableSize * 27], SHARC_SLOT_INVALID = 未解決
+};
+
+const uint SHARC_NEIGHBOR_UINTS = 27u;
+
+// 3x3x3 オフセット (-1..1) → テーブル index。 対称: idx(-o) = 26 - idx(o)。
+uint sharcNeighborIndex(ivec3 offs) {
+    return uint(offs.x + 1) + 3u * uint(offs.y + 1) + 9u * uint(offs.z + 1);
+}
 
 uvec2 sharcPackGridLevel(ivec3 grid, uint level) {
     uvec3 g = uvec3(grid + ivec3(1 << 19)) & uvec3(0xFFFFFu);
@@ -373,14 +391,23 @@ float sharcLoadCellAo(uint slot) {
     return float((gpu_sharc_cells[b + 2u] >> 8) & 0xFFu) / 255.0;
 }
 
+// セル太陽可視率 (unorm8、 meta word2 bits 16-23)。 1.0 = 遮蔽なし。
+// 遠方ピクセル (hit パスのシャドウレイ距離上限超え) の太陽直接光に使う。
+float sharcLoadCellSunVis(uint slot) {
+    uint b = sharcCellBase(slot) + SHARC_CELL_OFFSET_META;
+    return float((gpu_sharc_cells[b + 2u] >> 16) & 0xFFu) / 255.0;
+}
+
 void sharcStoreMeta(uint slot, uint sampleCount, uint lastFrame,
-                    float lumaMean, float lumaVar, uint level, float ao) {
+                    float lumaMean, float lumaVar, uint level, float ao,
+                    float sunVis) {
     uint b = sharcCellBase(slot) + SHARC_CELL_OFFSET_META;
     gpu_sharc_cells[b + 0u] = (min(sampleCount, 0xFFFFu))
                             | ((lastFrame & 0xFFFFu) << 16);
     gpu_sharc_cells[b + 1u] = sharcHalf2Pack(lumaMean, lumaVar);
-    uint ao8 = uint(clamp(ao, 0.0, 1.0) * 255.0 + 0.5);
-    gpu_sharc_cells[b + 2u] = (level & 0xFFu) | (ao8 << 8);
+    uint ao8  = uint(clamp(ao, 0.0, 1.0) * 255.0 + 0.5);
+    uint sun8 = uint(clamp(sunVis, 0.0, 1.0) * 255.0 + 0.5);
+    gpu_sharc_cells[b + 2u] = (level & 0xFFu) | (ao8 << 8) | (sun8 << 16);
     gpu_sharc_cells[b + 3u] = 0u;
 }
 

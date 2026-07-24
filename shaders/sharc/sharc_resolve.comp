@@ -77,6 +77,7 @@ void main() {
 
     vec3 radiance = vec3(0.0);
     float hit = 0.0;
+    float cellSunVis = 1.0;   // 遠方ピクセルの太陽可視率 (セル補間)
 
     // --- 拡散 + 鏡面: 8 近傍セルのトライリニア補間評価 ---
     // 単一セル参照はセル境界がフラットシェーディングの切れ目として見える。
@@ -101,12 +102,35 @@ void main() {
         ivec3 base = ivec3(floor(gpos));
         vec3 f = gpos - vec3(base);
 
+        // 近傍スロットテーブル: 包含セル G を 1 回だけハッシュ検索し、
+        // 8 コーナーは G の事前解決済み 27 行から引く (コーナーは必ず
+        // G±1 の範囲)。 エントリは指紋検証し、 外れたらハッシュ検索へ
+        // フォールバック + 書き戻し (自己修復 — キャッシュロード直後や
+        // 挿入 race の陳腐化を吸収)。
+        ivec3 gCell = ivec3(floor(pos / cell));
+        uint gSlot = sharcFindSlot(gCell, level);
+        uint gRow = gSlot * SHARC_NEIGHBOR_UINTS;
+
         vec3 acc = vec3(0.0);
+        float sunAcc = 0.0;
         float wSum = 0.0;
         for (int c = 0; c < 8; c++) {
             ivec3 offs = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
             ivec3 grid = base + offs;
-            uint slot = sharcFindSlot(grid, level);
+            uint slot;
+            if (gSlot != SHARC_SLOT_INVALID) {
+                uint nIdx = sharcNeighborIndex(grid - gCell);
+                uint hint = gpu_sharc_neighbors[gRow + nIdx];
+                if (hint < sharcTableSize &&
+                    gpu_sharc_keys[hint] == sharcFingerprint(grid, level)) {
+                    slot = hint;
+                } else {
+                    slot = sharcFindSlot(grid, level);
+                    gpu_sharc_neighbors[gRow + nIdx] = slot;
+                }
+            } else {
+                slot = sharcFindSlot(grid, level);
+            }
             if (slot == SHARC_SLOT_INVALID) continue;
 
             vec3 w3 = mix(1.0 - f, f, vec3(offs));
@@ -129,12 +153,14 @@ void main() {
                                              roughness);
 
             acc  += sample_ * sharcLoadCellAo(slot) * w;
+            sunAcc += sharcLoadCellSunVis(slot) * w;
             wSum += w;
         }
         if (wSum > 1e-4) {
             // AO はキャッシュ由来の間接光にのみ掛ける (太陽直接光は
             // シャドウレイが遮蔽を持つ)。 セル AO は corner 補間済み
             radiance += (acc / wSum) * pixAo;
+            cellSunVis = sunAcc / wSum;
             hit = 1.0;
         }
     }
@@ -142,8 +168,11 @@ void main() {
     // --- 太陽の解析直接光 (シャドウレイ付き — シャープな影) ---
     // 太陽はキャッシュから除外されており (update 側)、 ここでピクセル精度の
     // 可視性 (hit パスの BVH any-hit、 albedoView.a) を掛けて加算する。
+    // 遠方ピクセル (albedoView.a < 0 センチネル) はセル太陽可視率の
+    // トライリニア補間で代替 (hit パスのシャドウレイ削減、 neco 指示 2)。
     if (sharcLightCount > 0u && gpu_sharc_lights[0].posRadius.w < 0.0) {
         float sunVis = req.albedoView.a;
+        if (sunVis < 0.0) sunVis = cellSunVis;
         vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
         float ndl = max(dot(n, toSun), 0.0);
         radiance += albedo * SHARC_INV_PI *
