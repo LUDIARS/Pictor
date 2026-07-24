@@ -43,41 +43,7 @@ layout(std430, set = SHARC_SET, binding = 12) writeonly buffer SharcShadeRequest
     SharcShadeRequest gpu_sharc_shade[];
 };
 
-// ── GPU シーン (フラット DoD 配列) ──
-
-struct SharcBvhNode {
-    vec4 bminLeft;     // xyz = AABB min, w = uintBitsToFloat(left)
-    vec4 bmaxCount;    // xyz = AABB max, w = uintBitsToFloat(count)
-};
-
-layout(std430, set = SHARC_SET, binding = 14) readonly buffer SharcBvhNodes {
-    SharcBvhNode gpu_sharc_bvh[];
-};
-
-struct SharcTri {
-    vec4 v0;           // xyz = 頂点, w = uintBitsToFloat(oct32 法線 n0)
-    vec4 v1;           // w = n1
-    vec4 v2;           // w = n2
-    vec4 uv01;         // xy = uv0, zw = uv1
-    vec4 uv2Pad;       // xy = uv2, zw = 予約
-};
-
-layout(std430, set = SHARC_SET, binding = 15) readonly buffer SharcTris {
-    SharcTri gpu_sharc_tris[];
-};
-
-layout(std430, set = SHARC_SET, binding = 16) readonly buffer SharcTriMats {
-    uint gpu_sharc_tri_mat[];
-};
-
-struct SharcMaterial {
-    vec4 albedoRough;  // rgb = albedo, a = roughness
-    vec4 mfpPad;       // x = SSS MFP
-};
-
-layout(std430, set = SHARC_SET, binding = 17) readonly buffer SharcMaterials {
-    SharcMaterial gpu_sharc_materials[];
-};
+#include "sharc_scene.glsl"
 
 // ライト (太陽シャドウレイ用に lights[0] を参照)
 struct SharcLight {
@@ -93,75 +59,9 @@ layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
 // 未使用時は 1x1 白ダミーが結線される。
 layout(set = SHARC_SET, binding = 18) uniform sampler2DArray sharcAlbedoAtlas;
 
-// ============================================================
-// 交差
-// ============================================================
-
-bool sharcAabbHit(vec3 bmin, vec3 bmax, vec3 ro, vec3 invRd, float tmax) {
-    vec3 t0 = (bmin - ro) * invRd;
-    vec3 t1 = (bmax - ro) * invRd;
-    vec3 tlo = min(t0, t1);
-    vec3 thi = max(t0, t1);
-    float tEnter = max(max(tlo.x, tlo.y), max(tlo.z, 0.0));
-    float tExit  = min(min(thi.x, thi.y), min(thi.z, tmax));
-    return tEnter <= tExit;
-}
-
-// any-hit トラバーサル (シャドウレイ用 — 最初のヒットで打ち切り)。
-bool sharcAnyHit(vec3 ro, vec3 rd, float tmax);
-
-// Möller–Trumbore。 ヒット時 t/u/v を返す。
-bool sharcTriHit(SharcTri tri, vec3 ro, vec3 rd, float tmax,
-                 out float outT, out float outU, out float outV) {
-    vec3 e1 = tri.v1.xyz - tri.v0.xyz;
-    vec3 e2 = tri.v2.xyz - tri.v0.xyz;
-    vec3 pv = cross(rd, e2);
-    float det = dot(e1, pv);
-    if (abs(det) < 1e-12) return false;
-    float invDet = 1.0 / det;
-    vec3 tv = ro - tri.v0.xyz;
-    float u = dot(tv, pv) * invDet;
-    if (u < 0.0 || u > 1.0) return false;
-    vec3 qv = cross(tv, e1);
-    float v = dot(rd, qv) * invDet;
-    if (v < 0.0 || u + v > 1.0) return false;
-    float t = dot(e2, qv) * invDet;
-    if (t <= 1e-4 || t >= tmax) return false;
-    outT = t; outU = u; outV = v;
-    return true;
-}
-
-bool sharcAnyHit(vec3 ro, vec3 rd, float tmax) {
-    vec3 invRd = 1.0 / vec3(
-        abs(rd.x) > 1e-12 ? rd.x : 1e-12,
-        abs(rd.y) > 1e-12 ? rd.y : 1e-12,
-        abs(rd.z) > 1e-12 ? rd.z : 1e-12);
-    uint stack[48];
-    int sp = 0;
-    stack[sp++] = 0u;
-    while (sp > 0) {
-        uint ni = stack[--sp];
-        SharcBvhNode node = gpu_sharc_bvh[ni];
-        if (!sharcAabbHit(node.bminLeft.xyz, node.bmaxCount.xyz, ro, invRd,
-                          tmax)) {
-            continue;
-        }
-        uint count = floatBitsToUint(node.bmaxCount.w);
-        if (count > 0u) {
-            uint first = floatBitsToUint(node.bminLeft.w);
-            for (uint i = 0u; i < count; i++) {
-                float t, u, v;
-                if (sharcTriHit(gpu_sharc_tris[first + i], ro, rd, tmax,
-                                t, u, v)) {
-                    return true;
-                }
-            }
-        } else if (sp + 2 <= 48) {
-            stack[sp++] = floatBitsToUint(node.bminLeft.w);
-            stack[sp++] = ni + 1u;
-        }
-    }
-    return false;
+float sharcRand2(inout uint state) {
+    state = sharcHashUint(state);
+    return float(state) * (1.0 / 4294967296.0);
 }
 
 void main() {
@@ -291,10 +191,27 @@ void main() {
                 sunVis = 0.0;
             }
         }
+        // ピクセル近接 AO: 法線半球の短距離レイ 2 本 (0.5m)。
+        // 隅・軒下・接地部の「のっぺり感」対策。 シードはフレーム非依存で
+        // 固定 (時間ノイズなし。 バイアスは近接 AO 用途では許容)
+        float pixAo = 1.0;
+        {
+            uint aoRng = sharcHashUint(rayIdx * 2654435761u + 17u);
+            uint hits = 0u;
+            for (uint k = 0u; k < 2u; k++) {
+                float z = sharcRand2(aoRng);
+                float phi = 2.0 * SHARC_PI * sharcRand2(aoRng);
+                float rxy = sqrt(max(1.0 - z * z, 0.0));
+                vec3 d = vec3(rxy * cos(phi), z, rxy * sin(phi));
+                if (dot(d, n) < 0.0) d = -d;   // 法線半球へ
+                if (sharcAnyHit(pos + n * 1.0e-2, d, 0.5)) hits++;
+            }
+            pixAo = 1.0 - 0.35 * float(hits);   // 2 hit → 0.3
+        }
         req.posRough   = vec4(pos, mat.albedoRough.a);
         req.normalMfp  = vec4(n, mat.mfpPad.x);
         req.albedoView = vec4(albedo, sunVis);
-        req.viewDir    = vec4(-rd, 0.0);
+        req.viewDir    = vec4(-rd, pixAo);
     } else if (floorHit) {
         vec3 pos = ro + rd * best;
         int cx = int(floor(pos.x));
