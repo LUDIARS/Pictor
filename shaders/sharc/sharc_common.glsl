@@ -89,8 +89,9 @@ layout(set = SHARC_SET, binding = 0) uniform SharcParams {
     vec4  sharcCamUp;          // xyz = 上, w = レンダリング幅 (float)
 };
 
-const uint SHARC_SCENE_MESH  = 1u;
-const uint SHARC_SCENE_FLOOR = 2u;
+const uint SHARC_SCENE_MESH   = 1u;
+const uint SHARC_SCENE_FLOOR  = 2u;
+const uint SHARC_SCENE_ALBEDO = 4u;   // アルベド素通し (ライティング検証用)
 
 // ============================================================
 // ハッシュテーブル / セルストレージ SSBO
@@ -106,12 +107,58 @@ layout(std430, set = SHARC_SET, binding = 2) buffer SharcCells {
     uint gpu_sharc_cells[];        // [tableSize * SHARC_CELL_UINTS]
 };
 
+// 蓄積バッファ (NVIDIA 公式流の accumulation/resolved 分離 — Phase 2)。
+// update が固定小数点で加算し、 翌フレームの compact が履歴と結合して
+// リセットする (正式な 1 フレーム遅延)。 レイアウト (10 uint / slot):
+//   [0..2] M0 RGB (unsigned fixed, ×SHARC_RADIANCE_SCALE)
+//   [3]    サンプル数
+//   [4..6] M1 xyz (signed fixed, int bitcast)
+//   [7]    AO: 遮蔽数 (low16) | レイ数 (high16)
+//   [8]    太陽可視: 遮蔽数 (low16) | レイ数 (high16)
+//   [9]    予約
+layout(std430, set = SHARC_SET, binding = 4) buffer SharcAccum {
+    uint gpu_sharc_accum[];        // [tableSize * SHARC_ACCUM_UINTS]
+};
+
+const uint  SHARC_ACCUM_UINTS    = 10u;
+const float SHARC_RADIANCE_SCALE = 1024.0;
+
+uint sharcFixedEncode(float v) {
+    return uint(clamp(v, 0.0, 4.0e6) * SHARC_RADIANCE_SCALE + 0.5);
+}
+float sharcFixedDecode(uint v) { return float(v) / SHARC_RADIANCE_SCALE; }
+int sharcFixedEncodeS(float v) {
+    return int(clamp(v, -2.0e6, 2.0e6) * SHARC_RADIANCE_SCALE);
+}
+float sharcFixedDecodeS(int v) { return float(v) / SHARC_RADIANCE_SCALE; }
+
 // スロット → グリッド座標の逆引き (セル本体 80B の外の補助データ)。
 // 書くのは sharcInsertSlot の CAS 勝者のみ → 同フレーム内 race なし
 // (読むのは後続パスのみ)。 x/y/z 各 signed 20bit + level 4bit を uvec2 に詰める。
 layout(std430, set = SHARC_SET, binding = 11) buffer SharcCellPositions {
     uvec2 gpu_sharc_cell_pos[];    // [tableSize]
 };
+
+// 近傍スロットテーブル: セルごとに 3x3x3 = 27 近傍の slot を事前解決して
+// 持つ (resolve のトライリニア 8 コーナーがハッシュ検索なしで引ける)。
+// エントリは「ヒント」 — 読む側は必ず keys[slot] == 指紋 で検証する
+// (エビクション / スロット再利用 / 挿入 race による陳腐化を無害化)。
+// 検証失敗時はハッシュ検索へフォールバックし、 結果を書き戻して自己修復する。
+layout(std430, set = SHARC_SET, binding = 19) buffer SharcNeighbors {
+    uint gpu_sharc_neighbors[];    // [tableSize * 27], SHARC_SLOT_INVALID = 未解決
+};
+
+const uint SHARC_NEIGHBOR_UINTS = 27u;
+
+// update の 1 フレーム上限 (120fps 試算の (4): 要求セルを全部その場で
+// 更新せず償却する — 上限超過分は次フレーム以降にローテーションで回る。
+// 1024 セル × 64 サンプル ≈ 1-2ms 見込み)
+const uint SHARC_UPDATE_CAP = 1024u;
+
+// 3x3x3 オフセット (-1..1) → テーブル index。 対称: idx(-o) = 26 - idx(o)。
+uint sharcNeighborIndex(ivec3 offs) {
+    return uint(offs.x + 1) + 3u * uint(offs.y + 1) + 9u * uint(offs.z + 1);
+}
 
 uvec2 sharcPackGridLevel(ivec3 grid, uint level) {
     uvec3 g = uvec3(grid + ivec3(1 << 19)) & uvec3(0xFFFFFu);
@@ -244,13 +291,17 @@ uint sharcHashCombine(uint seed, uint v) {
     return seed ^ (sharcHashUint(v) + 0x9E3779B9u + (seed << 6) + (seed >> 2));
 }
 
-// (grid, level) → 32bit 指紋。 0 は空スロット識別に予約するので回避。
+// スロットキーの予約値: 0 = 空、 TOMBSTONE = 削除済み (probe chain 維持、
+// open addressing の削除でチェインを切らないため — review P0-02)。
+const uint SHARC_KEY_TOMBSTONE = 0xFFFFFFFEu;
+
+// (grid, level) → 32bit 指紋。 予約値 (0 / TOMBSTONE) は回避。
 uint sharcFingerprint(ivec3 grid, uint level) {
     uint h = sharcHashCombine(0x811C9DC5u, uint(grid.x));
     h = sharcHashCombine(h, uint(grid.y));
     h = sharcHashCombine(h, uint(grid.z));
     h = sharcHashCombine(h, level);
-    return (h == 0u) ? 1u : h;
+    return (h == 0u || h == SHARC_KEY_TOMBSTONE) ? 1u : h;
 }
 
 // (grid, level) → テーブル開始スロット (指紋とは独立のハッシュ)。
@@ -266,6 +317,7 @@ const uint SHARC_PROBE_LIMIT = 16u;     // 線形走査の上限
 const uint SHARC_SLOT_INVALID = 0xFFFFFFFFu;
 
 // 検索のみ (挿入なし)。 見つからなければ SHARC_SLOT_INVALID。
+// TOMBSTONE は「占有扱いで読み飛ばし」 — 探索は空 (0) でのみ打ち切る。
 uint sharcFindSlot(ivec3 grid, uint level) {
     uint fp = sharcFingerprint(grid, level);
     uint slot = sharcSlotHash(grid, level);
@@ -280,7 +332,7 @@ uint sharcFindSlot(ivec3 grid, uint level) {
 
 // 挿入。 戻り値 = スロット。 満杯なら SHARC_SLOT_INVALID。
 // outInserted = このスレッドが新規確保したか (要求リスト登録の重複排除)。
-// 既存スロットは通常読みで返し、 空きの時だけ atomicCAS を踏む —
+// 既存スロットは通常読みで返し、 空き/墓標の時だけ atomicCAS を踏む —
 // 大量レイが同一セルを歩く march では atomic RMW が支配的コストになるため。
 uint sharcInsertSlot(ivec3 grid, uint level, out bool outInserted) {
     uint fp = sharcFingerprint(grid, level);
@@ -290,9 +342,9 @@ uint sharcInsertSlot(ivec3 grid, uint level, out bool outInserted) {
         uint s = (slot + i) & (sharcTableSize - 1u);
         uint cur = gpu_sharc_keys[s];
         if (cur == fp) return s;                 // 既存 (atomic 不要の多数派)
-        if (cur == 0u) {
-            uint prev = atomicCompSwap(gpu_sharc_keys[s], 0u, fp);
-            if (prev == 0u) { outInserted = true; return s; }
+        if (cur == 0u || cur == SHARC_KEY_TOMBSTONE) {
+            uint prev = atomicCompSwap(gpu_sharc_keys[s], cur, fp);
+            if (prev == cur) { outInserted = true; return s; }
             if (prev == fp) return s;
             // 別セルが先に確保 → 次スロットへ線形続行
         }
@@ -338,13 +390,29 @@ void sharcLoadMeta(uint slot, out uint sampleCount, out uint lastFrame,
     level = gpu_sharc_cells[b + 2u] & 0xFFu;
 }
 
+// セル AO (unorm8、 meta word2 bits 8-15)。 1.0 = 遮蔽なし。
+float sharcLoadCellAo(uint slot) {
+    uint b = sharcCellBase(slot) + SHARC_CELL_OFFSET_META;
+    return float((gpu_sharc_cells[b + 2u] >> 8) & 0xFFu) / 255.0;
+}
+
+// セル太陽可視率 (unorm8、 meta word2 bits 16-23)。 1.0 = 遮蔽なし。
+// 遠方ピクセル (hit パスのシャドウレイ距離上限超え) の太陽直接光に使う。
+float sharcLoadCellSunVis(uint slot) {
+    uint b = sharcCellBase(slot) + SHARC_CELL_OFFSET_META;
+    return float((gpu_sharc_cells[b + 2u] >> 16) & 0xFFu) / 255.0;
+}
+
 void sharcStoreMeta(uint slot, uint sampleCount, uint lastFrame,
-                    float lumaMean, float lumaVar, uint level) {
+                    float lumaMean, float lumaVar, uint level, float ao,
+                    float sunVis) {
     uint b = sharcCellBase(slot) + SHARC_CELL_OFFSET_META;
     gpu_sharc_cells[b + 0u] = (min(sampleCount, 0xFFFFu))
                             | ((lastFrame & 0xFFFFu) << 16);
     gpu_sharc_cells[b + 1u] = sharcHalf2Pack(lumaMean, lumaVar);
-    gpu_sharc_cells[b + 2u] = level & 0xFFu;
+    uint ao8  = uint(clamp(ao, 0.0, 1.0) * 255.0 + 0.5);
+    uint sun8 = uint(clamp(sunVis, 0.0, 1.0) * 255.0 + 0.5);
+    gpu_sharc_cells[b + 2u] = (level & 0xFFu) | (ao8 << 8) | (sun8 << 16);
     gpu_sharc_cells[b + 3u] = 0u;
 }
 

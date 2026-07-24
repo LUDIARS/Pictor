@@ -39,7 +39,7 @@ class VulkanContext;
 struct SharcConfig {
     uint32_t table_size     = 1u << 16;  ///< ハッシュスロット数 (2^n 必須)
     uint32_t max_rays       = 320 * 180; ///< march / resolve の最大レイ数
-    uint32_t max_hits       = 1u << 20;  ///< ヒット列容量
+    uint32_t max_hits       = 1u << 20;  ///< ヒット列容量 (DX12 ポートのみ)
     uint32_t max_lights     = 64;        ///< ライトバッファ容量
     float    base_cell_size = 0.25f;     ///< level 0 セル一辺 (m)
     uint32_t level_count    = 8;
@@ -81,6 +81,11 @@ struct SharcSceneUpload {
     const uint32_t* tri_materials = nullptr;  ///< [tri_count]
     const SharcMaterialGpu* materials = nullptr;
     uint32_t material_count = 0;
+    /// アルベドテクスチャ配列 (RGBA8 sRGB、 [layer][size*size*4] 連結)。
+    /// nullptr / 0 レイヤなら 1x1 白ダミーを維持する。
+    const uint8_t* atlas_pixels = nullptr;
+    uint32_t atlas_size   = 0;
+    uint32_t atlas_layers = 0;
 };
 
 class SharcGpuExecutor {
@@ -101,7 +106,18 @@ public:
 
     /// GPU シーン (BVH + 三角形 + マテリアル) を device-local バッファへ
     /// 転送し、 hit パス (GPU 一次交差) を有効化する。 init 後に 1 回。
+    /// 転送後に頂点 AO をロード時ベイクする (sharc_ao_bake.comp、
+    /// TDR 回避のチャンク分割 dispatch)。
     bool upload_scene(const SharcSceneUpload& scene);
+
+    /// キャッシュ (ハッシュキー / セル / 逆引き座標) をファイルへ直列化する。
+    /// ロード時に読み戻せば収束済み状態から温間スタートできる (実行時
+    /// ベイクの永続化)。 upload_scene 後に呼ぶこと (シーン整合性検証のため)。
+    bool save_cache(const std::string& path);
+
+    /// save_cache の読み戻し。 ヘッダ (テーブル構成 / シーン三角形数) が
+    /// 現在の構成と一致しない場合は何もせず false。
+    bool load_cache(const std::string& path);
 
     /// 解析床 (D2 チェッカー) の有効化。 upload_scene 済みの時のみ意味を持つ。
     void set_scene_floor(bool enabled, float floor_y);
@@ -109,10 +125,43 @@ public:
     /// hit パスの初期 tMax (シーンの遠方距離)。
     void set_scene_far(float ray_far);
 
+    /// アルベド素通しビュー (ライティングなし — リファレンス比較用)。
+    void set_albedo_view(bool enabled);
+
     /// カメラ基底を UBO へ反映する (hit パスの GPU レイ生成用)。
     /// fov_scale = tan(fov/2)。 render_width はレイ index → 画素の変換用。
     void set_camera(const float3& fwd, const float3& right, const float3& up,
                     float fov_scale, float aspect, uint32_t render_width);
+
+    // ---- ハイブリッド経路 (ラスタ G-buffer 一次可視性、 120fps 試算) ----
+    // デモ側 GBufferRenderer が描いた G-buffer + 太陽シャドウマップを
+    // 受け取り、 record() で hit パスの代わりに gbuffer_resolve compute が
+    // shade/rays を生成する。 フルレイ経路はコード試算として残置
+    // (set_hybrid(false) でいつでも A/B 比較可能)。
+
+    /// G-buffer 画像 (albedo+AO / normal+rough / dist+MFP) とシャドウマップ
+    /// の view を descriptor へ結線する。 呼ぶたびに更新可。
+    void set_gbuffer(VkImageView albedo_ao, VkImageView normal_rough,
+                     VkImageView dist_mfp, VkImageView sun_shadow);
+
+    /// 太陽 ortho VP 行列 (column-major 16 float、 シャドウマップ描画と同一)。
+    void set_sun_matrix(const float* m16);
+
+    /// true = gbuffer_resolve 経路 / false = フルレイ (hit パス) 経路。
+    void set_hybrid(bool enabled) { hybrid_ = enabled; }
+    bool hybrid() const { return hybrid_; }
+
+    // ---- シーン資源の共有ハンドル (GBufferRenderer の頂点プリング用) ----
+    VkBuffer     scene_tris_buffer() const { return scene_tris_.buf; }
+    VkDeviceSize scene_tris_size() const   { return scene_tris_.size; }
+    VkBuffer     scene_tri_mats_buffer() const { return scene_tri_mats_.buf; }
+    VkDeviceSize scene_tri_mats_size() const   { return scene_tri_mats_.size; }
+    VkBuffer     scene_materials_buffer() const { return scene_materials_.buf; }
+    VkDeviceSize scene_materials_size() const  { return scene_materials_.size; }
+    VkBuffer     tri_ao_buffer() const { return tri_ao_.buf; }
+    VkDeviceSize tri_ao_size() const   { return tri_ao_.size; }
+    VkImageView  atlas_view() const    { return atlas_view_; }
+    VkSampler    atlas_sampler() const { return atlas_sampler_; }
 
     /// フレーム開始: フレーム番号 / カメラを UBO へ反映し、
     /// per-frame カウンタ (hit / request) をリセットする。
@@ -171,6 +220,14 @@ private:
     bool create_pass_(Pass& out, const std::string& spv_path);
     void write_params_();
     void write_scene_descriptors_();
+    /// 頂点 AO のロード時ベイク (チャンク分割 dispatch — TDR 回避)。
+    bool bake_scene_ao_(uint32_t tri_count);
+    /// device-local バッファ → host へ一括ダウンロード (save_cache 用)。
+    bool download_buffer_(const Buffer& src, void* dst, VkDeviceSize size);
+    /// host データ → device-local バッファへ一括アップロード。
+    bool upload_buffer_(Buffer& dst, const void* src, VkDeviceSize size);
+    bool create_atlas_(const uint8_t* pixels, uint32_t size, uint32_t layers);
+    void destroy_atlas_();
     void barrier_(VkCommandBuffer cmd, VkBuffer buf,
                   VkAccessFlags src, VkAccessFlags dst,
                   VkPipelineStageFlags dst_stage);
@@ -188,7 +245,7 @@ private:
     Buffer keys_;         // ハッシュキー                (binding 1)
     Buffer cells_;        // セル本体 80B×slots          (binding 2)
     Buffer rays_;         // 入力レイ                    (binding 3)
-    Buffer hits_;         // ヒット列                    (binding 4)
+    Buffer accum_;        // 蓄積 (Phase 2) 10 uint×slots (binding 4)
     Buffer counters_;     // カウンタ                    (binding 5)
     Buffer requests_;     // 要求セルリスト              (binding 6)
     Buffer stamps_;       // 要求スタンプ                (binding 7)
@@ -202,9 +259,17 @@ private:
     Buffer scene_tris_;   // 三角形 (device-local)       (binding 15)
     Buffer scene_tri_mats_; // per-tri マテリアル id     (binding 16)
     Buffer scene_materials_; // マテリアル表             (binding 17)
+    Buffer neighbors_;    // 近傍スロットテーブル 27×slots (binding 19)
+    Buffer tri_ao_;       // ベイク頂点 AO uint×tris     (binding 20)
     Buffer rays_staging_;    // D1 CPU 経路の転送元 (host-visible)
     Buffer shade_staging_;   // 同上
     Buffer counters_rb_;     // request_count 読み出し用 (host-visible 16B)
+
+    // アルベドテクスチャ配列 (binding 18、 未使用時は 1x1 白ダミー)
+    VkImage        atlas_image_   = VK_NULL_HANDLE;
+    VkDeviceMemory atlas_mem_     = VK_NULL_HANDLE;
+    VkImageView    atlas_view_    = VK_NULL_HANDLE;
+    VkSampler      atlas_sampler_ = VK_NULL_HANDLE;
 
     VkDescriptorSetLayout dsl_       = VK_NULL_HANDLE;
     VkPipelineLayout      layout_    = VK_NULL_HANDLE;
@@ -216,6 +281,14 @@ private:
     Pass compact_;
     Pass update_;
     Pass resolve_;
+    Pass ao_bake_;         // ロード時 1 回のみ (record には積まない)
+    Pass gbuffer_resolve_; // ハイブリッド経路 (hit の代替)
+
+    // ハイブリッド経路の状態
+    bool      hybrid_        = false;
+    bool      gbuffer_bound_ = false;
+    float     sun_matrix_[16] = {};
+    VkSampler gbuffer_sampler_ = VK_NULL_HANDLE;   // texelFetch 用ダミー
 
     bool     cpu_geometry_dirty_ = false;
     uint32_t scene_tri_count_ = 0;

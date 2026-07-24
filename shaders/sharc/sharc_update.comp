@@ -1,11 +1,15 @@
 // Pictor — SHaRC 拡張 Pass 3: Light (セル更新)
 //
 // 1 workgroup = 1 要求セル (spec §3)。
-//   1. per-cell reservoir (ReSTIR DI 簡易版) からライトを importance sampling
+//   1. 一様ライトサンプリング (per-cell reservoir/ReSTIR は推定量への
+//      未接続が review Gate 1 で指摘されたため一旦除去 — 再導入時は
+//      採択サンプル y と W = wSum/(M・pHat(y)) を評価へ接続する設計から)
 //   2. (SHARC_RAY_QUERY 時) 可視性レイ → 既定はアンシャドウ
 //   3. M0/M1 蓄積 + vMF ローブ EM 更新 → EMA でセルへブレンド
-// 1 フレーム遅延 + 永続キャッシュ (SHaRC 方式): このパスの結果は
-// 次フレームの resolve が参照する。
+// フレーム意味論 (Phase 2 — NVIDIA 公式流): update は蓄積バッファへ
+// 固定小数点で **加算のみ**。 翌フレームの compact が per-element に
+// 履歴と結合してリセットする (正式な 1 フレーム遅延、 read-after-write
+// バイアスなし)。 ローブは線形蓄積できないため適応 EMA を維持。
 //
 // バッチ統計 (モーメント / ローブ帰属) は shared メモリのツリー縮約で
 // 64 スレッド並列に計算する。 thread0 直列だと要求セル数の多いシーン
@@ -20,10 +24,13 @@ layout(local_size_x = 64) in;
 
 #define SHARC_SET 0
 #include "sharc_common.glsl"
+#include "sharc_scene.glsl"
 #include "sharc_moments.glsl"
 #include "sharc_lobes.glsl"
 
 const uint SHARC_SAMPLES_PER_CELL = 64u;   // = local_size_x
+const uint SHARC_AO_RAYS          = 16u;   // セル AO の球面レイ数
+const uint SHARC_SUN_RAYS         = 8u;    // セル太陽可視のレイ数
 
 // ライト (点光源) リスト
 struct SharcLight {
@@ -37,11 +44,6 @@ layout(std430, set = SHARC_SET, binding = 6) readonly buffer SharcRequests {
 
 layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
     SharcLight gpu_sharc_lights[];
-};
-
-// per-cell reservoir: {lightIdx, wSum, M, targetPdf} (float は uint ビット格納)
-layout(std430, set = SHARC_SET, binding = 10) buffer SharcReservoirs {
-    uvec4 gpu_sharc_reservoirs[];
 };
 
 // ============================================================
@@ -74,20 +76,52 @@ shared uint  sh_candidate[SHARC_SAMPLES_PER_CELL]; // 候補ライト
 shared float sh_pdfHat[SHARC_SAMPLES_PER_CELL];    // 候補の target pdf
 shared float sh_part[SHARC_SAMPLES_PER_CELL][SHARC_PART_FLOATS];
 shared float sh_orphanScore[SHARC_SAMPLES_PER_CELL]; // 孤児サンプルの強度
+shared uint  sh_aoHits;                              // セル AO レイの遮蔽数
+shared uint  sh_sunHits;                             // セル太陽レイの遮蔽数
 
-// セル中心での未遮蔽寄与 (target pdf 用)
+// セル中心での未遮蔽寄与 (target pdf 用)。
+// posRadius.w < 0 は Directional Light (太陽): xyz = 光源方向 (to-sun)、
+// 距離減衰なし、 ローブ実効距離は疑似無限遠。
+// posRadius.w > 0 は Point Light の影響半径 (m): 1/d^2 に窓関数
+// (1-(d/r)^2)^2 を掛け、 半径の外で厳密に 0 (UE/Frostbite 流)。
+// 街灯 = 半径 7.5m (直径 15m)、 提灯 = 半径 1m (直径 2m) 等。
 vec3 sharcLightContribution(SharcLight light, vec3 cellCenter,
                             out vec3 outDir, out float outDist) {
+    if (light.posRadius.w < 0.0) {
+        outDir  = normalize(light.posRadius.xyz);
+        outDist = 1.0e4;
+        return light.colorIntensity.rgb * light.colorIntensity.a;
+    }
     vec3 toLight = light.posRadius.xyz - cellCenter;
     float d2 = max(dot(toLight, toLight), 1e-4);
     outDist = sqrt(d2);
     outDir  = toLight / outDist;
-    return light.colorIntensity.rgb * light.colorIntensity.a / d2;
+    vec3 c = light.colorIntensity.rgb * light.colorIntensity.a / d2;
+    float range = light.posRadius.w;
+    if (range > 0.0) {
+        float q = clamp(d2 / (range * range), 0.0, 1.0);
+        float win = 1.0 - q * q;
+        c *= win * win;
+    }
+    return c;
 }
+
+// 要求リストへのアクセスカウンタ ([1] は march と共有)
+layout(std430, set = SHARC_SET, binding = 5) buffer SharcCounters {
+    uint gpu_sharc_counters[];
+};
 
 void main() {
     uint reqIdx = gl_WorkGroupID.x;
     uint tid    = gl_LocalInvocationID.x;
+    // 要求数が 1 フレーム上限を超える場合はフレームごとに開始位置を
+    // ローテーションし、 全セルが数フレームで一巡するようにする
+    // (compact が dispatch x を SHARC_UPDATE_CAP に clamp している)
+    uint reqTotal = min(gpu_sharc_counters[1], min(sharcTableSize, 65535u));
+    if (reqTotal > SHARC_UPDATE_CAP) {
+        reqIdx = (reqIdx + (sharcFrameIndex * SHARC_UPDATE_CAP) % reqTotal)
+               % reqTotal;
+    }
     uint slot   = gpu_sharc_requests[reqIdx];
     // slot は workgroup 内一様 → この return は非分岐 (barrier 安全)
     if (slot >= sharcTableSize || gpu_sharc_keys[slot] == 0u) return;
@@ -101,11 +135,6 @@ void main() {
     sharcUnpackGridLevel(gpu_sharc_cell_pos[slot], grid, posLevel);
     vec3 cellCenter = sharcCellCenter(grid, posLevel);
 
-    uvec4 resPrev = gpu_sharc_reservoirs[slot];
-    uint  resLight = resPrev.x;
-    float resM     = uintBitsToFloat(resPrev.z);
-    float resPdf   = uintBitsToFloat(resPrev.w);
-
     // ============================================================
     // 1. 候補生成 (thread 並列)
     // ============================================================
@@ -118,10 +147,15 @@ void main() {
     vec3  candRgb = vec3(0.0);
     float candDist = 0.0;
 
-    if (sharcLightCount > 0u) {
-        candIdx = min(uint(sharcRand(rng) * float(sharcLightCount)),
-                      sharcLightCount - 1u);
-        float pSource = 1.0 / float(sharcLightCount);
+    // lights[0] が directional (太陽) の場合はキャッシュから除外する —
+    // 太陽は resolve がシャドウレイ付きの解析直接光として扱う (二重計上防止)
+    uint lightBase = (sharcLightCount > 0u &&
+                      gpu_sharc_lights[0].posRadius.w < 0.0) ? 1u : 0u;
+    uint candCount = sharcLightCount - lightBase;
+    if (candCount > 0u) {
+        candIdx = lightBase +
+                  min(uint(sharcRand(rng) * float(candCount)), candCount - 1u);
+        float pSource = 1.0 / float(candCount);
         SharcLight light = gpu_sharc_lights[candIdx];
         vec3 dir; float dist;
         vec3 contrib = sharcLightContribution(light, cellCenter, dir, dist);
@@ -137,7 +171,45 @@ void main() {
     sh_weight[tid]    = candW;
     sh_candidate[tid] = candIdx;
     sh_pdfHat[tid]    = candPdfHat;
+    if (tid == 0u) { sh_aoHits = 0u; sh_sunHits = 0u; }
     barrier();
+
+    // ── セル AO (SHaRC ロジックの AO): セル中心から球面 16 レイの
+    //    短距離遮蔽率をキャッシュする。 到達距離はセルサイズ連動。
+    //    静的ジオメトリでは不変のため、 収束後 (履歴 512 レイ) は打たない
+    //    (事前計算化 — 実行時コストが漸近ゼロ) ──
+    bool aoActive = (sharcSceneFlags & SHARC_SCENE_MESH) != 0u &&
+                    sampleCountPrev < 2048u;
+    if (tid < SHARC_AO_RAYS && aoActive) {
+        uint aoRng = sharcHashCombine(slot * 31u + tid, sharcFrameIndex);
+        float z = 1.0 - 2.0 * sharcRand(aoRng);
+        float phi = 2.0 * SHARC_PI * sharcRand(aoRng);
+        float rxy = sqrt(max(1.0 - z * z, 0.0));
+        vec3 dir = vec3(rxy * cos(phi), z, rxy * sin(phi));
+        float aoRange = clamp(sharcCellSize(posLevel) * 2.0, 0.5, 4.0);
+        if (sharcAnyHit(cellCenter, dir, aoRange)) {
+            atomicAdd(sh_aoHits, 1u);
+        }
+    }
+
+    // ── セル太陽可視率: セル内ジッタ点から太陽方向への any-hit。
+    //    hit パスのピクセル精度シャドウレイは近距離のみになったため、
+    //    遠方の太陽直接光はこのセル値 (トライリニア補間) が担う。
+    //    太陽は動かせる前提なので収束停止せず毎更新リフレッシュする ──
+    bool sunActive = (sharcSceneFlags & SHARC_SCENE_MESH) != 0u &&
+                     sharcLightCount > 0u &&
+                     gpu_sharc_lights[0].posRadius.w < 0.0;
+    if (tid < SHARC_SUN_RAYS && sunActive) {
+        uint sunRng = sharcHashCombine(slot * 53u + tid,
+                                       sharcFrameIndex * 7u + 3u);
+        float half_ = sharcCellSize(posLevel) * 0.45;
+        vec3 jitter = vec3(sharcRand(sunRng), sharcRand(sunRng),
+                           sharcRand(sunRng)) * 2.0 - 1.0;
+        vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
+        if (sharcAnyHit(cellCenter + jitter * half_, toSun, 1.0e4)) {
+            atomicAdd(sh_sunHits, 1u);
+        }
+    }
 
     // ============================================================
     // 2. 各スレッドが自分のサンプルの帰属度と部分和を計算
@@ -215,49 +287,40 @@ void main() {
     // ============================================================
     if (tid != 0u) return;
 
-    // --- WRS: 今フレーム候補を reservoir へ統合 ---
-    float wTotal = 0.0;
-    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) wTotal += sh_weight[i];
+    // 適応ブレンド係数 (ローブ EM 用 — ローブは線形蓄積できないため
+    // EMA を維持。 モーメント/AO は蓄積バッファ経由で compact が結合する)
+    float alpha = max(1.0 / (1.0 + float(sampleCountPrev) /
+                                   float(SHARC_SAMPLES_PER_CELL)),
+                      sharcEmaAlpha);
 
-    float pick = sharcRand(rng) * max(wTotal, SHARC_EPSILON);
-    uint  chosen = 0u;
-    float acc = 0.0;
-    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) {
-        acc += sh_weight[i];
-        if (acc >= pick) { chosen = i; break; }
-    }
-    const float kMaxM = 512.0;
-    float mNew = float(SHARC_SAMPLES_PER_CELL);
-    if (resM > 0.0 && resPdf > 0.0) {
-        float wPrev = resPdf * resM;
-        wTotal += wPrev;
-        if (sharcRand(rng) * wTotal < wPrev) {
-            chosen = 0xFFFFFFFFu;   // 既存採択
-        }
-    }
-    uint  outLight; float outPdf;
-    if (chosen == 0xFFFFFFFFu) {
-        outLight = resLight;
-        outPdf   = resPdf;
-    } else {
-        outLight = sh_candidate[chosen];
-        outPdf   = sh_pdfHat[chosen];
-    }
-    gpu_sharc_reservoirs[slot] =
-        uvec4(outLight, floatBitsToUint(wTotal),
-              floatBitsToUint(min(resM + mNew, kMaxM)),
-              floatBitsToUint(outPdf));
-
-    // --- モーメント EMA (縮約済み部分和から) ---
+    // --- モーメント/AO: 蓄積バッファへ固定小数点加算 (Phase 2) ---
+    // 推定量 Σ(f/q) をそのまま積む。 正規化 (÷サンプル数) は compact 側。
+    uint ab = slot * SHARC_ACCUM_UINTS;
     uint mb = uint(SHARC_LOBE_COUNT) * 8u;
     float wNorm = sh_part[0][mb + 6u];
     vec3 m0 = vec3(0.0);
     if (wNorm > SHARC_EPSILON) {
+        gpu_sharc_accum[ab + 0u] += sharcFixedEncode(sh_part[0][mb + 0u]);
+        gpu_sharc_accum[ab + 1u] += sharcFixedEncode(sh_part[0][mb + 1u]);
+        gpu_sharc_accum[ab + 2u] += sharcFixedEncode(sh_part[0][mb + 2u]);
+        gpu_sharc_accum[ab + 4u] = uint(int(gpu_sharc_accum[ab + 4u])
+                                        + sharcFixedEncodeS(sh_part[0][mb + 3u]));
+        gpu_sharc_accum[ab + 5u] = uint(int(gpu_sharc_accum[ab + 5u])
+                                        + sharcFixedEncodeS(sh_part[0][mb + 4u]));
+        gpu_sharc_accum[ab + 6u] = uint(int(gpu_sharc_accum[ab + 6u])
+                                        + sharcFixedEncodeS(sh_part[0][mb + 5u]));
         m0 = vec3(sh_part[0][mb + 0u], sh_part[0][mb + 1u],
-                  sh_part[0][mb + 2u]) / wNorm;
-        vec3 m1 = vec3(sh_part[0][mb + 3u], sh_part[0][mb + 4u],
-                       sh_part[0][mb + 5u]) / wNorm;
-        sharcMomentsBlend(slot, m0, m1, sharcEmaAlpha);
+                  sh_part[0][mb + 2u]) / float(SHARC_SAMPLES_PER_CELL);
+    }
+    gpu_sharc_accum[ab + 3u] += SHARC_SAMPLES_PER_CELL;
+    // AO: 遮蔽数/レイ数を low16/high16 に加算 (収束済みならレイを打って
+    // いないので加算なし — 静的ジオメトリの事前計算化)
+    if (aoActive) {
+        gpu_sharc_accum[ab + 7u] += sh_aoHits | (SHARC_AO_RAYS << 16);
+    }
+    // 太陽可視: 遮蔽数/レイ数を low16/high16 に加算
+    if (sunActive) {
+        gpu_sharc_accum[ab + 8u] += sh_sunHits | (SHARC_SUN_RAYS << 16);
     }
 
     // --- ローブ EMA (縮約済みバッチ統計から) + 孤児 1 本スポーン ---
@@ -271,15 +334,17 @@ void main() {
             lobes[k], sh_part[0][b + 0u],
             vec3(sh_part[0][b + 1u], sh_part[0][b + 2u], sh_part[0][b + 3u]),
             vec3(sh_part[0][b + 4u], sh_part[0][b + 5u], sh_part[0][b + 6u]),
-            sh_part[0][b + 7u], sharcEmaAlpha);
+            sh_part[0][b + 7u], alpha);
         sharcStoreLobe(slot, uint(k), lobes[k]);
     }
 
-    // --- メタ更新 ---
+    // --- メタ更新: 輝度統計のみ (モーメント/AO の履歴結合は compact) ---
     float lumaBatch = sharcLuminance(m0);
-    float meanNew = mix(lumaMean, lumaBatch, sharcEmaAlpha);
+    float meanNew = mix(lumaMean, lumaBatch, alpha);
     float varNew  = mix(lumaVar, (lumaBatch - meanNew) * (lumaBatch - meanNew),
-                        sharcEmaAlpha);
-    sharcStoreMeta(slot, sampleCountPrev + SHARC_SAMPLES_PER_CELL,
-                   sharcFrameIndex & 0xFFFFu, meanNew, varNew, level);
+                        alpha);
+    // サンプルカウンタの増分は compact (履歴結合) が所有する
+    sharcStoreMeta(slot, sampleCountPrev,
+                   sharcFrameIndex & 0xFFFFu, meanNew, varNew, level,
+                   sharcLoadCellAo(slot), sharcLoadCellSunVis(slot));
 }

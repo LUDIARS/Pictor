@@ -1,9 +1,6 @@
 #include "obj_mesh.h"
 
-#include "stb_image.h"
-
 #include <algorithm>
-#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -11,7 +8,6 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -42,9 +38,11 @@ const char* next_line(const char* p, const char* end) {
 }
 
 /// Ns (Phong 指数) → GGX roughness の慣例近似 (α = sqrt(2/(Ns+2)))。
+/// 係数 1.6 は実写テクスチャ環境での光沢過多補正 (Ns 100 の漆喰壁が
+/// 濡れたように見える → roughness ≈ 0.6 に落とす)。
 float ns_to_roughness(float ns) {
     const float alpha = std::sqrt(2.0f / (std::max(ns, 0.0f) + 2.0f));
-    return std::clamp(std::sqrt(alpha), 0.05f, 1.0f);
+    return std::clamp(std::sqrt(alpha) * 1.6f, 0.05f, 1.0f);
 }
 
 std::string dir_of(const std::string& path) {
@@ -135,47 +133,21 @@ void tag_foliage(const std::string& name, PlyMaterial& m) {
     }
 }
 
-float srgb_to_linear(float v) {
-    return (v <= 0.04045f) ? v / 12.92f
-                           : std::pow((v + 0.055f) / 1.055f, 2.4f);
-}
-
-uint32_t pack_rgb8(float r, float g, float b) {
-    const auto q = [](float v) {
-        return static_cast<uint32_t>(
-            std::clamp(v * 255.0f + 0.5f, 0.0f, 255.0f));
-    };
-    return q(r) | (q(g) << 8) | (q(b) << 16);
-}
-
-/// bilinear サンプル (wrap)。 img は RGB8、 戻り値はリニア RGB。
-void sample_bilinear(const unsigned char* img, int w, int h, float u, float v,
-                     float out[3]) {
-    // OBJ の vt は左下原点、 stb は上段から → v 反転
-    u = u - std::floor(u);
-    v = 1.0f - (v - std::floor(v));
-    const float fx = u * static_cast<float>(w) - 0.5f;
-    const float fy = v * static_cast<float>(h) - 0.5f;
-    const int x0 = static_cast<int>(std::floor(fx));
-    const int y0 = static_cast<int>(std::floor(fy));
-    const float tx = fx - static_cast<float>(x0);
-    const float ty = fy - static_cast<float>(y0);
-    const auto wrap = [](int a, int n) { return ((a % n) + n) % n; };
-    float acc[3] = {0, 0, 0};
-    for (int dy = 0; dy < 2; ++dy) {
-        for (int dx = 0; dx < 2; ++dx) {
-            const int x = wrap(x0 + dx, w);
-            const int y = wrap(y0 + dy, h);
-            const float wgt = (dx ? tx : 1.0f - tx) * (dy ? ty : 1.0f - ty);
-            const unsigned char* px = img + (static_cast<size_t>(y) * w + x) * 3;
-            acc[0] += wgt * static_cast<float>(px[0]) / 255.0f;
-            acc[1] += wgt * static_cast<float>(px[1]) / 255.0f;
-            acc[2] += wgt * static_cast<float>(px[2]) / 255.0f;
-        }
+/// 発光体マテリアル (街灯ガラス / 電飾玉 / 提灯) に自己発光を付ける。
+/// ライト配置 (EmissiveGroup) とは独立の「光ってる見た目」 表現。
+void tag_emissive(const std::string& name, PlyMaterial& m) {
+    std::string low = name;
+    std::transform(low.begin(), low.end(), low.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (low.find("streetlight_glass") != std::string::npos) {
+        m.emissive = 12.0f;   // 街灯のガラス (白熱 — 日中でも点灯が分かる)
+        m.albedo = {1.0f, 0.85f, 0.6f};
+    } else if (low.find("stringlights_01_") != std::string::npos &&
+               low.find("_color") != std::string::npos) {
+        m.emissive = 6.0f;    // 電飾玉 (色つき — albedo 色で光る)
+    } else if (low == "lantern") {
+        m.emissive = 3.0f;    // 提灯 (紙越しのぼんやり発光)
     }
-    out[0] = srgb_to_linear(acc[0]);
-    out[1] = srgb_to_linear(acc[1]);
-    out[2] = srgb_to_linear(acc[2]);
 }
 
 } // namespace
@@ -194,8 +166,11 @@ PlyMesh load_obj(const std::string& path) {
     mesh.materials.push_back(PlyMaterial{});   // 既定 (usemtl 前)
 
     std::vector<std::array<float, 2>> uvs;
-    // 三角形コーナーごとの UV (焼き込み後に破棄するローカル)
-    std::vector<std::array<std::array<float, 2>, 3>> tri_uvs;
+
+    // 発光体グループ (街灯ガラス / 提灯) の頂点収集。 kind と、 そのグループ
+    // の面頂点列 (クラスタ分割は単位系確定後の後処理で行う)
+    std::vector<std::pair<int, std::vector<std::array<float, 3>>>> raw_lights;
+    int light_kind = -1;
 
     const char* p   = text.data();
     const char* end = p + text.size();
@@ -261,8 +236,15 @@ PlyMesh load_obj(const std::string& path) {
                                           resolve(face[k - 1]),
                                           resolve(face[k])});
                 mesh.tri_material.push_back(current_mat);
-                tri_uvs.push_back({uv_of(face_uv[0]), uv_of(face_uv[k - 1]),
-                                   uv_of(face_uv[k])});
+                mesh.tri_corner_uvs.push_back(
+                    {uv_of(face_uv[0]), uv_of(face_uv[k - 1]),
+                     uv_of(face_uv[k])});
+            }
+            if (light_kind >= 0 && !raw_lights.empty()) {
+                auto& sink = raw_lights.back().second;
+                for (const int64_t vi : face) {
+                    sink.push_back(mesh.positions[resolve(vi)]);
+                }
             }
         } else if (p + 6 < end && std::memcmp(p, "usemtl", 6) == 0) {
             const char* q = skip_ws(p + 6, end);
@@ -277,9 +259,32 @@ PlyMesh load_obj(const std::string& path) {
                 auto mt = mtl_table.find(name);
                 if (mt != mtl_table.end()) m = mt->second;
                 tag_foliage(name, m);
+                tag_emissive(name, m);
                 current_mat = static_cast<uint32_t>(mesh.materials.size());
                 mesh.materials.push_back(m);
                 mat_index.emplace(name, current_mat);
+            }
+        } else if (p + 1 < end && p[0] == 'g' &&
+                   (p[1] == ' ' || p[1] == '\t')) {
+            // 発光体グループの判定 (街灯ガラス / 提灯 / 電飾列)
+            const char* q = skip_ws(p + 2, end);
+            const char* r = q;
+            while (r < end && *r != '\n' && *r != '\r') ++r;
+            std::string name(q, r);
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            light_kind = -1;
+            if (name.find("streetlight_glass") != std::string::npos) {
+                light_kind = 0;   // 街灯
+            } else if (name.find("lantern") != std::string::npos ||
+                       name.find("stringlights") != std::string::npos) {
+                light_kind = 1;   // 提灯 / 電飾玉
+            }
+            if (light_kind >= 0) {
+                raw_lights.emplace_back(light_kind,
+                                        std::vector<std::array<float, 3>>{});
             }
         } else if (p + 6 < end && std::memcmp(p, "mtllib", 6) == 0) {
             const char* q = skip_ws(p + 6, end);
@@ -299,71 +304,67 @@ PlyMesh load_obj(const std::string& path) {
         return mesh;
     }
 
-    // ── テクスチャ焼き込み: map_Kd をコーナー UV でサンプルして RGB8 ──
-    //    (テクスチャなしはマテリアル albedo 一色)。 マテリアル単位で並列。
-    const size_t tri_count = mesh.triangles.size();
-    mesh.tri_corner_colors.resize(tri_count);
-    for (size_t t = 0; t < tri_count; ++t) {
-        const auto& m = mesh.materials[mesh.tri_material[t]];
-        const uint32_t c = pack_rgb8(m.albedo[0], m.albedo[1], m.albedo[2]);
-        mesh.tri_corner_colors[t] = {c, c, c};
-    }
+    finalize_mesh(mesh);
 
-    std::vector<std::vector<uint32_t>> tris_by_mat(mesh.materials.size());
-    for (size_t t = 0; t < tri_count; ++t) {
-        tris_by_mat[mesh.tri_material[t]].push_back(
-            static_cast<uint32_t>(t));
-    }
-    std::vector<uint32_t> textured;
-    for (uint32_t mi = 0; mi < mesh.materials.size(); ++mi) {
-        if (!mesh.materials[mi].texture.empty() &&
-            !tris_by_mat[mi].empty()) {
-            textured.push_back(mi);
+    // ── 発光体グループ → ライト中心 (座標は生値、 スケールは呼び出し側) ──
+    // 街灯: グループ全体の AABB 中心 1 点。
+    // 提灯/電飾: 1 グループに玉が連なるため、 出現順の貪欲クラスタで分割
+    // (閾値 = シーン最大辺の 0.5% ≈ Bistro で 60cm — 玉間隔より小さく、
+    //  玉自身の径より大きい)。
+    {
+        float extent = 0.0f;
+        for (int a = 0; a < 3; ++a) {
+            extent = std::max(extent, mesh.bounds_max[a] - mesh.bounds_min[a]);
         }
-    }
-    if (!textured.empty()) {
-        std::atomic<size_t> next{0};
-        std::atomic<int> failed{0};
-        const unsigned n_threads =
-            std::max(1u, std::thread::hardware_concurrency());
-        auto worker = [&]() {
-            for (;;) {
-                const size_t i = next.fetch_add(1);
-                if (i >= textured.size()) return;
-                const uint32_t mi = textured[i];
-                const auto& mat = mesh.materials[mi];
-                int w = 0, h = 0, n = 0;
-                unsigned char* img =
-                    stbi_load(mat.texture.c_str(), &w, &h, &n, 3);
-                if (img == nullptr || w <= 0 || h <= 0) {
-                    failed.fetch_add(1);
-                    if (img) stbi_image_free(img);
-                    continue;
+        const float thr = extent * 0.005f;
+        int n_lamp = 0, n_lantern = 0;
+        for (const auto& [kind, pts] : raw_lights) {
+            if (pts.empty()) continue;
+            float mn[3], mx[3];
+            bool active = false;
+            auto flush = [&]() {
+                if (!active) return;
+                EmissiveGroup g;
+                g.kind = kind;
+                for (int a = 0; a < 3; ++a) {
+                    g.center[a] = (mn[a] + mx[a]) * 0.5f;
                 }
-                for (const uint32_t t : tris_by_mat[mi]) {
-                    for (int c = 0; c < 3; ++c) {
-                        float rgb[3];
-                        sample_bilinear(img, w, h, tri_uvs[t][c][0],
-                                        tri_uvs[t][c][1], rgb);
-                        // Kd はテクスチャの乗数 (Bistro はほぼ 1.0)
-                        mesh.tri_corner_colors[t][c] = pack_rgb8(
-                            rgb[0] * mat.albedo[0], rgb[1] * mat.albedo[1],
-                            rgb[2] * mat.albedo[2]);
+                mesh.emissive_groups.push_back(g);
+                (kind == 0 ? n_lamp : n_lantern)++;
+                active = false;
+            };
+            for (const auto& pt : pts) {
+                bool outside = !active;
+                if (active && kind == 1) {
+                    for (int a = 0; a < 3; ++a) {
+                        if (pt[a] < mn[a] - thr || pt[a] > mx[a] + thr) {
+                            outside = true;
+                            break;
+                        }
                     }
                 }
-                stbi_image_free(img);
+                if (outside) {
+                    if (kind == 1) flush();
+                    if (!active) {
+                        for (int a = 0; a < 3; ++a) mn[a] = mx[a] = pt[a];
+                        active = true;
+                        continue;
+                    }
+                }
+                for (int a = 0; a < 3; ++a) {
+                    mn[a] = std::min(mn[a], pt[a]);
+                    mx[a] = std::max(mx[a], pt[a]);
+                }
             }
-        };
-        std::vector<std::thread> pool;
-        pool.reserve(n_threads);
-        for (unsigned i = 0; i < n_threads; ++i) pool.emplace_back(worker);
-        for (auto& th : pool) th.join();
-        std::fprintf(stderr,
-                     "[obj] baked %zu textured materials (%d load failures)\n",
-                     textured.size(), failed.load());
+            flush();
+        }
+        if (!mesh.emissive_groups.empty()) {
+            std::fprintf(stderr,
+                         "[obj] emissive groups: %d streetlights, %d "
+                         "lanterns/bulbs\n", n_lamp, n_lantern);
+        }
     }
 
-    finalize_mesh(mesh);
     std::fprintf(stderr, "[obj] loaded %s: %zu verts, %zu tris, %zu mats\n",
                  path.c_str(), mesh.positions.size(), mesh.triangles.size(),
                  mesh.materials.size());

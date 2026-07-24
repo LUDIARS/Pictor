@@ -18,10 +18,20 @@ namespace sharc_demo {
 
 /// メッシュのマテリアル (OBJ/MTL 由来)。
 struct PlyMaterial {
+    /// 自己発光強度 (0 = 非発光)。 街灯ガラス / 電飾玉 / 提灯など、
+    /// 「光ってる見た目」 の表現用 (ライト配置とは独立)。
+    float emissive = 0.0f;
     std::array<float, 3> albedo{0.75f, 0.75f, 0.75f};
     float roughness = 0.6f;
     float mfp = 0.0f;   ///< SSS 平均自由行程 (0 = 不透明)。 葉など半透明素材用
     std::string texture; ///< map_Kd の解決済みパス (空 = テクスチャなし)
+};
+
+/// OBJ の発光体グループ (街灯ガラス / 提灯) の抽出結果。
+/// kind: 0 = 街灯 (StreetLight_Glass), 1 = 提灯 (Lantern / StringLights の玉)。
+struct EmissiveGroup {
+    std::array<float, 3> center{};
+    int kind = 0;
 };
 
 struct PlyMesh {
@@ -29,14 +39,18 @@ struct PlyMesh {
     std::vector<std::array<float, 3>> normals;    ///< 頂点スムーズ法線
     std::vector<std::array<uint32_t, 3>> triangles;
 
+    /// OBJ の街灯/提灯グループ中心 (ライト自動配置用、 OBJ 経路のみ)。
+    /// scale_mesh / 平行移動の適用は呼び出し側の責務。
+    std::vector<EmissiveGroup> emissive_groups;
+
     /// materials が空 = 呼び出し側の単一マテリアル (PLY 経路)。
     /// 非空なら tri_material が triangles と同数で対応する。
     std::vector<PlyMaterial> materials;
     std::vector<uint32_t>    tri_material;
 
-    /// 三角形コーナーごとの焼き込み色 (RGB8 packed、 リニア空間)。
-    /// map_Kd を UV サンプルして OBJ ローダが生成する。 空 = albedo 一色。
-    std::vector<std::array<uint32_t, 3>> tri_corner_colors;
+    /// 三角形コーナーごとの UV (OBJ の vt)。 空 = UV なし (PLY 等)。
+    /// GPU 側は texture2DArray + REPEAT サンプラでタイルする。
+    std::vector<std::array<std::array<float, 2>, 3>> tri_corner_uvs;
 
     std::array<float, 3> bounds_min{};
     std::array<float, 3> bounds_max{};
