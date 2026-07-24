@@ -76,8 +76,9 @@ struct alignas(16) SharcParamsGpu {
 static_assert(sizeof(SharcParamsGpu) == 128, "GLSL SharcParams と一致させる");
 
 /// scene_flags (GLSL SHARC_SCENE_* と一致)。
-constexpr uint32_t kSharcSceneMesh  = 1u;
-constexpr uint32_t kSharcSceneFloor = 2u;
+constexpr uint32_t kSharcSceneMesh   = 1u;
+constexpr uint32_t kSharcSceneFloor  = 2u;
+constexpr uint32_t kSharcSceneAlbedo = 4u;   ///< アルベド素通し (検証用)
 
 // ============================================================
 // GPU シーン (hit パス) のレイアウト — sharc_hit.comp と一致
@@ -92,21 +93,28 @@ struct SharcBvhNodeGpu {
 };
 static_assert(sizeof(SharcBvhNodeGpu) == 32, "GLSL SharcBvhNode と一致させる");
 
-/// 三角形 (64B)。 n = oct32 頂点法線、 c = コーナー焼き込み色 (RGB8 リニア)。
+/// 三角形 (80B)。 n = oct32 頂点法線、 uv = コーナー UV (texture2DArray
+/// を REPEAT サンプルするため生値、 [0,1] 超のタイルも保持する)。
 struct SharcTriGpu {
     float v0[3]; uint32_t n0;
     float v1[3]; uint32_t n1;
     float v2[3]; uint32_t n2;
-    uint32_t c0, c1, c2, pad;
+    float uv0[2];
+    float uv1[2];
+    float uv2[2];
+    uint32_t pad0, pad1;
 };
-static_assert(sizeof(SharcTriGpu) == 64, "GLSL SharcTri と一致させる");
+static_assert(sizeof(SharcTriGpu) == 80, "GLSL SharcTri と一致させる");
 
-/// マテリアル (32B)。
+/// マテリアル (32B)。 atlas_layer_plus1 は 0 = テクスチャなし、
+/// N > 0 = texture2DArray のレイヤ N-1 (float 格納、 ≤256 なので厳密)。
 struct SharcMaterialGpu {
     float albedo[3];
     float roughness;
     float mfp;
-    float pad[3];
+    float atlas_layer_plus1;
+    float emissive;   ///< 自己発光強度 (0 = 非発光)。 albedo 色で光る
+    float pad;
 };
 static_assert(sizeof(SharcMaterialGpu) == 32, "GLSL SharcMaterial と一致させる");
 
@@ -131,7 +139,17 @@ inline uint32_t sharc_oct32_encode(float nx, float ny, float nz) {
 /// per-cell reservoir (uvec4): {lightIdx, wSum(f32), M(f32), targetPdf(f32)}。
 constexpr uint32_t kSharcReservoirUints = 4;
 
-/// ヒットレコード {rayIdx, slot, t0, t1} (std430)。
+/// 蓄積バッファ (Phase 2, GLSL SHARC_ACCUM_UINTS と一致):
+/// [0..2] M0 RGB 固定小数点 / [3] サンプル数 / [4..6] M1 xyz (signed) /
+/// [7] AO 遮蔽|レイ数 / [8] 太陽可視 遮蔽|レイ数 / [9] 予約。
+constexpr uint32_t kSharcAccumUints = 10;
+
+/// 近傍スロットテーブル: セルごとに 27 近傍 (自身含む 3x3x3) の slot を
+/// 事前解決して持つ (resolve のハッシュ検索 8 回/画素 → 配列参照化)。
+constexpr uint32_t kSharcNeighborUints = 27;
+
+/// ヒットレコード {rayIdx, slot, t0, t1} (std430)。 Vulkan 経路は蓄積
+/// バッファに置き換え済み — DX12 ポート (旧スナップショット) のみ使用。
 constexpr uint32_t kSharcHitRecordBytes = 16;
 
 // ============================================================

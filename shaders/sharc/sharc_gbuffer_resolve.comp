@@ -1,0 +1,129 @@
+// Pictor — SHaRC ハイブリッド経路: G-buffer → shade/rays 変換 (Pass 0 代替)
+//
+// 120fps 試算の (3): hit パス (compute BVH 一次レイ ~80-90ms) の出力である
+// gpu_sharc_shade / gpu_sharc_rays を、 ラスタ G-buffer の読みだけで作る
+// 画面パス (~1-2ms 見込み)。 以降の march / compact / update / resolve は
+// フルレイ経路と完全共通 (経路はここより上流の差し替えだけ)。
+//
+// 太陽可視はシャドウマップ (4096^2 ortho depth) の PCF 2x2。
+//
+// dispatch: (rayCount / 64, 1, 1)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#define SHARC_SET 0
+#include "sharc_common.glsl"
+
+struct SharcRay {
+    vec4 originTMin;
+    vec4 dirTMax;
+};
+
+layout(std430, set = SHARC_SET, binding = 3) writeonly buffer SharcRays {
+    SharcRay gpu_sharc_rays[];
+};
+
+struct SharcShadeRequest {
+    vec4 posRough;
+    vec4 normalMfp;
+    vec4 albedoView;
+    vec4 viewDir;
+};
+
+layout(std430, set = SHARC_SET, binding = 12) writeonly buffer SharcShadeRequests {
+    SharcShadeRequest gpu_sharc_shade[];
+};
+
+struct SharcLight {
+    vec4 posRadius;
+    vec4 colorIntensity;
+};
+
+layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
+    SharcLight gpu_sharc_lights[];
+};
+
+// G-buffer (デモ側 GBufferRenderer が描画、 texelFetch で厳密画素参照)
+layout(set = SHARC_SET, binding = 21) uniform sampler2D gbAlbedoAo;
+layout(set = SHARC_SET, binding = 22) uniform sampler2D gbNormalRough;
+layout(set = SHARC_SET, binding = 23) uniform sampler2D gbDistMfp;
+layout(set = SHARC_SET, binding = 24) uniform sampler2D gbSunShadow;
+
+layout(push_constant) uniform SharcSunPush {
+    mat4 sunViewProj;   // 太陽 ortho VP (シャドウマップ描画と同一行列)
+};
+
+// シャドウマップ PCF 2x2。 法線オフセット + 定数バイアスでアクネ回避。
+float sunShadowVis(vec3 worldPos, vec3 n) {
+    vec4 clip = sunViewProj * vec4(worldPos + n * 0.05, 1.0);
+    vec3 ndc = clip.xyz / max(clip.w, 1e-8);
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;   // マップ外 = 遮蔽情報なし → 可視扱い
+    }
+    ivec2 dim = textureSize(gbSunShadow, 0);
+    vec2 texel = uv * vec2(dim) - 0.5;
+    ivec2 base = ivec2(floor(texel));
+    float ref = ndc.z - 2.0e-3;
+    float vis = 0.0;
+    for (int i = 0; i < 4; i++) {
+        ivec2 p = clamp(base + ivec2(i & 1, i >> 1), ivec2(0), dim - 1);
+        vis += (texelFetch(gbSunShadow, p, 0).r >= ref) ? 1.0 : 0.0;
+    }
+    return vis * 0.25;
+}
+
+void main() {
+    uint rayIdx = gl_GlobalInvocationID.x;
+    if (rayIdx >= sharcRayCount) return;
+
+    // レイ生成は hit パスと同一式 (画素 index → カメラ基底)
+    uint renderW = uint(sharcCamUp.w);
+    uint px = rayIdx % renderW;
+    uint py = rayIdx / renderW;
+    uint renderH = sharcRayCount / renderW;
+    float fovScale = sharcCamFwd.w;
+    float aspect   = sharcCamRight.w;
+    float u = (2.0 * (float(px) + 0.5) / float(renderW) - 1.0)
+            * fovScale * aspect;
+    float v = (1.0 - 2.0 * (float(py) + 0.5) / float(renderH)) * fovScale;
+    vec3 ro = sharcCameraPos.xyz;
+    vec3 rd = normalize(sharcCamFwd.xyz + sharcCamRight.xyz * u
+                        + sharcCamUp.xyz * v);
+
+    ivec2 pix = ivec2(int(px), int(py));
+    vec2 distMfp = texelFetch(gbDistMfp, pix, 0).rg;
+    float dist = distMfp.r;
+
+    SharcShadeRequest req;
+    float tmax = sharcSceneRayFar;
+    if (dist > 0.0) {
+        vec4 albedoAo    = texelFetch(gbAlbedoAo, pix, 0);
+        vec4 normalRough = texelFetch(gbNormalRough, pix, 0);
+        vec3 pos = ro + rd * dist;
+        vec3 n = normalize(normalRough.xyz);
+        float sunVis = 1.0;
+        if (sharcLightCount > 0u &&
+            gpu_sharc_lights[0].posRadius.w < 0.0) {
+            vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
+            sunVis = (dot(n, toSun) > 0.0) ? sunShadowVis(pos, n) : 0.0;
+        }
+        req.posRough   = vec4(pos, normalRough.a);
+        req.normalMfp  = vec4(n, distMfp.g);
+        req.albedoView = vec4(albedoAo.rgb, sunVis);
+        req.viewDir    = vec4(-rd, albedoAo.a);
+        tmax = dist;
+    } else {
+        // ミス (空): albedo 0 → 出力 0。 march はセルを温める
+        req.posRough   = vec4(0.0, 0.0, 0.0, 1.0);
+        req.normalMfp  = vec4(0.0, 1.0, 0.0, 0.0);
+        req.albedoView = vec4(0.0);
+        req.viewDir    = vec4(0.0, 1.0, 0.0, 0.0);
+    }
+    gpu_sharc_shade[rayIdx] = req;
+    gpu_sharc_rays[rayIdx] = SharcRay(vec4(ro, 0.0), vec4(rd, tmax));
+}

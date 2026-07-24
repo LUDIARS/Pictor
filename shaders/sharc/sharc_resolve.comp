@@ -37,6 +37,16 @@ layout(std430, set = SHARC_SET, binding = 13) writeonly buffer SharcOutput {
     vec4 gpu_sharc_output[];
 };
 
+// ライト (太陽 = lights[0] directional の解析直接光用)
+struct SharcLight {
+    vec4 posRadius;        // xyz = 位置 / 方向, w = 半径 (< 0 = directional)
+    vec4 colorIntensity;
+};
+
+layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
+    SharcLight gpu_sharc_lights[];
+};
+
 void main() {
     uint rayIdx = gl_GlobalInvocationID.x;
     if (rayIdx >= sharcRayCount) return;
@@ -48,6 +58,22 @@ void main() {
     float mfp       = req.normalMfp.w;
     vec3  albedo    = req.albedoView.rgb;
     vec3  v         = normalize(req.viewDir.xyz);
+    float pixAo     = (req.viewDir.w > 0.0) ? req.viewDir.w : 1.0;
+    // 発光体 (viewDir.w > 1 = 1+強度): albedo 色で自己発光を直接加算。
+    // 「街灯がちゃんと光ってる見た目」 の表現 (Reinhard で白熱化する)
+    vec3 selfEmission = vec3(0.0);
+    if (pixAo > 1.0) {
+        selfEmission = albedo * (pixAo - 1.0);
+        pixAo = 1.0;
+    }
+
+    // アルベドビュー: ライティングを一切載せずテクスチャ色を素通しする
+    // (リファレンス画像との「同カメラ・同色」検証用。 present 側も
+    //  Reinhard/露出を飛ばして gamma のみになる)
+    if ((sharcSceneFlags & SHARC_SCENE_ALBEDO) != 0u) {
+        gpu_sharc_output[rayIdx] = vec4(albedo, 1.0);
+        return;
+    }
 
     // march はセル入口点の距離でレベルを選ぶため、 ヒット点の距離と
     // レベル境界を跨いでずれることがある。 ±1 レベルで救済して
@@ -56,8 +82,9 @@ void main() {
     // 8 近傍が全滅した場合のみ (通常は march が近傍を温めている)。
     uint levelBase = sharcLevelFromDistance(distance(pos, sharcCameraPos.xyz));
 
-    vec3 radiance = vec3(0.0);
+    vec3 radiance = selfEmission;
     float hit = 0.0;
+    float cellSunVis = 1.0;   // 遠方ピクセルの太陽可視率 (セル補間)
 
     // --- 拡散 + 鏡面: 8 近傍セルのトライリニア補間評価 ---
     // 単一セル参照はセル境界がフラットシェーディングの切れ目として見える。
@@ -82,12 +109,35 @@ void main() {
         ivec3 base = ivec3(floor(gpos));
         vec3 f = gpos - vec3(base);
 
+        // 近傍スロットテーブル: 包含セル G を 1 回だけハッシュ検索し、
+        // 8 コーナーは G の事前解決済み 27 行から引く (コーナーは必ず
+        // G±1 の範囲)。 エントリは指紋検証し、 外れたらハッシュ検索へ
+        // フォールバック + 書き戻し (自己修復 — キャッシュロード直後や
+        // 挿入 race の陳腐化を吸収)。
+        ivec3 gCell = ivec3(floor(pos / cell));
+        uint gSlot = sharcFindSlot(gCell, level);
+        uint gRow = gSlot * SHARC_NEIGHBOR_UINTS;
+
         vec3 acc = vec3(0.0);
+        float sunAcc = 0.0;
         float wSum = 0.0;
         for (int c = 0; c < 8; c++) {
             ivec3 offs = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
             ivec3 grid = base + offs;
-            uint slot = sharcFindSlot(grid, level);
+            uint slot;
+            if (gSlot != SHARC_SLOT_INVALID) {
+                uint nIdx = sharcNeighborIndex(grid - gCell);
+                uint hint = gpu_sharc_neighbors[gRow + nIdx];
+                if (hint < sharcTableSize &&
+                    gpu_sharc_keys[hint] == sharcFingerprint(grid, level)) {
+                    slot = hint;
+                } else {
+                    slot = sharcFindSlot(grid, level);
+                    gpu_sharc_neighbors[gRow + nIdx] = slot;
+                }
+            } else {
+                slot = sharcFindSlot(grid, level);
+            }
             if (slot == SHARC_SLOT_INVALID) continue;
 
             vec3 w3 = mix(1.0 - f, f, vec3(offs));
@@ -102,16 +152,39 @@ void main() {
 
             // 鏡面 (層2 ローブ、 セルごとの中心で再照準)
             vec3 cellCenter = sharcCellCenter(grid, level);
-            sample_ += fresnel * sharcSpecularEvaluate(slot, cellCenter, pos,
-                                                       n, v, roughness);
+            // 鏡面のグローバル減衰: SG 振幅は広 roughness でエネルギー過大に
+            // なり拡散 (テクスチャ色) を塗り潰す。 拡散主体に抑える。
+            const float kSpecScale = 0.02;
+            sample_ += kSpecScale * fresnel *
+                       sharcSpecularEvaluate(slot, cellCenter, pos, n, v,
+                                             roughness);
 
-            acc  += sample_ * w;
+            acc  += sample_ * sharcLoadCellAo(slot) * w;
+            sunAcc += sharcLoadCellSunVis(slot) * w;
             wSum += w;
         }
         if (wSum > 1e-4) {
-            radiance += acc / wSum;
+            // AO はキャッシュ由来の間接光にのみ掛ける (太陽直接光は
+            // シャドウレイが遮蔽を持つ)。 セル AO は corner 補間済み
+            radiance += (acc / wSum) * pixAo;
+            cellSunVis = sunAcc / wSum;
             hit = 1.0;
         }
+    }
+
+    // --- 太陽の解析直接光 (シャドウレイ付き — シャープな影) ---
+    // 太陽はキャッシュから除外されており (update 側)、 ここでピクセル精度の
+    // 可視性 (hit パスの BVH any-hit、 albedoView.a) を掛けて加算する。
+    // 遠方ピクセル (albedoView.a < 0 センチネル) はセル太陽可視率の
+    // トライリニア補間で代替 (hit パスのシャドウレイ削減、 neco 指示 2)。
+    if (sharcLightCount > 0u && gpu_sharc_lights[0].posRadius.w < 0.0) {
+        float sunVis = req.albedoView.a;
+        if (sunVis < 0.0) sunVis = cellSunVis;
+        vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
+        float ndl = max(dot(n, toSun), 0.0);
+        radiance += albedo * SHARC_INV_PI *
+                    gpu_sharc_lights[0].colorIntensity.rgb *
+                    gpu_sharc_lights[0].colorIntensity.a * ndl * sunVis;
     }
 
     // --- SSS (層1, MFP レベルのギャザー) ---

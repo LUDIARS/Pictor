@@ -29,14 +29,19 @@ public:
     PresentRenderer& operator=(const PresentRenderer&) = delete;
 
     /// output = resolve 出力 SSBO (SharcGpuExecutor::output_buffer())。
+    /// bloom_view/sampler = BloomPipeline の up[0] (トーンマップ前合成)。
     bool initialize(pictor::VulkanContext& vk, const char* shader_dir,
-                    VkBuffer output, VkDeviceSize output_size);
+                    VkBuffer output, VkDeviceSize output_size,
+                    VkImageView bloom_view, VkSampler bloom_sampler);
 
     void shutdown();
 
     /// render pass 内で呼ぶ。 レンダバッファ解像度と露出を push constant で渡す。
+    /// albedo_mode = true でアルベド素通し (gamma のみ、 露出/Reinhard なし)。
+    /// bloom_strength = 0 で bloom 無効。
     void render(VkCommandBuffer cmd, VkExtent2D extent, uint32_t render_w,
-                uint32_t render_h, float exposure);
+                uint32_t render_h, float exposure, bool albedo_mode = false,
+                float bloom_strength = 0.0f);
 
     bool is_initialized() const { return initialized_; }
 
@@ -45,7 +50,8 @@ private:
         uint32_t render_width;
         uint32_t render_height;
         float    exposure;
-        float    pad0;
+        float    albedo_mode;
+        float    bloom_strength;
     };
 
     VkShaderModule load_shader_(const char* path);

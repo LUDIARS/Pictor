@@ -34,20 +34,26 @@ VkShaderModule PresentRenderer::load_shader_(const char* path) {
 
 bool PresentRenderer::initialize(pictor::VulkanContext& vk,
                                  const char* shader_dir, VkBuffer output,
-                                 VkDeviceSize output_size) {
+                                 VkDeviceSize output_size,
+                                 VkImageView bloom_view,
+                                 VkSampler bloom_sampler) {
     vk_     = &vk;
     device_ = vk.device();
 
-    // ── descriptor: SSBO 1 個 (fragment 読み) ──
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding         = 0;
-    binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // ── descriptor: SSBO (HDR 出力) + sampler (bloom up[0]) ──
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding         = 0;
+    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding         = 1;
+    bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo dli{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    dli.bindingCount = 1;
-    dli.pBindings    = &binding;
+    dli.bindingCount = 2;
+    dli.pBindings    = bindings;
     if (vkCreateDescriptorSetLayout(device_, &dli, nullptr, &dsl_) !=
         VK_SUCCESS) {
         return false;
@@ -143,12 +149,15 @@ bool PresentRenderer::initialize(pictor::VulkanContext& vk,
     }
 
     // ── descriptor pool + set (バッファ固定なので 1 回書き) ──
-    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+    VkDescriptorPoolSize pool_sizes[2] = {
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+    };
     VkDescriptorPoolCreateInfo dpi{
         VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets       = 1;
-    dpi.poolSizeCount = 1;
-    dpi.pPoolSizes    = &pool_size;
+    dpi.poolSizeCount = 2;
+    dpi.pPoolSizes    = pool_sizes;
     if (vkCreateDescriptorPool(device_, &dpi, nullptr, &desc_pool_) !=
         VK_SUCCESS) {
         shutdown();
@@ -164,13 +173,22 @@ bool PresentRenderer::initialize(pictor::VulkanContext& vk,
         return false;
     }
     VkDescriptorBufferInfo info{output, 0, output_size};
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet          = desc_set_;
-    write.dstBinding      = 0;
-    write.descriptorCount = 1;
-    write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    write.pBufferInfo     = &info;
-    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    VkDescriptorImageInfo bloom_info{bloom_sampler, bloom_view,
+                                     VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet writes[2]{};
+    writes[0] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[0].dstSet          = desc_set_;
+    writes[0].dstBinding      = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[0].pBufferInfo     = &info;
+    writes[1] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[1].dstSet          = desc_set_;
+    writes[1].dstBinding      = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo      = &bloom_info;
+    vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
 
     initialized_ = true;
     return true;
@@ -178,7 +196,8 @@ bool PresentRenderer::initialize(pictor::VulkanContext& vk,
 
 void PresentRenderer::render(VkCommandBuffer cmd, VkExtent2D extent,
                              uint32_t render_w, uint32_t render_h,
-                             float exposure) {
+                             float exposure, bool albedo_mode,
+                             float bloom_strength) {
     if (!initialized_) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0,
@@ -188,7 +207,8 @@ void PresentRenderer::render(VkCommandBuffer cmd, VkExtent2D extent,
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    PushParams pc{render_w, render_h, exposure, 0.0f};
+    PushParams pc{render_w, render_h, exposure, albedo_mode ? 1.0f : 0.0f,
+                  bloom_strength};
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);

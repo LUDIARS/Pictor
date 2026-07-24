@@ -43,80 +43,21 @@ layout(std430, set = SHARC_SET, binding = 12) writeonly buffer SharcShadeRequest
     SharcShadeRequest gpu_sharc_shade[];
 };
 
-// ── GPU シーン (フラット DoD 配列) ──
+#include "sharc_scene.glsl"
 
-struct SharcBvhNode {
-    vec4 bminLeft;     // xyz = AABB min, w = uintBitsToFloat(left)
-    vec4 bmaxCount;    // xyz = AABB max, w = uintBitsToFloat(count)
+// ライト (太陽シャドウレイ用に lights[0] を参照)
+struct SharcLight {
+    vec4 posRadius;        // xyz = 位置 / 方向, w = 半径 (< 0 = directional)
+    vec4 colorIntensity;
 };
 
-layout(std430, set = SHARC_SET, binding = 14) readonly buffer SharcBvhNodes {
-    SharcBvhNode gpu_sharc_bvh[];
+layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
+    SharcLight gpu_sharc_lights[];
 };
 
-struct SharcTri {
-    vec4 v0;           // xyz = 頂点, w = uintBitsToFloat(oct32 法線 n0)
-    vec4 v1;           // w = n1
-    vec4 v2;           // w = n2
-    uvec4 colors;      // xyz = コーナー焼き込み色 (RGB8 リニア), w = 予約
-};
-
-vec3 sharcUnpackRgb8(uint c) {
-    return vec3(float(c & 0xFFu), float((c >> 8) & 0xFFu),
-                float((c >> 16) & 0xFFu)) * (1.0 / 255.0);
-}
-
-layout(std430, set = SHARC_SET, binding = 15) readonly buffer SharcTris {
-    SharcTri gpu_sharc_tris[];
-};
-
-layout(std430, set = SHARC_SET, binding = 16) readonly buffer SharcTriMats {
-    uint gpu_sharc_tri_mat[];
-};
-
-struct SharcMaterial {
-    vec4 albedoRough;  // rgb = albedo, a = roughness
-    vec4 mfpPad;       // x = SSS MFP
-};
-
-layout(std430, set = SHARC_SET, binding = 17) readonly buffer SharcMaterials {
-    SharcMaterial gpu_sharc_materials[];
-};
-
-// ============================================================
-// 交差
-// ============================================================
-
-bool sharcAabbHit(vec3 bmin, vec3 bmax, vec3 ro, vec3 invRd, float tmax) {
-    vec3 t0 = (bmin - ro) * invRd;
-    vec3 t1 = (bmax - ro) * invRd;
-    vec3 tlo = min(t0, t1);
-    vec3 thi = max(t0, t1);
-    float tEnter = max(max(tlo.x, tlo.y), max(tlo.z, 0.0));
-    float tExit  = min(min(thi.x, thi.y), min(thi.z, tmax));
-    return tEnter <= tExit;
-}
-
-// Möller–Trumbore。 ヒット時 t/u/v を返す。
-bool sharcTriHit(SharcTri tri, vec3 ro, vec3 rd, float tmax,
-                 out float outT, out float outU, out float outV) {
-    vec3 e1 = tri.v1.xyz - tri.v0.xyz;
-    vec3 e2 = tri.v2.xyz - tri.v0.xyz;
-    vec3 pv = cross(rd, e2);
-    float det = dot(e1, pv);
-    if (abs(det) < 1e-12) return false;
-    float invDet = 1.0 / det;
-    vec3 tv = ro - tri.v0.xyz;
-    float u = dot(tv, pv) * invDet;
-    if (u < 0.0 || u > 1.0) return false;
-    vec3 qv = cross(tv, e1);
-    float v = dot(rd, qv) * invDet;
-    if (v < 0.0 || u + v > 1.0) return false;
-    float t = dot(e2, qv) * invDet;
-    if (t <= 1e-4 || t >= tmax) return false;
-    outT = t; outU = u; outV = v;
-    return true;
-}
+// アルベドテクスチャ配列 (1 レイヤ = 1 map_Kd、 REPEAT でタイル)。
+// 未使用時は 1x1 白ダミーが結線される。
+layout(set = SHARC_SET, binding = 18) uniform sampler2DArray sharcAlbedoAtlas;
 
 void main() {
     uint rayIdx = gl_GlobalInvocationID.x;
@@ -198,14 +139,78 @@ void main() {
             bestV * sharcOct32Decode(floatBitsToUint(tri.v2.w)));
         if (dot(n, rd) > 0.0) n = -n;   // 裏面ヒット (逆光透過) は視線側へ
         SharcMaterial mat = gpu_sharc_materials[gpu_sharc_tri_mat[bestTri]];
-        // albedo はコーナー焼き込み色 (map_Kd) の重心補間
-        vec3 albedo = w * sharcUnpackRgb8(tri.colors.x) +
-                      bestU * sharcUnpackRgb8(tri.colors.y) +
-                      bestV * sharcUnpackRgb8(tri.colors.z);
+        // albedo: テクスチャあり = 重心補間 UV で配列サンプル (Kd は乗数)。
+        //         なし = マテリアル albedo (クレイ / PLY / 葉の緑)
+        vec3 albedo = mat.albedoRough.rgb;
+        float layerPlus1 = mat.mfpPad.y;
+        vec2 uv = w * tri.uv01.xy + bestU * tri.uv01.zw
+                + bestV * tri.uv2Pad.xy;
+        if (layerPlus1 > 0.5) {
+            // テクセルフットプリント LOD: 三角形の UV 面積 / ワールド面積比
+            // から texel 密度を推定し、 1 ピクセルが覆う texel 数で選ぶ。
+            // (絶対距離 log2 だと街路距離で mip 5-7 に飛びテクスチャが
+            //  マテリアル平均色へ潰れる)
+            vec3 e1w = tri.v1.xyz - tri.v0.xyz;
+            vec3 e2w = tri.v2.xyz - tri.v0.xyz;
+            float worldArea = max(length(cross(e1w, e2w)), 1e-12);
+            vec2 e1t = tri.uv01.zw - tri.uv01.xy;
+            vec2 e2t = tri.uv2Pad.xy - tri.uv01.xy;
+            float uvArea = max(abs(e1t.x * e2t.y - e1t.y * e2t.x), 1e-12);
+            float texelPerMeter = float(textureSize(sharcAlbedoAtlas, 0).x)
+                                * sqrt(uvArea / worldArea);
+            float pixelMeter = best * (2.0 * sharcCamFwd.w / float(renderH));
+            float lod = clamp(log2(max(pixelMeter * texelPerMeter, 1.0)),
+                              0.0, 9.0);
+            albedo *= textureLod(sharcAlbedoAtlas,
+                                 vec3(uv, layerPlus1 - 1.0), lod).rgb;
+        }
+#ifdef SHARC_DEBUG_ATLAS
+        // 縦 3 分割デバッグ: 左 = 通常 / 中 = 生サンプル LOD0 / 右 = UV+layer
+        uint band = (px * 3u) / renderW;
+        if (band == 1u) {
+            albedo = textureLod(sharcAlbedoAtlas,
+                                vec3(uv, max(layerPlus1 - 1.0, 0.0)), 0.0).rgb;
+        } else if (band == 2u) {
+            albedo = vec3(fract(uv), layerPlus1 / 128.0);
+        }
+#endif
+        // 太陽シャドウレイ (lights[0] が directional の場合):
+        // ピクセル精度のシャープな影は近距離 (sharcCameraPos.w [m]) のみ。
+        // 遠方は sunVis = -1 (センチネル) を渡し、 resolve がセル太陽可視率
+        // (update がセル単位で維持) のトライリニア補間で代替する —
+        // 遠方ピクセルの BVH シャドウレイを丸ごと省く事前計算化。
+        float sunVis = 1.0;
+        if (sharcLightCount > 0u &&
+            gpu_sharc_lights[0].posRadius.w < 0.0) {
+            if (best > sharcCameraPos.w) {
+                sunVis = -1.0;
+            } else {
+                vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
+                if (dot(n, toSun) > 0.0 &&
+                    sharcAnyHit(pos + n * 1.5e-2, toSun, 1.0e4)) {
+                    sunVis = 0.0;
+                }
+            }
+        }
+        // ピクセル AO: ロード時ベイクの頂点 AO (三角形 3 コーナー unorm8)
+        // を重心補間で読む。 実行時の AO レイ 2 本 (旧実装) は
+        // sharc_ao_bake.comp の事前計算に置き換えた — hit パスの
+        // 最大コスト源のひとつが定数時間参照になる。
+        // 発光体は AO チャネルに 1+強度 でエンコード (G-buffer 経路と同一)
+        float pixAo;
+        if (mat.mfpPad.z > 0.0) {
+            pixAo = 1.0 + mat.mfpPad.z;
+        } else {
+            uint aoPack = gpu_sharc_tri_ao[bestTri];
+            vec3 ao3 = vec3(float(aoPack & 0xFFu),
+                            float((aoPack >> 8) & 0xFFu),
+                            float((aoPack >> 16) & 0xFFu)) / 255.0;
+            pixAo = dot(vec3(w, bestU, bestV), ao3);
+        }
         req.posRough   = vec4(pos, mat.albedoRough.a);
         req.normalMfp  = vec4(n, mat.mfpPad.x);
-        req.albedoView = vec4(albedo, 0.0);
-        req.viewDir    = vec4(-rd, 0.0);
+        req.albedoView = vec4(albedo, sunVis);
+        req.viewDir    = vec4(-rd, pixAo);
     } else if (floorHit) {
         vec3 pos = ro + rd * best;
         int cx = int(floor(pos.x));

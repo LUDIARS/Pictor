@@ -1,8 +1,10 @@
-// Pictor — SHaRC 拡張 Pass 2: Compact
+// Pictor — SHaRC 拡張 Pass 2: Compact + Cache Resolve
 //
 // march が積んだ要求セルリストを indirect dispatch 引数に変換する (spec §3)。
-// 要求リスト自体は march 側で atomic 追記 + スタンプ重複排除済みなので、
-// ここでは (1) dispatch 引数生成 (2) 古いセルのエビクション を行う。
+// (1) dispatch 引数生成 (2) 古いセルのエビクション (3) **蓄積→解決の
+// per-element 結合** (NVIDIA 公式 SharcResolveEntry 相当 — 前フレームの
+// update が積んだ蓄積を履歴と重み結合し、 蓄積をリセットする。
+// 正式な 1 フレーム遅延セマンティクス)。
 // エビクションは LRU 的: 最終更新が sharcStaleFrames より古いスロットの
 // キーを解放する (層3 メタデータ, spec §2)。
 //
@@ -15,6 +17,7 @@ layout(local_size_x = 256) in;
 
 #define SHARC_SET 0
 #include "sharc_common.glsl"
+#include "sharc_moments.glsl"
 
 // カウンタ群: [0]=hitCount [1]=requestCount (march と共有)
 layout(std430, set = SHARC_SET, binding = 5) buffer SharcCounters {
@@ -31,8 +34,14 @@ void main() {
 
     // --- (1) indirect 引数生成 (先頭スレッドのみ) ---
     if (slot == 0u) {
-        uint requestCount = min(gpu_sharc_counters[1], sharcTableSize);
-        gpu_sharc_indirect[0] = requestCount;   // 1 workgroup = 1 要求セル
+        // Vulkan 最低保証 maxComputeWorkGroupCount[0] = 65535 を超えない
+        // (review P1-04)。 溢れた要求セルは今フレーム未更新のまま残り、
+        // 次フレームに再要求される (品質は保たれ、 無言のUBは起きない)。
+        uint requestCount = min(gpu_sharc_counters[1],
+                                min(sharcTableSize, 65535u));
+        // 1 フレーム上限で償却 (超過分は update 側のローテーションが
+        // 次フレーム以降に回す — 120fps 試算の (4))
+        gpu_sharc_indirect[0] = min(requestCount, SHARC_UPDATE_CAP);
         gpu_sharc_indirect[1] = 1u;
         gpu_sharc_indirect[2] = 1u;
     }
@@ -49,6 +58,70 @@ void main() {
     uint now = sharcFrameIndex & 0xFFFFu;
     uint age = (now - lastFrame) & 0xFFFFu;
     if (age > sharcStaleFrames) {
-        gpu_sharc_keys[slot] = 0u;   // キー解放 (セル本体は再確保時に初期化)
+        // TOMBSTONE で解放 — 0 に戻すと open addressing の probe chain が
+        // 切れて後続スロットの生存セルが検索不能になる (review P0-02)
+        gpu_sharc_keys[slot] = SHARC_KEY_TOMBSTONE;
+        // 自分の近傍行を未解決に戻す (スロット再利用時の誤リンク防止)。
+        // 他セルから自分への残存リンクは読む側の指紋検証が弾く。
+        for (uint i = 0u; i < SHARC_NEIGHBOR_UINTS; i++) {
+            gpu_sharc_neighbors[slot * SHARC_NEIGHBOR_UINTS + i] =
+                SHARC_SLOT_INVALID;
+        }
+        return;
+    }
+
+    // --- (3) 蓄積 → 解決の結合 (前フレーム update 分、 Phase 2) ---
+    uint ab = slot * SHARC_ACCUM_UINTS;
+    uint accumN = gpu_sharc_accum[ab + 3u];
+    if (accumN == 0u) return;
+
+    vec3 sumM0 = vec3(sharcFixedDecode(gpu_sharc_accum[ab + 0u]),
+                      sharcFixedDecode(gpu_sharc_accum[ab + 1u]),
+                      sharcFixedDecode(gpu_sharc_accum[ab + 2u]));
+    vec3 sumM1 = vec3(sharcFixedDecodeS(int(gpu_sharc_accum[ab + 4u])),
+                      sharcFixedDecodeS(int(gpu_sharc_accum[ab + 5u])),
+                      sharcFixedDecodeS(int(gpu_sharc_accum[ab + 6u])));
+    vec3 newM0 = sumM0 / float(accumN);
+    vec3 newM1 = sumM1 / float(accumN);
+
+    // 履歴と重み結合 (実効履歴は 1024 サンプルで頭打ち = 公式の
+    // accumFrameNum cap 相当。 応答性と分散低減のトレードオフ)
+    float wHist = min(float(sampleCount), 1024.0);
+    float alpha = float(accumN) / (wHist + float(accumN));
+    sharcMomentsBlend(slot, newM0, newM1, alpha);
+
+    // AO 結合 (遮蔽数/レイ数)
+    float aoB = sharcLoadCellAo(slot);
+    {
+        uint aoPacked = gpu_sharc_accum[ab + 7u];
+        uint aoRays = aoPacked >> 16;
+        if (aoRays > 0u) {
+            float aoNew = 1.0 - float(aoPacked & 0xFFFFu) / float(aoRays);
+            float aoAlpha = float(aoRays) /
+                            (min(wHist, 512.0) + float(aoRays));
+            aoB = mix(aoB, aoNew, aoAlpha);
+        }
+    }
+    // 太陽可視の結合。 履歴 cap を AO より短く (256) して太陽の移動に
+    // 速く追従させる (太陽は動かせる前提)
+    float sunB = sharcLoadCellSunVis(slot);
+    {
+        uint sunPacked = gpu_sharc_accum[ab + 8u];
+        uint sunRays = sunPacked >> 16;
+        if (sunRays > 0u) {
+            float sunNew = 1.0 - float(sunPacked & 0xFFFFu) / float(sunRays);
+            float sunAlpha = float(sunRays) /
+                             (min(wHist, 256.0) + float(sunRays));
+            sunB = mix(sunB, sunNew, sunAlpha);
+        }
+    }
+    // meta 書き戻し (サンプルカウンタもここで前進)
+    uint newCount = min(sampleCount + accumN, 0xFFFFu);
+    sharcStoreMeta(slot, newCount, lastFrame, lumaMean, lumaVar, level,
+                   aoB, sunB);
+
+    // 蓄積リセット (次フレームの update 分を受ける)
+    for (uint i = 0u; i < SHARC_ACCUM_UINTS; i++) {
+        gpu_sharc_accum[ab + i] = 0u;
     }
 }
