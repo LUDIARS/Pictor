@@ -428,6 +428,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             demo/sharc/mesh_bvh.cpp
             demo/sharc/present_renderer.cpp
             demo/sharc/gbuffer_renderer.cpp
+            demo/sharc/bloom_pipeline.cpp
             demo/sharc/texture_atlas.cpp
             third_party/stb/stb_image_impl.cpp
         )
@@ -636,6 +637,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_gbuffer.vert
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_gbuffer.frag
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_shadow.vert
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_bloom_extract.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_bloom_down.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_bloom_up.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.vert
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.frag
     )
