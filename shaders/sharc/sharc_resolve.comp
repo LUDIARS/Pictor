@@ -58,6 +58,7 @@ void main() {
     float mfp       = req.normalMfp.w;
     vec3  albedo    = req.albedoView.rgb;
     vec3  v         = normalize(req.viewDir.xyz);
+    float pixAo     = (req.viewDir.w > 0.0) ? req.viewDir.w : 1.0;
 
     // アルベドビュー: ライティングを一切載せずテクスチャ色を素通しする
     // (リファレンス画像との「同カメラ・同色」検証用。 present 側も
@@ -127,11 +128,13 @@ void main() {
                        sharcSpecularEvaluate(slot, cellCenter, pos, n, v,
                                              roughness);
 
-            acc  += sample_ * w;
+            acc  += sample_ * sharcLoadCellAo(slot) * w;
             wSum += w;
         }
         if (wSum > 1e-4) {
-            radiance += acc / wSum;
+            // AO はキャッシュ由来の間接光にのみ掛ける (太陽直接光は
+            // シャドウレイが遮蔽を持つ)。 セル AO は corner 補間済み
+            radiance += (acc / wSum) * pixAo;
             hit = 1.0;
         }
     }

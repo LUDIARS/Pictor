@@ -65,7 +65,7 @@ uint sharcRegisterCell(ivec3 grid, uint level) {
             gpu_sharc_cells[base + i] = 0u;
         }
         gpu_sharc_reservoirs[slot] = uvec4(0u);
-        sharcStoreMeta(slot, 0u, sharcFrameIndex & 0xFFFFu, 0.0, 0.0, level);
+        sharcStoreMeta(slot, 0u, sharcFrameIndex & 0xFFFFu, 0.0, 0.0, level, 1.0);
         gpu_sharc_cell_pos[slot] = sharcPackGridLevel(grid, level);
     }
     // 通常読みで既登録なら atomic を踏まない (多数派の fast path)

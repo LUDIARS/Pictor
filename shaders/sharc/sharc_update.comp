@@ -24,10 +24,12 @@ layout(local_size_x = 64) in;
 
 #define SHARC_SET 0
 #include "sharc_common.glsl"
+#include "sharc_scene.glsl"
 #include "sharc_moments.glsl"
 #include "sharc_lobes.glsl"
 
 const uint SHARC_SAMPLES_PER_CELL = 64u;   // = local_size_x
+const uint SHARC_AO_RAYS          = 16u;   // セル AO の球面レイ数
 
 // ライト (点光源) リスト
 struct SharcLight {
@@ -73,6 +75,7 @@ shared uint  sh_candidate[SHARC_SAMPLES_PER_CELL]; // 候補ライト
 shared float sh_pdfHat[SHARC_SAMPLES_PER_CELL];    // 候補の target pdf
 shared float sh_part[SHARC_SAMPLES_PER_CELL][SHARC_PART_FLOATS];
 shared float sh_orphanScore[SHARC_SAMPLES_PER_CELL]; // 孤児サンプルの強度
+shared uint  sh_aoHits;                              // セル AO レイの遮蔽数
 
 // セル中心での未遮蔽寄与 (target pdf 用)。
 // posRadius.w < 0 は Directional Light (太陽): xyz = 光源方向 (to-sun)、
@@ -143,7 +146,22 @@ void main() {
     sh_weight[tid]    = candW;
     sh_candidate[tid] = candIdx;
     sh_pdfHat[tid]    = candPdfHat;
+    if (tid == 0u) sh_aoHits = 0u;
     barrier();
+
+    // ── セル AO (SHaRC ロジックの AO): セル中心から球面 16 レイの
+    //    短距離遮蔽率をキャッシュする。 到達距離はセルサイズ連動 ──
+    if (tid < SHARC_AO_RAYS && (sharcSceneFlags & SHARC_SCENE_MESH) != 0u) {
+        uint aoRng = sharcHashCombine(slot * 31u + tid, sharcFrameIndex);
+        float z = 1.0 - 2.0 * sharcRand(aoRng);
+        float phi = 2.0 * SHARC_PI * sharcRand(aoRng);
+        float rxy = sqrt(max(1.0 - z * z, 0.0));
+        vec3 dir = vec3(rxy * cos(phi), z, rxy * sin(phi));
+        float aoRange = clamp(sharcCellSize(posLevel) * 2.0, 0.5, 4.0);
+        if (sharcAnyHit(cellCenter, dir, aoRange)) {
+            atomicAdd(sh_aoHits, 1u);
+        }
+    }
 
     // ============================================================
     // 2. 各スレッドが自分のサンプルの帰属度と部分和を計算
@@ -221,6 +239,13 @@ void main() {
     // ============================================================
     if (tid != 0u) return;
 
+    // 適応ブレンド係数 (NVIDIA SHaRC の sample-count 正規化に相当):
+    // コールドセルは α≈1 で即応し、 履歴が溜まると sharcEmaAlpha を下限に
+    // 収束する。 新規セルが ~20 フレーム暗い問題を解消する。
+    float alpha = max(1.0 / (1.0 + float(sampleCountPrev) /
+                                   float(SHARC_SAMPLES_PER_CELL)),
+                      sharcEmaAlpha);
+
     // --- モーメント EMA (縮約済み部分和から) ---
     // 推定量は Σ(f/q)/N (サンプル数正規化)。 Σ(f/q)/Σ(1/q) だと多灯の
     // 総和ではなく平均になり、 ライト数 N で 1/N に暗くなる (review P0-01)。
@@ -233,7 +258,7 @@ void main() {
                   sh_part[0][mb + 2u]) * invN;
         vec3 m1 = vec3(sh_part[0][mb + 3u], sh_part[0][mb + 4u],
                        sh_part[0][mb + 5u]) * invN;
-        sharcMomentsBlend(slot, m0, m1, sharcEmaAlpha);
+        sharcMomentsBlend(slot, m0, m1, alpha);
     }
 
     // --- ローブ EMA (縮約済みバッチ統計から) + 孤児 1 本スポーン ---
@@ -247,15 +272,19 @@ void main() {
             lobes[k], sh_part[0][b + 0u],
             vec3(sh_part[0][b + 1u], sh_part[0][b + 2u], sh_part[0][b + 3u]),
             vec3(sh_part[0][b + 4u], sh_part[0][b + 5u], sh_part[0][b + 6u]),
-            sh_part[0][b + 7u], sharcEmaAlpha);
+            sh_part[0][b + 7u], alpha);
         sharcStoreLobe(slot, uint(k), lobes[k]);
     }
 
-    // --- メタ更新 ---
+    // --- メタ更新 (輝度統計 + セル AO の時間蓄積) ---
     float lumaBatch = sharcLuminance(m0);
-    float meanNew = mix(lumaMean, lumaBatch, sharcEmaAlpha);
+    float meanNew = mix(lumaMean, lumaBatch, alpha);
     float varNew  = mix(lumaVar, (lumaBatch - meanNew) * (lumaBatch - meanNew),
-                        sharcEmaAlpha);
+                        alpha);
+    float aoOld = sharcLoadCellAo(slot);
+    float aoNew = 1.0 - float(sh_aoHits) / float(SHARC_AO_RAYS);
+    float aoB = ((sharcSceneFlags & SHARC_SCENE_MESH) != 0u)
+              ? mix(aoOld, aoNew, alpha) : 1.0;
     sharcStoreMeta(slot, sampleCountPrev + SHARC_SAMPLES_PER_CELL,
-                   sharcFrameIndex & 0xFFFFu, meanNew, varNew, level);
+                   sharcFrameIndex & 0xFFFFu, meanNew, varNew, level, aoB);
 }
