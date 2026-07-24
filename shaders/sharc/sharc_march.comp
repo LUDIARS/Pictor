@@ -82,8 +82,22 @@ uint sharcRegisterCell(ivec3 grid, uint level) {
     return slot;
 }
 
+// セル要求はワールド空間で粗いため、 march は表示解像度の 1/4×1/4
+// (1/16 レイ数) で十分 — フル解像度だと同一セルを数千レイが重複タッチ
+// するだけ。 4K 時のレイ数抑制の要 (hit / shadow / resolve は表示解像度)。
+const uint SHARC_MARCH_STRIDE = 4u;
+
 void main() {
-    uint rayIdx = gl_GlobalInvocationID.x;
+    // 低解像度グリッド index → 表示解像度のレイ index へ (stride サンプリング)
+    uint renderW = uint(sharcCamUp.w);
+    uint renderH = sharcRayCount / renderW;
+    uint lowW = (renderW + SHARC_MARCH_STRIDE - 1u) / SHARC_MARCH_STRIDE;
+    uint lowH = (renderH + SHARC_MARCH_STRIDE - 1u) / SHARC_MARCH_STRIDE;
+    uint lowIdx = gl_GlobalInvocationID.x;
+    if (lowIdx >= lowW * lowH) return;
+    uint px = (lowIdx % lowW) * SHARC_MARCH_STRIDE;
+    uint py = (lowIdx / lowW) * SHARC_MARCH_STRIDE;
+    uint rayIdx = py * renderW + px;
     if (rayIdx >= sharcRayCount) return;
 
     SharcRay ray = gpu_sharc_rays[rayIdx];

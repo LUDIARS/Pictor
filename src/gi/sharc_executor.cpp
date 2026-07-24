@@ -386,7 +386,8 @@ bool SharcGpuExecutor::create_atlas_(const uint8_t* pixels, uint32_t size,
 
     auto image_barrier = [&](uint32_t base_mip, uint32_t mip_count,
                              VkImageLayout from, VkImageLayout to,
-                             VkAccessFlags src, VkAccessFlags dst) {
+                             VkAccessFlags src, VkAccessFlags dst,
+                             VkPipelineStageFlags dst_stage) {
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         b.srcAccessMask       = src;
         b.dstAccessMask       = dst;
@@ -397,14 +398,14 @@ bool SharcGpuExecutor::create_atlas_(const uint8_t* pixels, uint32_t size,
         b.image               = atlas_image_;
         b.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, base_mip,
                                  mip_count, 0, layers};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &b);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, dst_stage,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
     };
 
     image_barrier(0, mips, VK_IMAGE_LAYOUT_UNDEFINED,
                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                  VK_ACCESS_TRANSFER_WRITE_BIT);
+                  VK_ACCESS_TRANSFER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT);
 
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layers};
@@ -417,7 +418,8 @@ bool SharcGpuExecutor::create_atlas_(const uint8_t* pixels, uint32_t size,
         image_barrier(m - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                       VK_ACCESS_TRANSFER_WRITE_BIT,
-                      VK_ACCESS_TRANSFER_READ_BIT);
+                      VK_ACCESS_TRANSFER_READ_BIT,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT);
         VkImageBlit blit{};
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m - 1, 0, layers};
         blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0, layers};
@@ -435,11 +437,13 @@ bool SharcGpuExecutor::create_atlas_(const uint8_t* pixels, uint32_t size,
     if (mips > 1) {
         image_barrier(0, mips - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                      VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
+                      VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
     image_barrier(mips - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
     vkEndCommandBuffer(cmd);
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -775,9 +779,15 @@ void SharcGpuExecutor::record(VkCommandBuffer cmd) {
                              dst_stage, 0, 1, &mb, 0, nullptr, 0, nullptr);
     };
 
-    // ── Pass 1: March (レイ並列) ──
+    // ── Pass 1: March (1/4×1/4 の低解像度レイ — セル要求はワールド空間で
+    //    粗く、 表示解像度の march は同一セルの重複タッチにしかならない) ──
+    const uint32_t render_w = static_cast<uint32_t>(cam_up_[3]);
+    const uint32_t render_h =
+        (render_w > 0) ? ray_count_ / render_w : ray_count_;
+    const uint32_t low_count =
+        ((render_w + 3u) / 4u) * ((render_h + 3u) / 4u);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, march_.pipeline);
-    vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
+    vkCmdDispatch(cmd, (low_count + 63u) / 64u, 1, 1);
     global_barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 

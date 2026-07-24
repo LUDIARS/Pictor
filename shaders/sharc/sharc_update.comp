@@ -1,7 +1,9 @@
 // Pictor — SHaRC 拡張 Pass 3: Light (セル更新)
 //
 // 1 workgroup = 1 要求セル (spec §3)。
-//   1. per-cell reservoir (ReSTIR DI 簡易版) からライトを importance sampling
+//   1. 一様ライトサンプリング (per-cell reservoir/ReSTIR は推定量への
+//      未接続が review Gate 1 で指摘されたため一旦除去 — 再導入時は
+//      採択サンプル y と W = wSum/(M・pHat(y)) を評価へ接続する設計から)
 //   2. (SHARC_RAY_QUERY 時) 可視性レイ → 既定はアンシャドウ
 //   3. M0/M1 蓄積 + vMF ローブ EM 更新 → EMA でセルへブレンド
 // フレーム意味論: **同フレーム評価** — update の EMA 結果を同フレームの
@@ -39,11 +41,6 @@ layout(std430, set = SHARC_SET, binding = 6) readonly buffer SharcRequests {
 
 layout(std430, set = SHARC_SET, binding = 9) readonly buffer SharcLights {
     SharcLight gpu_sharc_lights[];
-};
-
-// per-cell reservoir: {lightIdx, wSum, M, targetPdf} (float は uint ビット格納)
-layout(std430, set = SHARC_SET, binding = 10) buffer SharcReservoirs {
-    uvec4 gpu_sharc_reservoirs[];
 };
 
 // ============================================================
@@ -109,11 +106,6 @@ void main() {
     ivec3 grid; uint posLevel;
     sharcUnpackGridLevel(gpu_sharc_cell_pos[slot], grid, posLevel);
     vec3 cellCenter = sharcCellCenter(grid, posLevel);
-
-    uvec4 resPrev = gpu_sharc_reservoirs[slot];
-    uint  resLight = resPrev.x;
-    float resM     = uintBitsToFloat(resPrev.z);
-    float resPdf   = uintBitsToFloat(resPrev.w);
 
     // ============================================================
     // 1. 候補生成 (thread 並列)
@@ -228,39 +220,6 @@ void main() {
     // 4. 仕上げ (thread 0 のみ — 残りは軽い定数量の処理)
     // ============================================================
     if (tid != 0u) return;
-
-    // --- WRS: 今フレーム候補を reservoir へ統合 ---
-    float wTotal = 0.0;
-    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) wTotal += sh_weight[i];
-
-    float pick = sharcRand(rng) * max(wTotal, SHARC_EPSILON);
-    uint  chosen = 0u;
-    float acc = 0.0;
-    for (uint i = 0u; i < SHARC_SAMPLES_PER_CELL; i++) {
-        acc += sh_weight[i];
-        if (acc >= pick) { chosen = i; break; }
-    }
-    const float kMaxM = 512.0;
-    float mNew = float(SHARC_SAMPLES_PER_CELL);
-    if (resM > 0.0 && resPdf > 0.0) {
-        float wPrev = resPdf * resM;
-        wTotal += wPrev;
-        if (sharcRand(rng) * wTotal < wPrev) {
-            chosen = 0xFFFFFFFFu;   // 既存採択
-        }
-    }
-    uint  outLight; float outPdf;
-    if (chosen == 0xFFFFFFFFu) {
-        outLight = resLight;
-        outPdf   = resPdf;
-    } else {
-        outLight = sh_candidate[chosen];
-        outPdf   = sh_pdfHat[chosen];
-    }
-    gpu_sharc_reservoirs[slot] =
-        uvec4(outLight, floatBitsToUint(wTotal),
-              floatBitsToUint(min(resM + mNew, kMaxM)),
-              floatBitsToUint(outPdf));
 
     // --- モーメント EMA (縮約済み部分和から) ---
     // 推定量は Σ(f/q)/N (サンプル数正規化)。 Σ(f/q)/Σ(1/q) だと多灯の
