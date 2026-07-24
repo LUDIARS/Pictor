@@ -39,7 +39,9 @@ void main() {
         // 次フレームに再要求される (品質は保たれ、 無言のUBは起きない)。
         uint requestCount = min(gpu_sharc_counters[1],
                                 min(sharcTableSize, 65535u));
-        gpu_sharc_indirect[0] = requestCount;   // 1 workgroup = 1 要求セル
+        // 1 フレーム上限で償却 (超過分は update 側のローテーションが
+        // 次フレーム以降に回す — 120fps 試算の (4))
+        gpu_sharc_indirect[0] = min(requestCount, SHARC_UPDATE_CAP);
         gpu_sharc_indirect[1] = 1u;
         gpu_sharc_indirect[2] = 1u;
     }

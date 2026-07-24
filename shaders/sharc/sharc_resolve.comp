@@ -59,6 +59,13 @@ void main() {
     vec3  albedo    = req.albedoView.rgb;
     vec3  v         = normalize(req.viewDir.xyz);
     float pixAo     = (req.viewDir.w > 0.0) ? req.viewDir.w : 1.0;
+    // 発光体 (viewDir.w > 1 = 1+強度): albedo 色で自己発光を直接加算。
+    // 「街灯がちゃんと光ってる見た目」 の表現 (Reinhard で白熱化する)
+    vec3 selfEmission = vec3(0.0);
+    if (pixAo > 1.0) {
+        selfEmission = albedo * (pixAo - 1.0);
+        pixAo = 1.0;
+    }
 
     // アルベドビュー: ライティングを一切載せずテクスチャ色を素通しする
     // (リファレンス画像との「同カメラ・同色」検証用。 present 側も
@@ -75,7 +82,7 @@ void main() {
     // 8 近傍が全滅した場合のみ (通常は march が近傍を温めている)。
     uint levelBase = sharcLevelFromDistance(distance(pos, sharcCameraPos.xyz));
 
-    vec3 radiance = vec3(0.0);
+    vec3 radiance = selfEmission;
     float hit = 0.0;
     float cellSunVis = 1.0;   // 遠方ピクセルの太陽可視率 (セル補間)
 

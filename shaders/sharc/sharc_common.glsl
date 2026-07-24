@@ -150,6 +150,11 @@ layout(std430, set = SHARC_SET, binding = 19) buffer SharcNeighbors {
 
 const uint SHARC_NEIGHBOR_UINTS = 27u;
 
+// update の 1 フレーム上限 (120fps 試算の (4): 要求セルを全部その場で
+// 更新せず償却する — 上限超過分は次フレーム以降にローテーションで回る。
+// 1024 セル × 64 サンプル ≈ 1-2ms 見込み)
+const uint SHARC_UPDATE_CAP = 1024u;
+
 // 3x3x3 オフセット (-1..1) → テーブル index。 対称: idx(-o) = 26 - idx(o)。
 uint sharcNeighborIndex(ivec3 offs) {
     return uint(offs.x + 1) + 3u * uint(offs.y + 1) + 9u * uint(offs.z + 1);

@@ -34,6 +34,7 @@
 #include "mesh_bvh.h"
 #include "obj_mesh.h"
 #include "ply_mesh.h"
+#include "gbuffer_renderer.h"
 #include "present_renderer.h"
 #include "texture_atlas.h"
 #include <GLFW/glfw3.h>
@@ -232,6 +233,10 @@ Vec3 g_scene_target{0.0f, 1.0f, 0.0f}; // B キー復帰用 (シーン既定タ�
 float g_scene_dist = 10.0f;
 bool  g_albedo_view = false;           // T: アルベド素通し (リファレンス比較)
 float g_fov_deg = 60.0f;               // F/G で増減
+bool  g_hybrid = true;                 // Y: ハイブリッド/フルレイ切替 (A/B)
+Vec3  g_scene_center{0.0f, 0.0f, 0.0f};  // 太陽 ortho の中心 (シーン重心)
+float g_scene_extent = 20.0f;            // 同 half-extent 算出用
+std::vector<sharc_demo::EmissiveGroup> g_emissives;  // 街灯/提灯 (m 単位)
 
 void mouse_button_cb(GLFWwindow* w, int button, int action, int) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
@@ -278,6 +283,12 @@ void key_cb(GLFWwindow* w, int key, int, int action, int) {
         g_albedo_view = !g_albedo_view;
         std::printf("[cam] albedo view: %s\n", g_albedo_view ? "on" : "off");
     }
+    if (key == GLFW_KEY_Y) {
+        // 120fps 試算の A/B 比較: ラスタ G-buffer ⇔ compute BVH フルレイ
+        g_hybrid = !g_hybrid;
+        std::printf("[path] %s\n",
+                    g_hybrid ? "hybrid (raster G-buffer)" : "full ray (BVH)");
+    }
     if (key == GLFW_KEY_V) {
         // ORCA 公式スクリーンショット Bistro_Exterior_1.png と同構図
         // (カフェ角 Le Petit Coin、 手動合わせ込み値)
@@ -314,7 +325,61 @@ void key_cb(GLFWwindow* w, int key, int, int action, int) {
 }
 
 // トーンマップ (輝度 Reinhard + gamma 2.2) は present 側 GPU (sharc_present.frag)
-constexpr float kExposure = 1.4f;   // 日中太陽 (intensity 4) 基準
+// 1.7: 多灯化で全体光量を下げた分を露出で持ち上げ、 日陰の視認性を確保
+constexpr float kExposure = 1.7f;
+
+// 太陽方向 (to-sun)。 日中ライトリグ (lights[0]) とシャドウマップ ortho の
+// 両方がこれを参照する — 二重定義でズレると影が割れる
+const Vec3 kSunDir{-0.55f, 0.78f, 0.23f};
+
+// ============================================================
+// ハイブリッド経路の行列 (column-major、 GLSL mat4 互換)
+// ============================================================
+
+float axis_of(const Vec3& v, int i) { return i == 0 ? v.x : i == 1 ? v.y : v.z; }
+
+// カメラ基底 → viewProj。 compute のレイ生成式 (rd = fwd + right*u*fovScale*
+// aspect + up*v*fovScale, v = 1-2*(py+.5)/H) と厳密に一致する画素対応を持つ
+// (Vulkan NDC は y 下向きなので y 行を反転)。
+void build_view_proj(const Vec3& eye, const Vec3& fwd, const Vec3& right,
+                     const Vec3& up, float fov_scale, float aspect,
+                     float* m16) {
+    const float a  = 1.0f / (fov_scale * aspect);
+    const float b  = 1.0f / fov_scale;
+    const float zn = 0.05f, zf = 300.0f;
+    const float k  = zf / (zf - zn);
+    for (int c = 0; c < 3; ++c) {
+        m16[c * 4 + 0] = a * axis_of(right, c);
+        m16[c * 4 + 1] = -b * axis_of(up, c);
+        m16[c * 4 + 2] = k * axis_of(fwd, c);
+        m16[c * 4 + 3] = axis_of(fwd, c);
+    }
+    m16[12] = -a * dot(right, eye);
+    m16[13] = b * dot(up, eye);
+    m16[14] = -k * (dot(fwd, eye) + zn);
+    m16[15] = -dot(fwd, eye);
+}
+
+// 太陽 ortho VP。 描画 (sharc_shadow.vert) とサンプル
+// (sharc_gbuffer_resolve.comp) が同一行列を使うため座標規約は自己完結。
+void build_sun_ortho(const Vec3& to_sun, const Vec3& center,
+                     float half_extent, float* m16) {
+    const Vec3 l  = norm(Vec3{-to_sun.x, -to_sun.y, -to_sun.z});
+    const Vec3 lr = norm(cross(l, Vec3{0.0f, 1.0f, 0.0f}));
+    const Vec3 lu = cross(lr, l);
+    const Vec3 eye = center - l * (half_extent * 2.0f);
+    const float zn = 1.0f, zf = half_extent * 4.0f + 50.0f;
+    for (int c = 0; c < 3; ++c) {
+        m16[c * 4 + 0] = axis_of(lr, c) / half_extent;
+        m16[c * 4 + 1] = axis_of(lu, c) / half_extent;
+        m16[c * 4 + 2] = axis_of(l, c) / (zf - zn);
+        m16[c * 4 + 3] = 0.0f;
+    }
+    m16[12] = -dot(lr, eye) / half_extent;
+    m16[13] = -dot(lu, eye) / half_extent;
+    m16[14] = -(dot(l, eye) + zn) / (zf - zn);
+    m16[15] = 1.0f;
+}
 
 } // namespace
 
@@ -359,8 +424,12 @@ int main(int argc, char** argv) {
             if (extent > 1000.0f) {
                 sharc_demo::scale_mesh(m, 0.01f);
                 extent *= 0.01f;
+                for (auto& e : m.emissive_groups) {
+                    for (float& c : e.center) c *= 0.01f;
+                }
                 std::fprintf(stderr, "[scene] assumed cm units, scaled x0.01\n");
             }
+            g_emissives = m.emissive_groups;   // ライト自動配置 (m 単位)
             // AABB はバックドロップ等の外れジオメトリで歪むため、 カメラ
             // ターゲットは頂点重心 (= ジオメトリ密度の中心 ≒ 街路部) に置く。
             double cx = 0.0, cy = 0.0, cz = 0.0;
@@ -384,6 +453,8 @@ int main(int argc, char** argv) {
             g_orbit.pitch     = 0.35f;
             g_scene_target    = g_target;
             g_scene_dist      = 30.0f;
+            g_scene_center    = g_target;   // 太陽 ortho の中心
+            g_scene_extent    = extent;
             title = "Pictor SHaRC Hero - Bistro";
         } else {
             sharc_demo::fit_mesh(primary->mesh, 3.0f);
@@ -400,6 +471,7 @@ int main(int argc, char** argv) {
         //    コストはほぼ不変 — VRAM 48B/tri のみ。 静的モデル限定
         //    (動的は BVH refit が必要、 spec §3 将来枝)。
         for (int prop_arg = 2; prop_arg < argc; ++prop_arg) {
+            if (argv[prop_arg][0] == '-') continue;   // フラグ (--novsync 等)
             auto prop = std::make_unique<MeshInstance>();
             const std::string ppath = argv[prop_arg];
             const bool prop_obj =
@@ -496,6 +568,13 @@ int main(int argc, char** argv) {
     win_cfg.width  = 1280;
     win_cfg.height = 720;
     win_cfg.title  = title;
+    // --novsync: 素のフレーム時間計測用 (IMMEDIATE)。 60Hz FIFO だと
+    // ハイブリッド経路 (~real 7-8ms) が 17ms に張り付いて見える。
+    // 既定は FIFO (この環境では IMMEDIATE の windowed present が
+    // DWM に反映されず画面が白くなるため、 表示用途では使わない)
+    for (int a = 1; a < argc; ++a) {
+        if (std::strcmp(argv[a], "--novsync") == 0) win_cfg.vsync = false;
+    }
     if (!surface.create(win_cfg)) {
         std::fprintf(stderr, "[init] FATAL: window creation failed\n");
         return 1;
@@ -519,6 +598,8 @@ int main(int argc, char** argv) {
         // 街路スケールは可視セル数が桁違い — テーブルを 262k slots へ拡張
         // (線形走査の飽和 = 挿入失敗による黒領域を防ぐ)
         cfg.table_size = 1u << 18;
+        // 街灯 28 + 提灯/電飾玉 (クラスタ数はシーン依存) を収める
+        cfg.max_lights = 256;
     }
     SharcGpuExecutor sharc;
     if (!sharc.initialize(vk, "shaders", cfg)) {
@@ -533,6 +614,7 @@ int main(int argc, char** argv) {
     //    Pass 0 (sharc_hit.comp) が GPU で行い、 CPU はカメラ変更時の
     //    レイ方向生成だけになる ──
     bool gpu_scene = false;
+    uint32_t gpu_tri_count = 0;
     if (mesh_scene.active) {
         sharc_demo::PlyMesh merged;
         std::vector<SharcMaterialGpu> gpu_mats;
@@ -564,6 +646,7 @@ int main(int argc, char** argv) {
                     m.albedo[2] = pm.albedo[2];
                     m.roughness = pm.roughness;
                     m.mfp       = pm.mfp;
+                    m.emissive  = pm.emissive;
                     gpu_mats.push_back(m);
                     atlas_mats.push_back(pm);
                 }
@@ -654,6 +737,7 @@ int main(int argc, char** argv) {
         }
         gpu_scene = sharc.upload_scene(up);
         if (gpu_scene) {
+            gpu_tri_count = up.tri_count;
             sharc.set_scene_floor(mesh_scene.use_floor, kFloorY);
             sharc.set_scene_far(g_ray_tmax);
             // 前回終了時のキャッシュがあれば温間スタート (収束待ちゼロ)。
@@ -675,6 +759,27 @@ int main(int argc, char** argv) {
         vk.shutdown();
         surface.destroy();
         return 1;
+    }
+
+    // ── ハイブリッド経路 (ラスタ G-buffer + 太陽シャドウマップ)。
+    //    フルレイ経路は Y キーでいつでも A/B 比較できるよう残置 ──
+    sharc_demo::GBufferRenderer gbr;
+    if (gpu_scene) {
+        if (gbr.initialize(vk, "shaders", kRenderW, kRenderH, gpu_tri_count,
+                           sharc.scene_tris_buffer(), sharc.scene_tris_size(),
+                           sharc.scene_tri_mats_buffer(),
+                           sharc.scene_tri_mats_size(),
+                           sharc.tri_ao_buffer(), sharc.tri_ao_size(),
+                           sharc.scene_materials_buffer(),
+                           sharc.scene_materials_size(),
+                           sharc.atlas_view(), sharc.atlas_sampler())) {
+            sharc.set_gbuffer(gbr.albedo_ao_view(), gbr.normal_rough_view(),
+                              gbr.dist_mfp_view(), gbr.sun_shadow_view());
+        } else {
+            std::fprintf(stderr,
+                         "[init] WARNING: G-buffer init failed — full-ray "
+                         "path only\n");
+        }
     }
 
     GLFWwindow* win = surface.glfw_window();
@@ -731,34 +836,44 @@ int main(int argc, char** argv) {
         auto* lights = sharc.lights_mapped();
         uint32_t n_lights = 2;
         if (obj_scene) {
-            // ── Bistro 日中 (リファレンス Bistro_Exterior_1 と同一構成):
-            //    太陽 (Directional) + 実配置の街灯 (Point、 OBJ の
-            //    Paris_Streetlight_Glass_* 抽出座標) + 空光 ──
+            // ── Bistro 日中: 太陽 (Directional) + OBJ から自動抽出した
+            //    街灯 (StreetLight_Glass) / 提灯・電飾玉 (Lantern /
+            //    StringLights) の全 PointLight + 空光。
+            //    posRadius.w = 影響半径 (m): 街灯 7.5 (直径 15m)、
+            //    提灯 1.0 (直径 2m)。 全体光量はライト増に合わせ減 ──
             uint32_t li = 0;
-            // 太陽: posRadius.w < 0 = directional、 xyz = to-sun 方向
+            // 太陽: posRadius.w < 0 = directional、 xyz = to-sun 方向。
+            // 街全体の視認性は太陽/空が担い、 街灯/提灯は GI の暖色
+            // プールが確認できる程度に載せる (neco 調整指示)
             lights[li++] = SharcLightGpu{
-                {-0.55f, 0.78f, 0.23f, -1.0f},
-                {1.0f, 0.96f, 0.88f, 4.0f}};
-            // 空光 (弱い寒色 directional、 天頂から)
+                {kSunDir.x, kSunDir.y, kSunDir.z, -1.0f},
+                {1.0f, 0.96f, 0.88f, 3.8f}};
+            // 空光 (寒色 directional、 天頂から)。 シャドウマップ化で
+            // 日陰が正確に沈むようになったため、 街全体の視認性は
+            // 空光→キャッシュ GI の間接で持ち上げる
             lights[li++] = SharcLightGpu{
                 {0.0f, 1.0f, 0.0f, -1.0f},
-                {0.45f, 0.55f, 0.75f, 0.8f}};
-            // 街灯 (カフェ広場周辺 7 基、 発光部 = Glass 実座標)
-            static const float kLampPos[7][3] = {
-                {-2.09f, 4.51f, 4.65f},  {-4.33f, 4.51f, -4.19f},
-                {-9.65f, 4.51f, 2.09f},  {-1.76f, 4.51f, 10.04f},
-                {7.81f, 4.51f, 8.66f},   {-13.4f, 4.14f, 1.21f},
-                {-8.43f, 4.16f, -11.41f}};
-            for (const auto& lp : kLampPos) {
-                lights[li++] = SharcLightGpu{
-                    {lp[0], lp[1], lp[2], 0.15f},
-                    {1.0f, 0.78f, 0.5f, 15.0f}};
+                {0.45f, 0.55f, 0.75f, 1.1f}};
+            const uint32_t max_li = 256;
+            for (const auto& e : g_emissives) {
+                if (li >= max_li) break;
+                if (e.kind == 0) {
+                    // 街灯: 暖色、 影響直径 15m
+                    lights[li++] = SharcLightGpu{
+                        {e.center[0], e.center[1], e.center[2], 7.5f},
+                        {1.0f, 0.78f, 0.5f, 8.0f}};
+                } else {
+                    // 提灯 / 電飾玉: 濃い暖色、 影響直径 2m
+                    lights[li++] = SharcLightGpu{
+                        {e.center[0], e.center[1], e.center[2], 1.0f},
+                        {1.0f, 0.62f, 0.38f, 2.0f}};
+                }
             }
-            if (g_has_prop) {
+            if (g_has_prop && li < max_li) {
                 // 人物 head の背後光 (肌の透過を出す)
                 const Vec3 back = g_prop_pos + g_prop_back * 1.2f;
                 lights[li++] = SharcLightGpu{
-                    {back.x, back.y + 0.4f, back.z, 0.05f},
+                    {back.x, back.y + 0.4f, back.z, 3.0f},
                     {1.0f, 0.8f, 0.6f, 30.0f}};
             }
             n_lights = li;
@@ -767,18 +882,19 @@ int main(int argc, char** argv) {
             //    透過 (SSS) を見る。 画面外に出る動線も含む ──
             const Vec3 behind = norm(target - eye);
             const float lx = std::sin(light_time * 0.4f) * 2.5f;
+            // posRadius.w = 影響半径 (m) — シーン全域をカバーする値
             lights[0] = SharcLightGpu{
                 {target.x + behind.x * 4.0f + lx, 1.8f,
-                 target.z + behind.z * 4.0f, 0.2f},
+                 target.z + behind.z * 4.0f, 20.0f},
                 {1.0f, 0.75f, 0.5f, 90.0f}};                       // 逆光・暖色
-            lights[1] = SharcLightGpu{{eye.x, eye.y + 2.0f, eye.z, 0.5f},
+            lights[1] = SharcLightGpu{{eye.x, eye.y + 2.0f, eye.z, 30.0f},
                                       {0.3f, 0.35f, 0.5f, 15.0f}}; // 弱い前面フィル
         } else {
             // ── D1: 球列の直上を横断する近接光源 (ハイライト肥大検証) ──
             const float lx = std::sin(light_time * 0.6f) * 5.5f;
-            lights[0] = SharcLightGpu{{lx, 2.6f, 1.2f, 0.15f},
+            lights[0] = SharcLightGpu{{lx, 2.6f, 1.2f, 20.0f},
                                       {1.0f, 0.85f, 0.6f, 60.0f}};  // 近接・暖色
-            lights[1] = SharcLightGpu{{0.0f, 8.0f, 6.0f, 0.5f},
+            lights[1] = SharcLightGpu{{0.0f, 8.0f, 6.0f, 30.0f},
                                       {0.4f, 0.5f, 0.8f, 120.0f}};  // フィル・寒色
         }
 
@@ -843,6 +959,18 @@ int main(int argc, char** argv) {
                          static_cast<uint32_t>(kRenderW));
         sharc.set_counts(kRenderW * kRenderH, n_lights);
 
+        // ── ハイブリッド経路の行列更新 (Y キーで A/B 切替) ──
+        const bool hybrid_active = gbr.is_initialized() && g_hybrid;
+        sharc.set_hybrid(hybrid_active);
+        float view_proj[16], sun_vp[16];
+        if (hybrid_active) {
+            build_view_proj(eye, fwd, right, up, fov_scale, aspect,
+                            view_proj);
+            build_sun_ortho(kSunDir, g_scene_center,
+                            g_scene_extent * 0.6f + 10.0f, sun_vp);
+            sharc.set_sun_matrix(sun_vp);
+        }
+
         // ── 全 GPU フレーム: hit + 4 パス → present (readback なし) ──
         const uint32_t image_idx = vk.acquire_next_image();
         if (image_idx == UINT32_MAX) continue;
@@ -853,6 +981,10 @@ int main(int argc, char** argv) {
             VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         vkBeginCommandBuffer(cmd, &begin_info);
 
+        if (hybrid_active) {
+            const float campos[3] = {eye.x, eye.y, eye.z};
+            gbr.record(cmd, view_proj, sun_vp, campos);
+        }
         sharc.record(cmd);
 
         // resolve の出力 → fragment 読み
@@ -929,6 +1061,7 @@ int main(int argc, char** argv) {
     // 収束済みキャッシュを直列化 (次回起動の温間スタート用)
     if (gpu_scene && !cache_path.empty()) sharc.save_cache(cache_path);
     present.shutdown();
+    gbr.shutdown();
     sharc.shutdown();
     vk.shutdown();
     surface.destroy();

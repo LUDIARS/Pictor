@@ -133,6 +133,36 @@ public:
     void set_camera(const float3& fwd, const float3& right, const float3& up,
                     float fov_scale, float aspect, uint32_t render_width);
 
+    // ---- ハイブリッド経路 (ラスタ G-buffer 一次可視性、 120fps 試算) ----
+    // デモ側 GBufferRenderer が描いた G-buffer + 太陽シャドウマップを
+    // 受け取り、 record() で hit パスの代わりに gbuffer_resolve compute が
+    // shade/rays を生成する。 フルレイ経路はコード試算として残置
+    // (set_hybrid(false) でいつでも A/B 比較可能)。
+
+    /// G-buffer 画像 (albedo+AO / normal+rough / dist+MFP) とシャドウマップ
+    /// の view を descriptor へ結線する。 呼ぶたびに更新可。
+    void set_gbuffer(VkImageView albedo_ao, VkImageView normal_rough,
+                     VkImageView dist_mfp, VkImageView sun_shadow);
+
+    /// 太陽 ortho VP 行列 (column-major 16 float、 シャドウマップ描画と同一)。
+    void set_sun_matrix(const float* m16);
+
+    /// true = gbuffer_resolve 経路 / false = フルレイ (hit パス) 経路。
+    void set_hybrid(bool enabled) { hybrid_ = enabled; }
+    bool hybrid() const { return hybrid_; }
+
+    // ---- シーン資源の共有ハンドル (GBufferRenderer の頂点プリング用) ----
+    VkBuffer     scene_tris_buffer() const { return scene_tris_.buf; }
+    VkDeviceSize scene_tris_size() const   { return scene_tris_.size; }
+    VkBuffer     scene_tri_mats_buffer() const { return scene_tri_mats_.buf; }
+    VkDeviceSize scene_tri_mats_size() const   { return scene_tri_mats_.size; }
+    VkBuffer     scene_materials_buffer() const { return scene_materials_.buf; }
+    VkDeviceSize scene_materials_size() const  { return scene_materials_.size; }
+    VkBuffer     tri_ao_buffer() const { return tri_ao_.buf; }
+    VkDeviceSize tri_ao_size() const   { return tri_ao_.size; }
+    VkImageView  atlas_view() const    { return atlas_view_; }
+    VkSampler    atlas_sampler() const { return atlas_sampler_; }
+
     /// フレーム開始: フレーム番号 / カメラを UBO へ反映し、
     /// per-frame カウンタ (hit / request) をリセットする。
     void begin_frame(const float3& camera_pos);
@@ -251,7 +281,14 @@ private:
     Pass compact_;
     Pass update_;
     Pass resolve_;
-    Pass ao_bake_;   // ロード時 1 回のみ (record には積まない)
+    Pass ao_bake_;         // ロード時 1 回のみ (record には積まない)
+    Pass gbuffer_resolve_; // ハイブリッド経路 (hit の代替)
+
+    // ハイブリッド経路の状態
+    bool      hybrid_        = false;
+    bool      gbuffer_bound_ = false;
+    float     sun_matrix_[16] = {};
+    VkSampler gbuffer_sampler_ = VK_NULL_HANDLE;   // texelFetch 用ダミー
 
     bool     cpu_geometry_dirty_ = false;
     uint32_t scene_tri_count_ = 0;
