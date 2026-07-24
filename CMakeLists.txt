@@ -630,6 +630,7 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_compact.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_update.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_resolve.comp
+        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_ao_bake.comp
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.vert
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.frag
     )

@@ -327,8 +327,10 @@ int main(int argc, char** argv) {
     MeshScene mesh_scene;
     bool obj_scene = false;
     std::string title = "Pictor SHaRC D1 - Roughness Ladder";
+    std::string cache_path;   // <モデル>.sharccache (温間スタート用)
     if (argc > 1) {
         const std::string path = argv[1];
+        cache_path = path + ".sharccache";
         obj_scene = (path.size() > 4 &&
                      path.compare(path.size() - 4, 4, ".obj") == 0);
         auto primary = std::make_unique<MeshInstance>();
@@ -654,6 +656,9 @@ int main(int argc, char** argv) {
         if (gpu_scene) {
             sharc.set_scene_floor(mesh_scene.use_floor, kFloorY);
             sharc.set_scene_far(g_ray_tmax);
+            // 前回終了時のキャッシュがあれば温間スタート (収束待ちゼロ)。
+            // 構成 / シーンが変わっていればヘッダ検証で冷間へフォールバック
+            if (!cache_path.empty()) sharc.load_cache(cache_path);
         } else {
             std::fprintf(stderr,
                          "[init] WARNING: GPU scene upload failed — "
@@ -921,6 +926,8 @@ int main(int argc, char** argv) {
     }
 
     vk.device_wait_idle();
+    // 収束済みキャッシュを直列化 (次回起動の温間スタート用)
+    if (gpu_scene && !cache_path.empty()) sharc.save_cache(cache_path);
     present.shutdown();
     sharc.shutdown();
     vk.shutdown();

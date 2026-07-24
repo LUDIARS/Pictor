@@ -59,6 +59,12 @@ void main() {
         // TOMBSTONE で解放 — 0 に戻すと open addressing の probe chain が
         // 切れて後続スロットの生存セルが検索不能になる (review P0-02)
         gpu_sharc_keys[slot] = SHARC_KEY_TOMBSTONE;
+        // 自分の近傍行を未解決に戻す (スロット再利用時の誤リンク防止)。
+        // 他セルから自分への残存リンクは読む側の指紋検証が弾く。
+        for (uint i = 0u; i < SHARC_NEIGHBOR_UINTS; i++) {
+            gpu_sharc_neighbors[slot * SHARC_NEIGHBOR_UINTS + i] =
+                SHARC_SLOT_INVALID;
+        }
         return;
     }
 
@@ -83,22 +89,34 @@ void main() {
     sharcMomentsBlend(slot, newM0, newM1, alpha);
 
     // AO 結合 (遮蔽数/レイ数)
-    uint aoPacked = gpu_sharc_accum[ab + 7u];
-    uint aoRays = aoPacked >> 16;
-    if (aoRays > 0u) {
-        float aoNew = 1.0 - float(aoPacked & 0xFFFFu) / float(aoRays);
-        float aoOld = sharcLoadCellAo(slot);
-        float aoAlpha = float(aoRays) / (min(wHist, 512.0) + float(aoRays));
-        float aoB = mix(aoOld, aoNew, aoAlpha);
-        // meta を AO 込みで書き戻し (カウンタもここで前進)
-        uint newCount = min(sampleCount + accumN, 0xFFFFu);
-        sharcStoreMeta(slot, newCount, lastFrame, lumaMean, lumaVar, level,
-                       aoB);
-    } else {
-        uint newCount = min(sampleCount + accumN, 0xFFFFu);
-        sharcStoreMeta(slot, newCount, lastFrame, lumaMean, lumaVar, level,
-                       sharcLoadCellAo(slot));
+    float aoB = sharcLoadCellAo(slot);
+    {
+        uint aoPacked = gpu_sharc_accum[ab + 7u];
+        uint aoRays = aoPacked >> 16;
+        if (aoRays > 0u) {
+            float aoNew = 1.0 - float(aoPacked & 0xFFFFu) / float(aoRays);
+            float aoAlpha = float(aoRays) /
+                            (min(wHist, 512.0) + float(aoRays));
+            aoB = mix(aoB, aoNew, aoAlpha);
+        }
     }
+    // 太陽可視の結合。 履歴 cap を AO より短く (256) して太陽の移動に
+    // 速く追従させる (太陽は動かせる前提)
+    float sunB = sharcLoadCellSunVis(slot);
+    {
+        uint sunPacked = gpu_sharc_accum[ab + 8u];
+        uint sunRays = sunPacked >> 16;
+        if (sunRays > 0u) {
+            float sunNew = 1.0 - float(sunPacked & 0xFFFFu) / float(sunRays);
+            float sunAlpha = float(sunRays) /
+                             (min(wHist, 256.0) + float(sunRays));
+            sunB = mix(sunB, sunNew, sunAlpha);
+        }
+    }
+    // meta 書き戻し (サンプルカウンタもここで前進)
+    uint newCount = min(sampleCount + accumN, 0xFFFFu);
+    sharcStoreMeta(slot, newCount, lastFrame, lumaMean, lumaVar, level,
+                   aoB, sunB);
 
     // 蓄積リセット (次フレームの update 分を受ける)
     for (uint i = 0u; i < SHARC_ACCUM_UINTS; i++) {

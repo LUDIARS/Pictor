@@ -30,6 +30,7 @@ layout(local_size_x = 64) in;
 
 const uint SHARC_SAMPLES_PER_CELL = 64u;   // = local_size_x
 const uint SHARC_AO_RAYS          = 16u;   // セル AO の球面レイ数
+const uint SHARC_SUN_RAYS         = 8u;    // セル太陽可視のレイ数
 
 // ライト (点光源) リスト
 struct SharcLight {
@@ -76,6 +77,7 @@ shared float sh_pdfHat[SHARC_SAMPLES_PER_CELL];    // 候補の target pdf
 shared float sh_part[SHARC_SAMPLES_PER_CELL][SHARC_PART_FLOATS];
 shared float sh_orphanScore[SHARC_SAMPLES_PER_CELL]; // 孤児サンプルの強度
 shared uint  sh_aoHits;                              // セル AO レイの遮蔽数
+shared uint  sh_sunHits;                             // セル太陽レイの遮蔽数
 
 // セル中心での未遮蔽寄与 (target pdf 用)。
 // posRadius.w < 0 は Directional Light (太陽): xyz = 光源方向 (to-sun)、
@@ -146,7 +148,7 @@ void main() {
     sh_weight[tid]    = candW;
     sh_candidate[tid] = candIdx;
     sh_pdfHat[tid]    = candPdfHat;
-    if (tid == 0u) sh_aoHits = 0u;
+    if (tid == 0u) { sh_aoHits = 0u; sh_sunHits = 0u; }
     barrier();
 
     // ── セル AO (SHaRC ロジックの AO): セル中心から球面 16 レイの
@@ -164,6 +166,25 @@ void main() {
         float aoRange = clamp(sharcCellSize(posLevel) * 2.0, 0.5, 4.0);
         if (sharcAnyHit(cellCenter, dir, aoRange)) {
             atomicAdd(sh_aoHits, 1u);
+        }
+    }
+
+    // ── セル太陽可視率: セル内ジッタ点から太陽方向への any-hit。
+    //    hit パスのピクセル精度シャドウレイは近距離のみになったため、
+    //    遠方の太陽直接光はこのセル値 (トライリニア補間) が担う。
+    //    太陽は動かせる前提なので収束停止せず毎更新リフレッシュする ──
+    bool sunActive = (sharcSceneFlags & SHARC_SCENE_MESH) != 0u &&
+                     sharcLightCount > 0u &&
+                     gpu_sharc_lights[0].posRadius.w < 0.0;
+    if (tid < SHARC_SUN_RAYS && sunActive) {
+        uint sunRng = sharcHashCombine(slot * 53u + tid,
+                                       sharcFrameIndex * 7u + 3u);
+        float half_ = sharcCellSize(posLevel) * 0.45;
+        vec3 jitter = vec3(sharcRand(sunRng), sharcRand(sunRng),
+                           sharcRand(sunRng)) * 2.0 - 1.0;
+        vec3 toSun = normalize(gpu_sharc_lights[0].posRadius.xyz);
+        if (sharcAnyHit(cellCenter + jitter * half_, toSun, 1.0e4)) {
+            atomicAdd(sh_sunHits, 1u);
         }
     }
 
@@ -274,6 +295,10 @@ void main() {
     if (aoActive) {
         gpu_sharc_accum[ab + 7u] += sh_aoHits | (SHARC_AO_RAYS << 16);
     }
+    // 太陽可視: 遮蔽数/レイ数を low16/high16 に加算
+    if (sunActive) {
+        gpu_sharc_accum[ab + 8u] += sh_sunHits | (SHARC_SUN_RAYS << 16);
+    }
 
     // --- ローブ EMA (縮約済みバッチ統計から) + 孤児 1 本スポーン ---
     if (sh_orphanScore[0] > SHARC_EPSILON) {
@@ -298,5 +323,5 @@ void main() {
     // サンプルカウンタの増分は compact (履歴結合) が所有する
     sharcStoreMeta(slot, sampleCountPrev,
                    sharcFrameIndex & 0xFFFFu, meanNew, varNew, level,
-                   sharcLoadCellAo(slot));
+                   sharcLoadCellAo(slot), sharcLoadCellSunVis(slot));
 }
