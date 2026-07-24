@@ -133,6 +133,23 @@ void tag_foliage(const std::string& name, PlyMaterial& m) {
     }
 }
 
+/// 発光体マテリアル (街灯ガラス / 電飾玉 / 提灯) に自己発光を付ける。
+/// ライト配置 (EmissiveGroup) とは独立の「光ってる見た目」 表現。
+void tag_emissive(const std::string& name, PlyMaterial& m) {
+    std::string low = name;
+    std::transform(low.begin(), low.end(), low.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (low.find("streetlight_glass") != std::string::npos) {
+        m.emissive = 12.0f;   // 街灯のガラス (白熱 — 日中でも点灯が分かる)
+        m.albedo = {1.0f, 0.85f, 0.6f};
+    } else if (low.find("stringlights_01_") != std::string::npos &&
+               low.find("_color") != std::string::npos) {
+        m.emissive = 6.0f;    // 電飾玉 (色つき — albedo 色で光る)
+    } else if (low == "lantern") {
+        m.emissive = 3.0f;    // 提灯 (紙越しのぼんやり発光)
+    }
+}
+
 } // namespace
 
 PlyMesh load_obj(const std::string& path) {
@@ -149,6 +166,11 @@ PlyMesh load_obj(const std::string& path) {
     mesh.materials.push_back(PlyMaterial{});   // 既定 (usemtl 前)
 
     std::vector<std::array<float, 2>> uvs;
+
+    // 発光体グループ (街灯ガラス / 提灯) の頂点収集。 kind と、 そのグループ
+    // の面頂点列 (クラスタ分割は単位系確定後の後処理で行う)
+    std::vector<std::pair<int, std::vector<std::array<float, 3>>>> raw_lights;
+    int light_kind = -1;
 
     const char* p   = text.data();
     const char* end = p + text.size();
@@ -218,6 +240,12 @@ PlyMesh load_obj(const std::string& path) {
                     {uv_of(face_uv[0]), uv_of(face_uv[k - 1]),
                      uv_of(face_uv[k])});
             }
+            if (light_kind >= 0 && !raw_lights.empty()) {
+                auto& sink = raw_lights.back().second;
+                for (const int64_t vi : face) {
+                    sink.push_back(mesh.positions[resolve(vi)]);
+                }
+            }
         } else if (p + 6 < end && std::memcmp(p, "usemtl", 6) == 0) {
             const char* q = skip_ws(p + 6, end);
             const char* r = q;
@@ -231,9 +259,32 @@ PlyMesh load_obj(const std::string& path) {
                 auto mt = mtl_table.find(name);
                 if (mt != mtl_table.end()) m = mt->second;
                 tag_foliage(name, m);
+                tag_emissive(name, m);
                 current_mat = static_cast<uint32_t>(mesh.materials.size());
                 mesh.materials.push_back(m);
                 mat_index.emplace(name, current_mat);
+            }
+        } else if (p + 1 < end && p[0] == 'g' &&
+                   (p[1] == ' ' || p[1] == '\t')) {
+            // 発光体グループの判定 (街灯ガラス / 提灯 / 電飾列)
+            const char* q = skip_ws(p + 2, end);
+            const char* r = q;
+            while (r < end && *r != '\n' && *r != '\r') ++r;
+            std::string name(q, r);
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            light_kind = -1;
+            if (name.find("streetlight_glass") != std::string::npos) {
+                light_kind = 0;   // 街灯
+            } else if (name.find("lantern") != std::string::npos ||
+                       name.find("stringlights") != std::string::npos) {
+                light_kind = 1;   // 提灯 / 電飾玉
+            }
+            if (light_kind >= 0) {
+                raw_lights.emplace_back(light_kind,
+                                        std::vector<std::array<float, 3>>{});
             }
         } else if (p + 6 < end && std::memcmp(p, "mtllib", 6) == 0) {
             const char* q = skip_ws(p + 6, end);
@@ -254,6 +305,66 @@ PlyMesh load_obj(const std::string& path) {
     }
 
     finalize_mesh(mesh);
+
+    // ── 発光体グループ → ライト中心 (座標は生値、 スケールは呼び出し側) ──
+    // 街灯: グループ全体の AABB 中心 1 点。
+    // 提灯/電飾: 1 グループに玉が連なるため、 出現順の貪欲クラスタで分割
+    // (閾値 = シーン最大辺の 0.5% ≈ Bistro で 60cm — 玉間隔より小さく、
+    //  玉自身の径より大きい)。
+    {
+        float extent = 0.0f;
+        for (int a = 0; a < 3; ++a) {
+            extent = std::max(extent, mesh.bounds_max[a] - mesh.bounds_min[a]);
+        }
+        const float thr = extent * 0.005f;
+        int n_lamp = 0, n_lantern = 0;
+        for (const auto& [kind, pts] : raw_lights) {
+            if (pts.empty()) continue;
+            float mn[3], mx[3];
+            bool active = false;
+            auto flush = [&]() {
+                if (!active) return;
+                EmissiveGroup g;
+                g.kind = kind;
+                for (int a = 0; a < 3; ++a) {
+                    g.center[a] = (mn[a] + mx[a]) * 0.5f;
+                }
+                mesh.emissive_groups.push_back(g);
+                (kind == 0 ? n_lamp : n_lantern)++;
+                active = false;
+            };
+            for (const auto& pt : pts) {
+                bool outside = !active;
+                if (active && kind == 1) {
+                    for (int a = 0; a < 3; ++a) {
+                        if (pt[a] < mn[a] - thr || pt[a] > mx[a] + thr) {
+                            outside = true;
+                            break;
+                        }
+                    }
+                }
+                if (outside) {
+                    if (kind == 1) flush();
+                    if (!active) {
+                        for (int a = 0; a < 3; ++a) mn[a] = mx[a] = pt[a];
+                        active = true;
+                        continue;
+                    }
+                }
+                for (int a = 0; a < 3; ++a) {
+                    mn[a] = std::min(mn[a], pt[a]);
+                    mx[a] = std::max(mx[a], pt[a]);
+                }
+            }
+            flush();
+        }
+        if (!mesh.emissive_groups.empty()) {
+            std::fprintf(stderr,
+                         "[obj] emissive groups: %d streetlights, %d "
+                         "lanterns/bulbs\n", n_lamp, n_lantern);
+        }
+    }
+
     std::fprintf(stderr, "[obj] loaded %s: %zu verts, %zu tris, %zu mats\n",
                  path.c_str(), mesh.positions.size(), mesh.triangles.size(),
                  mesh.materials.size());
