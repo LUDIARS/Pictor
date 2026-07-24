@@ -113,7 +113,8 @@ struct SharcMaterialGpu {
     float roughness;
     float mfp;
     float atlas_layer_plus1;
-    float pad[2];
+    float emissive;   ///< 自己発光強度 (0 = 非発光)。 albedo 色で光る
+    float pad;
 };
 static_assert(sizeof(SharcMaterialGpu) == 32, "GLSL SharcMaterial と一致させる");
 

@@ -196,8 +196,11 @@ void main() {
         // を重心補間で読む。 実行時の AO レイ 2 本 (旧実装) は
         // sharc_ao_bake.comp の事前計算に置き換えた — hit パスの
         // 最大コスト源のひとつが定数時間参照になる。
+        // 発光体は AO チャネルに 1+強度 でエンコード (G-buffer 経路と同一)
         float pixAo;
-        {
+        if (mat.mfpPad.z > 0.0) {
+            pixAo = 1.0 + mat.mfpPad.z;
+        } else {
             uint aoPack = gpu_sharc_tri_ao[bestTri];
             vec3 ao3 = vec3(float(aoPack & 0xFFu),
                             float((aoPack >> 8) & 0xFFu),

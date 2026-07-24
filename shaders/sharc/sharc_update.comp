@@ -82,6 +82,9 @@ shared uint  sh_sunHits;                             // セル太陽レイの遮
 // セル中心での未遮蔽寄与 (target pdf 用)。
 // posRadius.w < 0 は Directional Light (太陽): xyz = 光源方向 (to-sun)、
 // 距離減衰なし、 ローブ実効距離は疑似無限遠。
+// posRadius.w > 0 は Point Light の影響半径 (m): 1/d^2 に窓関数
+// (1-(d/r)^2)^2 を掛け、 半径の外で厳密に 0 (UE/Frostbite 流)。
+// 街灯 = 半径 7.5m (直径 15m)、 提灯 = 半径 1m (直径 2m) 等。
 vec3 sharcLightContribution(SharcLight light, vec3 cellCenter,
                             out vec3 outDir, out float outDist) {
     if (light.posRadius.w < 0.0) {
@@ -93,12 +96,32 @@ vec3 sharcLightContribution(SharcLight light, vec3 cellCenter,
     float d2 = max(dot(toLight, toLight), 1e-4);
     outDist = sqrt(d2);
     outDir  = toLight / outDist;
-    return light.colorIntensity.rgb * light.colorIntensity.a / d2;
+    vec3 c = light.colorIntensity.rgb * light.colorIntensity.a / d2;
+    float range = light.posRadius.w;
+    if (range > 0.0) {
+        float q = clamp(d2 / (range * range), 0.0, 1.0);
+        float win = 1.0 - q * q;
+        c *= win * win;
+    }
+    return c;
 }
+
+// 要求リストへのアクセスカウンタ ([1] は march と共有)
+layout(std430, set = SHARC_SET, binding = 5) buffer SharcCounters {
+    uint gpu_sharc_counters[];
+};
 
 void main() {
     uint reqIdx = gl_WorkGroupID.x;
     uint tid    = gl_LocalInvocationID.x;
+    // 要求数が 1 フレーム上限を超える場合はフレームごとに開始位置を
+    // ローテーションし、 全セルが数フレームで一巡するようにする
+    // (compact が dispatch x を SHARC_UPDATE_CAP に clamp している)
+    uint reqTotal = min(gpu_sharc_counters[1], min(sharcTableSize, 65535u));
+    if (reqTotal > SHARC_UPDATE_CAP) {
+        reqIdx = (reqIdx + (sharcFrameIndex * SHARC_UPDATE_CAP) % reqTotal)
+               % reqTotal;
+    }
     uint slot   = gpu_sharc_requests[reqIdx];
     // slot は workgroup 内一様 → この return は非分岐 (barrier 安全)
     if (slot >= sharcTableSize || gpu_sharc_keys[slot] == 0u) return;

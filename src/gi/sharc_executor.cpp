@@ -21,8 +21,9 @@ SharcGpuExecutor::~SharcGpuExecutor() {
 namespace {
 
 // 0 = UBO, 1..17 = SSBO, 18 = combined image sampler (アルベド配列),
-// 19 = 近傍スロットテーブル, 20 = ベイク頂点 AO
-constexpr uint32_t kBindingCount = 21;
+// 19 = 近傍スロットテーブル, 20 = ベイク頂点 AO,
+// 21..24 = ハイブリッド経路の G-buffer + 太陽シャドウマップ (sampler)
+constexpr uint32_t kBindingCount = 25;
 constexpr uint32_t kSsboBindingCount = 18;   // 0..17 の連続ブロック
 
 // hit パスのピクセル精度太陽シャドウレイの距離上限 (m)。 これより遠い
@@ -672,6 +673,11 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
                     VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     bindings[20] = {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                     VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    for (uint32_t i = 21; i <= 24; ++i) {
+        // set_gbuffer() まで未結線 — gbuffer_resolve だけが静的使用する
+        bindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                       VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    }
     VkDescriptorSetLayoutCreateInfo dli{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     dli.bindingCount = kBindingCount;
@@ -682,9 +688,10 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
         return false;
     }
 
-    // AO ベイクのチャンク範囲 (base, count) を push constants で渡す
+    // push constants: AO ベイク = {base, count} 8B / gbuffer_resolve =
+    // 太陽 ortho VP mat4 64B。 範囲は大きい方で共有
     VkPushConstantRange push_range{VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                   2 * sizeof(uint32_t)};
+                                   16 * sizeof(float)};
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pli.setLayoutCount         = 1;
     pli.pSetLayouts            = &dsl_;
@@ -701,7 +708,9 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
         !create_pass_(compact_, shader_dir + "/sharc_compact.comp.spv") ||
         !create_pass_(update_,  shader_dir + "/sharc_update.comp.spv") ||
         !create_pass_(resolve_, shader_dir + "/sharc_resolve.comp.spv") ||
-        !create_pass_(ao_bake_, shader_dir + "/sharc_ao_bake.comp.spv")) {
+        !create_pass_(ao_bake_, shader_dir + "/sharc_ao_bake.comp.spv") ||
+        !create_pass_(gbuffer_resolve_,
+                      shader_dir + "/sharc_gbuffer_resolve.comp.spv")) {
         shutdown();
         return false;
     }
@@ -710,7 +719,7 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
     VkDescriptorPoolSize sizes[3] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSsboBindingCount - 1 + 2},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 + 4},
     };
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets       = 1;
@@ -774,6 +783,22 @@ bool SharcGpuExecutor::initialize(VulkanContext& vk,
         }
         const uint8_t white[4] = {255, 255, 255, 255};
         if (!create_atlas_(white, 1, 1)) {
+            shutdown();
+            return false;
+        }
+    }
+
+    // ── G-buffer 用サンプラ (texelFetch 参照なので状態はほぼ不問、
+    //    combined image sampler の器として必要なだけ) ──
+    {
+        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sci.magFilter    = VK_FILTER_NEAREST;
+        sci.minFilter    = VK_FILTER_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(device_, &sci, nullptr, &gbuffer_sampler_) !=
+            VK_SUCCESS) {
             shutdown();
             return false;
         }
@@ -975,6 +1000,33 @@ bool SharcGpuExecutor::load_cache(const std::string& path) {
     return true;
 }
 
+void SharcGpuExecutor::set_gbuffer(VkImageView albedo_ao,
+                                   VkImageView normal_rough,
+                                   VkImageView dist_mfp,
+                                   VkImageView sun_shadow) {
+    if (!initialized_) return;
+    const VkImageView views[4] = {albedo_ao, normal_rough, dist_mfp,
+                                  sun_shadow};
+    VkDescriptorImageInfo infos[4]{};
+    VkWriteDescriptorSet writes[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        infos[i] = {gbuffer_sampler_, views[i],
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        writes[i] = VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[i].dstSet          = desc_set_;
+        writes[i].dstBinding      = 21 + i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo      = &infos[i];
+    }
+    vkUpdateDescriptorSets(device_, 4, writes, 0, nullptr);
+    gbuffer_bound_ = true;
+}
+
+void SharcGpuExecutor::set_sun_matrix(const float* m16) {
+    std::memcpy(sun_matrix_, m16, sizeof(sun_matrix_));
+}
+
 void SharcGpuExecutor::begin_frame(const float3& camera_pos) {
     if (!initialized_) return;
     camera_pos_ = camera_pos;
@@ -1049,11 +1101,24 @@ void SharcGpuExecutor::record(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
                             0, 1, &desc_set_, 0, nullptr);
 
-    // ── Pass 0: Hit (GPU 一次交差、 シーンアップロード済みの時のみ) ──
+    // ── Pass 0: 一次可視性 → shade/rays 生成 (シーンアップロード済みのみ)
+    //    ハイブリッド: ラスタ G-buffer の読み (gbuffer_resolve, ~1-2ms)
+    //    フルレイ:     compute BVH トレース (hit, ~80-90ms @720p/1070)
+    //    フルレイ経路はコード試算として恒久残置 — set_hybrid(false) で
+    //    いつでも A/B 比較できる ──
     if ((scene_flags_ & kSharcSceneMesh) != 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, hit_.pipeline);
-        vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
-        // hit の rays.tMax / shade 書き込み → march / resolve の読み取り
+        if (hybrid_ && gbuffer_bound_) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              gbuffer_resolve_.pipeline);
+            vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(sun_matrix_), sun_matrix_);
+            vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
+        } else {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              hit_.pipeline);
+            vkCmdDispatch(cmd, (ray_count_ + 63u) / 64u, 1, 1);
+        }
+        // shade/rays 書き込み → march / resolve の読み取り
         barrier_(cmd, rays_.buf, VK_ACCESS_SHADER_WRITE_BIT,
                  VK_ACCESS_SHADER_READ_BIT,
                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -1120,7 +1185,7 @@ void SharcGpuExecutor::shutdown() {
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
         for (Pass* p : {&hit_, &march_, &compact_, &update_, &resolve_,
-                        &ao_bake_}) {
+                        &ao_bake_, &gbuffer_resolve_}) {
             if (p->pipeline) vkDestroyPipeline(device_, p->pipeline, nullptr);
             p->pipeline = VK_NULL_HANDLE;
         }
@@ -1134,6 +1199,11 @@ void SharcGpuExecutor::shutdown() {
         destroy_atlas_();
         if (atlas_sampler_) vkDestroySampler(device_, atlas_sampler_, nullptr);
         atlas_sampler_ = VK_NULL_HANDLE;
+        if (gbuffer_sampler_) {
+            vkDestroySampler(device_, gbuffer_sampler_, nullptr);
+        }
+        gbuffer_sampler_ = VK_NULL_HANDLE;
+        gbuffer_bound_ = false;
         for (Buffer* b : {&params_, &keys_, &cells_, &rays_, &accum_,
                           &counters_, &requests_, &stamps_, &indirect_,
                           &lights_, &reservoirs_, &cell_pos_, &shade_,

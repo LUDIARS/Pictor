@@ -35,7 +35,7 @@ layout(std430, set = SHARC_SET, binding = 16) readonly buffer SharcTriMats {
 
 struct SharcMaterial {
     vec4 albedoRough;  // rgb = albedo, a = roughness
-    vec4 mfpPad;       // x = SSS MFP, y = atlas layer+1 (0 = テクスチャなし)
+    vec4 mfpPad;       // x = SSS MFP, y = atlas layer+1, z = 自己発光強度
 };
 
 layout(std430, set = SHARC_SET, binding = 17) readonly buffer SharcMaterials {
