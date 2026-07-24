@@ -31,7 +31,11 @@ void main() {
 
     // --- (1) indirect 引数生成 (先頭スレッドのみ) ---
     if (slot == 0u) {
-        uint requestCount = min(gpu_sharc_counters[1], sharcTableSize);
+        // Vulkan 最低保証 maxComputeWorkGroupCount[0] = 65535 を超えない
+        // (review P1-04)。 溢れた要求セルは今フレーム未更新のまま残り、
+        // 次フレームに再要求される (品質は保たれ、 無言のUBは起きない)。
+        uint requestCount = min(gpu_sharc_counters[1],
+                                min(sharcTableSize, 65535u));
         gpu_sharc_indirect[0] = requestCount;   // 1 workgroup = 1 要求セル
         gpu_sharc_indirect[1] = 1u;
         gpu_sharc_indirect[2] = 1u;
@@ -49,6 +53,8 @@ void main() {
     uint now = sharcFrameIndex & 0xFFFFu;
     uint age = (now - lastFrame) & 0xFFFFu;
     if (age > sharcStaleFrames) {
-        gpu_sharc_keys[slot] = 0u;   // キー解放 (セル本体は再確保時に初期化)
+        // TOMBSTONE で解放 — 0 に戻すと open addressing の probe chain が
+        // 切れて後続スロットの生存セルが検索不能になる (review P0-02)
+        gpu_sharc_keys[slot] = SHARC_KEY_TOMBSTONE;
     }
 }
