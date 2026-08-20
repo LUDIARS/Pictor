@@ -1,0 +1,11 @@
+{
+  "name": "vendored-third-party",
+  "description": "ベンダリングした外部コード (stb 等)。 Pictor の設計判断の対象外で、 上流の実装をそのまま同梱する。 変更は上流追随のみとし、 ここに自前のロジックを足さない。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)third_party/(?:.*/)?[^/]+$"
+    }
+  ]
+}

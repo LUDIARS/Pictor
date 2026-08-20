@@ -1,0 +1,17 @@
+{
+  "name": "engine-core",
+  "description": "エンジンの中核。 レンダラ本体の組み立て、 共通型、 公開ヘッダの入口。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/core/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/core/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/pictor\\.h$"
+    }
+  ]
+}

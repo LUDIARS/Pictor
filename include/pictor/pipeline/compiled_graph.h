@@ -57,6 +57,13 @@ struct CompiledPass {
     uint8_t                        framebuffer_count = 1;
     uint8_t                        flags       = 0;   // bit0 = is_swapchain, bit1 = is_compute
 
+    /// RenderPassRegistry index resolved from pass_name at compile time.
+    /// Stable for the lifetime of this graph and safe to use in the hot path.
+    /// **Not** the pass's position in `CompiledGraph::passes` — the registry
+    /// may hold a superset of the compiled profile, so tables keyed by this
+    /// ID must be sized by `max(pass_id) + 1`, not by `passes.size()`.
+    uint16_t                       pass_id     = 0xFFFFu;
+
     // ---- 観測用 (Phase 2 §6.1 GPU timestamp タグ) ------------------------
     uint16_t                       timestamp_begin_query = 0xFFFFu;
     uint16_t                       timestamp_end_query   = 0xFFFFu;
@@ -76,6 +83,7 @@ struct CompiledPass {
     /// `kuzu.profile.json` PostProcess pass で使う。 compute pass と類似
     /// (Begin/End 不要)、 ただし graphics queue で動く点が違うので別 flag。
     static constexpr uint8_t FLAG_IS_HOST_RECORDED = 1u << 2;
+    static constexpr uint16_t INVALID_PASS_ID       = 0xFFFFu;
 
     bool is_swapchain()     const { return (flags & FLAG_IS_SWAPCHAIN) != 0; }
     bool is_compute()       const { return (flags & FLAG_IS_COMPUTE) != 0; }
@@ -104,8 +112,14 @@ struct CompiledGraph {
 struct CompiledPass {
     uint8_t  pass_type = 0;
     uint8_t  flags     = 0;
-    uint32_t filter_mask = 0;
+    uint16_t pass_id   = 0xFFFFu;
+    /// Must mirror the Vulkan variant's default: filter_mask gates batch
+    /// recording, so a 0 default would mean "draw nothing" rather than
+    /// "unfiltered" (`RenderBatchFilter::ALL` を含む全ビット)。
+    uint32_t filter_mask = 0xFFFFFFFFu;
     const char* debug_name = nullptr;
+
+    static constexpr uint16_t INVALID_PASS_ID = 0xFFFFu;
 };
 struct CompiledGraph {
     std::vector<CompiledPass> passes;

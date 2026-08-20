@@ -41,6 +41,25 @@ bool feq(float a, float b, float eps = 1e-4f) {
     return std::fabs(a - b) < eps;
 }
 
+float4x4 perspective(float near_z, float far_z) {
+    float4x4 p{};
+    p.m[0][0] = 1.0f;
+    p.m[1][1] = -1.0f;
+    p.m[2][2] = far_z / (near_z - far_z);
+    p.m[2][3] = -1.0f;
+    p.m[3][2] = (near_z * far_z) / (near_z - far_z);
+    return p;
+}
+
+bool matrix_is_finite(const float4x4& m) {
+    for (const auto& row : m.m) {
+        for (float value : row) {
+            if (!std::isfinite(value)) return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -65,6 +84,24 @@ int main() {
 
     const uint32_t static_count = registry.static_pool().count();
     PT_ASSERT_OP(static_count, ==, uint32_t{5}, "5 static objects registered");
+
+    // CSM split distances may intentionally extend beyond the camera far
+    // plane. They must remain distinct under inverse projection; clamping both
+    // ends to NDC z=1 collapses the last cascade and produces a non-finite
+    // orthographic matrix.
+    GIConfig runtime_cfg;
+    runtime_cfg.shadow.cascade_count = 4;
+    runtime_cfg.shadow.resolution = 16;
+    runtime_cfg.shadow.max_shadow_dist = 200.0f;
+    runtime_cfg.ssao_enabled = false;
+    runtime_cfg.gi_probes_enabled = false;
+    gi.set_config(runtime_cfg);
+    gi.initialize(static_count, 16, 16);
+    gi.execute(float4x4::identity(), perspective(0.1f, 50.0f));
+    for (uint32_t cascade = 0; cascade < runtime_cfg.shadow.cascade_count; ++cascade) {
+        PT_ASSERT(matrix_is_finite(gi.cascade_view_proj(cascade)),
+                  "CSM matrix remains finite beyond camera far plane");
+    }
 
     GIBakeSystem baker(buffers, registry, gi);
 

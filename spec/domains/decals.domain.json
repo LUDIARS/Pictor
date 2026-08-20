@@ -1,0 +1,14 @@
+{
+  "name": "decals",
+  "description": "デカール。 表面への投影と、 デカールシステムの適用順。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/decal/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/decal/[^/]+$"
+    }
+  ]
+}

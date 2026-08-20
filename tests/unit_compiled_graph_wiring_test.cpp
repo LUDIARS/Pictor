@@ -110,6 +110,7 @@ void test_compile_structure() {
 
     const CompiledPass& scene = g.passes[0];
     PT_ASSERT(scene.pass_type == static_cast<uint8_t>(PassType::OPAQUE), "pass0 OPAQUE");
+    PT_ASSERT(scene.pass_id == 0, "pass0 stable id");
     PT_ASSERT(scene.debug_name && std::strcmp(scene.debug_name, "ScenePass") == 0,
               "pass0 debug_name");
     PT_ASSERT(scene.filter_mask == 0x00FF, "pass0 filter_mask preserved");
@@ -125,6 +126,7 @@ void test_compile_structure() {
     const CompiledPass& transparent = g.passes[1];
     PT_ASSERT(transparent.pass_type == static_cast<uint8_t>(PassType::TRANSPARENT),
               "pass1 TRANSPARENT");
+    PT_ASSERT(transparent.pass_id == 1, "pass1 stable id");
     PT_ASSERT(transparent.sort_mode == static_cast<uint8_t>(SortMode::BACK_TO_FRONT),
               "pass1 sort_mode");
 
@@ -140,7 +142,20 @@ void test_compile_structure() {
     const CompiledPass& compute = g.passes[3];
     PT_ASSERT(compute.pass_type == static_cast<uint8_t>(PassType::COMPUTE),
               "pass3 COMPUTE");
+    PT_ASSERT(compute.pass_id == 3, "pass3 stable id");
     PT_ASSERT(compute.is_compute(), "pass3 compute flag");
+}
+
+void test_compile_rejects_missing_registry_pass() {
+    PipelineProfileDef profile = make_test_profile();
+    PipelineProfileDef incomplete_registry_profile = profile;
+    incomplete_registry_profile.render_passes.pop_back();
+    Registries reg(incomplete_registry_profile);
+
+    CompiledGraph g = PipelineCompiler::compile(profile, reg.atts, reg.rps,
+                                                reg.fbs, VK_NULL_HANDLE, 2, 3);
+    PT_ASSERT(g.passes.empty(), "missing registry pass rejects partial graph");
+    PT_ASSERT(g.name_storage.empty(), "failed compile releases graph storage");
 }
 
 // ---- 2. execute_compiled record order --------------------------------------
@@ -173,10 +188,23 @@ void test_execute_compiled_record_order() {
         PT_ASSERT(seen_types[3] == static_cast<uint8_t>(PassType::COMPUTE),      "order[3]");
     }
 
+    const uint16_t scene_id = scheduler.pass_id_of("ScenePass");
+    PT_ASSERT(scene_id != CompiledPass::INVALID_PASS_ID, "installed graph resolves id");
+    PT_ASSERT(scheduler.set_pass_record_callback(
+        scene_id,
+        [](VkCommandBuffer, const CompiledPass&, uint32_t, uint32_t) {}),
+        "callback registers while graph is installed");
+
     // take_compiled_graph で回収したら空 graph に戻り、 record は呼ばれない。
     CompiledGraph taken = scheduler.take_compiled_graph();
     PT_ASSERT(taken.passes.size() == 4, "taken graph carries passes");
     PT_ASSERT(!scheduler.has_compiled_graph(), "scheduler empty after take");
+    PT_ASSERT(scheduler.pass_id_of("ScenePass") == CompiledPass::INVALID_PASS_ID,
+              "released graph no longer resolves ids");
+    PT_ASSERT(!scheduler.set_pass_record_callback(
+        scene_id,
+        [](VkCommandBuffer, const CompiledPass&, uint32_t, uint32_t) {}),
+        "released graph rejects stale id registration");
 
     uint32_t calls_after_take = 0;
     scheduler.execute_compiled(VK_NULL_HANDLE, 0, 0,
@@ -227,6 +255,96 @@ void test_driver_engage_recompile_disengage() {
     PT_ASSERT(!scheduler.has_compiled_graph(), "graph released from scheduler");
 }
 
+void test_pass_id_callback_table() {
+    PipelineProfileDef profile = PipelineProfileManager::create_high_profile();
+    Registries reg(profile);
+    RenderPassScheduler scheduler(profile);
+    PT_ASSERT(scheduler.pass_id_of("LightCullPass") == CompiledPass::INVALID_PASS_ID,
+              "profile order is not exposed as a registry id before compile");
+    scheduler.set_compiled_graph(PipelineCompiler::compile(
+        profile, reg.atts, reg.rps, reg.fbs, VK_NULL_HANDLE, 2, 3));
+
+    const uint16_t light_cull_id = scheduler.pass_id_of("LightCullPass");
+    const uint16_t ssao_id = scheduler.pass_id_of("SSAOGen");
+    PT_ASSERT(light_cull_id != CompiledPass::INVALID_PASS_ID, "LightCullPass id resolved");
+    PT_ASSERT(ssao_id != CompiledPass::INVALID_PASS_ID, "SSAOGen id resolved");
+    PT_ASSERT(light_cull_id != ssao_id, "compute passes have distinct ids");
+
+    uint32_t light_cull_calls = 0;
+    uint32_t ssao_calls = 0;
+    uint32_t fallback_calls = 0;
+    PT_ASSERT(scheduler.set_pass_record_callback(
+        light_cull_id,
+        [&light_cull_calls, light_cull_id](VkCommandBuffer, const CompiledPass& cp,
+                                           uint32_t, uint32_t) {
+            PT_ASSERT(cp.pass_id == light_cull_id, "LightCull callback id");
+            light_cull_calls++;
+        }), "register LightCull callback");
+    PT_ASSERT(scheduler.set_pass_record_callback(
+        ssao_id,
+        [&ssao_calls, ssao_id](VkCommandBuffer, const CompiledPass& cp,
+                               uint32_t, uint32_t) {
+            PT_ASSERT(cp.pass_id == ssao_id, "SSAO callback id");
+            ssao_calls++;
+        }), "register SSAO callback");
+    PT_ASSERT(!scheduler.set_pass_record_callback(
+        CompiledPass::INVALID_PASS_ID, {}), "invalid pass id rejected");
+
+    scheduler.execute_compiled(
+        VK_NULL_HANDLE, 0, 0,
+        [&fallback_calls](VkCommandBuffer, const CompiledPass&, uint32_t, uint32_t) {
+            fallback_calls++;
+        });
+
+    PT_ASSERT_OP(light_cull_calls, ==, 1u, "LightCull callback once");
+    PT_ASSERT_OP(ssao_calls, ==, 1u, "SSAO callback once");
+    PT_ASSERT_OP(fallback_calls, ==,
+                 static_cast<uint32_t>(profile.render_passes.size() - 2),
+                 "fallback handles unregistered passes");
+}
+
+/// pass_id は RenderPassRegistry の index であって graph 内の位置ではない。
+/// registry を profile の superset のまま使い回す構成 (= PictorRenderer の
+/// profile 切替と同じ形) でも callback table が全 pass 分張られること。
+void test_pass_id_callback_table_registry_superset() {
+    // registry は Standard (10 pass)、 compile するのは Lite (5 pass)。
+    // Lite の PostProcess は registry index 9 で、 graph 長 5 を超える。
+    PipelineProfileDef registry_profile = PipelineProfileManager::create_standard_profile();
+    PipelineProfileDef compiled_profile = PipelineProfileManager::create_lite_profile();
+    Registries reg(registry_profile);
+
+    RenderPassScheduler scheduler(compiled_profile);
+    scheduler.set_compiled_graph(PipelineCompiler::compile(
+        compiled_profile, reg.atts, reg.rps, reg.fbs, VK_NULL_HANDLE, 2, 3));
+
+    const uint16_t post_id = scheduler.pass_id_of("PostProcess");
+    PT_ASSERT(post_id != CompiledPass::INVALID_PASS_ID, "PostProcess id resolved");
+    PT_ASSERT_OP(static_cast<uint32_t>(post_id), >=,
+                 static_cast<uint32_t>(scheduler.compiled_graph().passes.size()),
+                 "registry index exceeds graph length (superset fixture)");
+
+    uint32_t post_calls = 0;
+    PT_ASSERT(scheduler.set_pass_record_callback(
+        post_id,
+        [&post_calls](VkCommandBuffer, const CompiledPass&, uint32_t, uint32_t) {
+            post_calls++;
+        }), "callback registers for out-of-graph-range pass_id");
+
+    scheduler.execute_compiled(
+        VK_NULL_HANDLE, 0, 0,
+        [](VkCommandBuffer, const CompiledPass&, uint32_t, uint32_t) {});
+    PT_ASSERT_OP(post_calls, ==, 1u, "per-pass callback wins over fallback");
+
+    // graph 差替えで callback は破棄される (同じ数値 ID が別 pass を指し得る)。
+    scheduler.set_compiled_graph(PipelineCompiler::compile(
+        compiled_profile, reg.atts, reg.rps, reg.fbs, VK_NULL_HANDLE, 2, 3));
+    post_calls = 0;
+    scheduler.execute_compiled(
+        VK_NULL_HANDLE, 0, 0,
+        [](VkCommandBuffer, const CompiledPass&, uint32_t, uint32_t) {});
+    PT_ASSERT_OP(post_calls, ==, 0u, "callbacks dropped on graph swap");
+}
+
 // ---- 4. CompiledBatchRecorder stats ----------------------------------------
 
 /// GPU 実体を一切返さないスタブ (headless — vkCmd* を発行させない)。
@@ -261,6 +379,28 @@ void test_batch_recorder_stats() {
     PT_ASSERT(source.last_shader_key == 0xA3, "shader key forwarded (no registry)");
     PT_ASSERT(recorder.stats().draw_calls == 0, "no draws without GPU resources");
     PT_ASSERT(recorder.stats().batches_skipped == 3, "skips counted");
+
+    batches[0].transparency = 0;
+    batches[1].transparency = 1;
+    batches[2].transparency = 0;
+    source.resolve_calls = 0;
+    recorder.begin_frame(&batches);
+    opaque.filter_mask = RenderBatchFilter::OPAQUE;
+    recorder.record(VK_NULL_HANDLE, opaque, 0, 0);
+    PT_ASSERT_OP(source.resolve_calls, ==, 2u, "opaque pass resolves opaque batches only");
+    PT_ASSERT_OP(recorder.stats().batches_filtered, ==, 1u,
+                 "opaque pass filters transparent batch");
+
+    source.resolve_calls = 0;
+    recorder.begin_frame(&batches);
+    CompiledPass transparent{};
+    transparent.pass_type = static_cast<uint8_t>(PassType::TRANSPARENT);
+    transparent.filter_mask = RenderBatchFilter::TRANSPARENT;
+    recorder.record(VK_NULL_HANDLE, transparent, 0, 0);
+    PT_ASSERT_OP(source.resolve_calls, ==, 1u,
+                 "transparent pass resolves transparent batches only");
+    PT_ASSERT_OP(recorder.stats().batches_filtered, ==, 2u,
+                 "transparent pass filters opaque batches");
 
     // SHADOW / DEPTH_ONLY: 未実装は無言 skip ではなく明示計上 (§7.1)。
     CompiledPass shadow{};
@@ -324,8 +464,11 @@ void test_renderer_wiring_and_profile_switch() {
 
 int main() {
     test_compile_structure();
+    test_compile_rejects_missing_registry_pass();
     test_execute_compiled_record_order();
     test_driver_engage_recompile_disengage();
+    test_pass_id_callback_table();
+    test_pass_id_callback_table_registry_superset();
     test_batch_recorder_stats();
     test_renderer_wiring_and_profile_switch();
     return pictor_test::report("unit_compiled_graph_wiring_test");

@@ -1,0 +1,14 @@
+{
+  "name": "samples-and-tools",
+  "description": "利用例と開発補助。 demo アプリ群、 ベンチマーク、 変換/検証ツール。 ライブラリ本体の責務は含まない。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)demo/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tools/(?:.*/)?[^/]+$"
+    }
+  ]
+}

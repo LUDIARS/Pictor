@@ -1,0 +1,14 @@
+{
+  "name": "ui-rendering",
+  "description": "UI レイヤの描画。 スクリーン空間の要素配置と描画。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/ui/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/ui/[^/]+$"
+    }
+  ]
+}

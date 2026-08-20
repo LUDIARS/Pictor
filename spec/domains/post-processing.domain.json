@@ -1,0 +1,17 @@
+{
+  "name": "post-processing",
+  "description": "ポストプロセス。 効果チェーンの構成と適用 (bloom 等)。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/postprocess/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/postprocess/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_postprocess_chain_test\\.cpp$"
+    }
+  ]
+}

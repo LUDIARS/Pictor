@@ -1,0 +1,17 @@
+{
+  "name": "animation",
+  "description": "スケルタルアニメーション。 クリップ、 モンタージュ合成、 アタッチメント定義、 公開ヘッダの契約。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/animation/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/animation/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(?:animation_stub_contract|public_animation_header)_test\\.cpp$"
+    }
+  ]
+}

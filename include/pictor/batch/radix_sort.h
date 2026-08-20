@@ -42,6 +42,12 @@ public:
                                    uint16_t shader_key,        // bits 55-40
                                    uint16_t material_key,      // bits 39-24
                                    uint32_t depth);            // bits 23-0 (24-bit)
+
+    /// Read back the transparency field (bits 59-56) of a key produced by
+    /// `build_sort_key()` (§6.2)。 ビット位置の知識をここ 1 箇所に閉じる。
+    static constexpr uint8_t transparency_of(uint64_t sort_key) {
+        return static_cast<uint8_t>((sort_key >> 56) & 0xFu);
+    }
 };
 
 } // namespace pictor

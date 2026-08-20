@@ -1,0 +1,17 @@
+{
+  "name": "global-illumination",
+  "description": "大域照明。 ライトのベイクとプローブフィールド、 SHARC 系のハッシュ/推定、 実行時 relight。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/gi/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/gi/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(?:gi_bake|gi_probe_field|sharc_estimator|sharc_hash)_test\\.cpp$"
+    }
+  ]
+}

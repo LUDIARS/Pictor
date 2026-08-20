@@ -95,7 +95,10 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
 
     if (visible_count == 0) return;
 
-    // Group consecutive objects with matching shaderKey + materialKey into batches (§6.1)
+    // Group consecutive objects with matching shaderKey + materialKey into
+    // batches (§6.1)。 透過区分は追加の強制境界 — 1 batch = 1 カテゴリでない
+    // と `CompiledPass::filter_mask` で opaque/transparent pass へ振り分け
+    // られない (RenderBatchFilter)。
     RenderBatch current_batch;
     current_batch.sortKey = pairs[0].key;
     current_batch.startIndex = 0;
@@ -103,17 +106,21 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
     current_batch.shaderKey = pool.shader_keys()[pairs[0].index];
     current_batch.materialKey = pool.material_keys()[pairs[0].index];
     current_batch.mesh = pool.mesh_handles().data()[pairs[0].index];
+    current_batch.transparency = RadixSort::transparency_of(pairs[0].key);
 
     for (size_t i = 1; i < visible_count; ++i) {
         uint32_t idx = pairs[i].index;
         uint64_t sk = pool.shader_keys()[idx];
         uint32_t mk = pool.material_keys()[idx];
 
+        const uint8_t transparency = RadixSort::transparency_of(pairs[i].key);
         bool should_merge = (sk == current_batch.shaderKey &&
-                            mk == current_batch.materialKey);
+                            mk == current_batch.materialKey &&
+                            transparency == current_batch.transparency);
 
         if (policy_) {
-            should_merge = policy_->should_merge(pairs[i - 1].key, pairs[i].key);
+            should_merge = transparency == current_batch.transparency &&
+                           policy_->should_merge(pairs[i - 1].key, pairs[i].key);
         }
 
         if (should_merge) {
@@ -126,6 +133,7 @@ void BatchBuilder::create_batches_from_sorted(const SortPair* pairs, size_t coun
             current_batch.shaderKey = sk;
             current_batch.materialKey = mk;
             current_batch.mesh = pool.mesh_handles().data()[idx];
+            current_batch.transparency = transparency;
         }
     }
 
@@ -181,6 +189,7 @@ void BatchBuilder::build_gpu_driven() {
     batch.count = pool.count();
     batch.shaderKey = 0; // GPU determines shader
     batch.materialKey = 0;
+    batch.transparency = 0;
     batches_.push_back(batch);
 }
 

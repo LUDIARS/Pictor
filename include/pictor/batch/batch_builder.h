@@ -13,7 +13,13 @@ class IBatchPolicy {
 public:
     virtual ~IBatchPolicy() = default;
 
-    /// Determine if two consecutive sorted objects should be in the same batch
+    /// Determine if two consecutive sorted objects should be in the same batch.
+    ///
+    /// 透過区分 (sort key bits 59-56) は本ポリシーより優先される **強制境界**:
+    /// true を返しても opaque/transparent を跨いだ merge は行われない。
+    /// 1 つの `RenderBatch` は 1 カテゴリだけを持つ、 が
+    /// `CompiledPass::filter_mask` による pass 振り分けの前提のため
+    /// (`RenderBatchFilter` / spec/feature/pipeline-profile-config.md)。
     virtual bool should_merge(uint64_t key_a, uint64_t key_b) const = 0;
 };
 

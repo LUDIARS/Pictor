@@ -125,6 +125,20 @@ float4x4 ortho(float left, float right, float bottom, float top,
     return m;
 }
 
+/// Convert a positive view-space distance to clip-space depth using the
+/// camera's own projection matrix.
+/// Row-vector convention (clip = view * proj), right-handed view space looking
+/// down -z, so a distance d in front of the camera is z_view = -d.
+/// Works for any projection (perspective / reverse-Z / ortho) because the
+/// matrix entries are applied directly instead of assuming a depth mapping.
+float view_dist_to_ndc_z(const float4x4& proj, float dist) {
+    float z_view = -dist;
+    float z_clip = proj.m[2][2] * z_view + proj.m[3][2];
+    float w_clip = proj.m[2][3] * z_view + proj.m[3][3];
+    if (std::abs(w_clip) < 1e-8f) return 1.0f;  // degenerate: clamp to far plane
+    return z_clip / w_clip;
+}
+
 /// Transform a point by a 4x4 matrix (w=1)
 float3 transform_point(const float4x4& m, const float3& p) {
     float x = m.m[0][0]*p.x + m.m[1][0]*p.y + m.m[2][0]*p.z + m.m[3][0];
@@ -469,29 +483,17 @@ float4x4 GILightingSystem::compute_light_view_proj(
     //         defined by [near_split, far_split] in view space
     float4x4 inv_view_proj = inverse4x4(multiply4x4(camera_view, camera_projection));
 
-    // NDC corners: near plane z=0 (Vulkan), far plane z=1
-    float near_ndc = near_split;  // Will be recomputed from projection
-    float far_ndc  = far_split;
-
-    // For proper NDC mapping, we need the camera's actual near/far from projection.
-    // Use the sub-frustum splits to build a sub-projection.
-    // Instead, compute frustum corners in world space directly from inverse VP.
-
-    // Compute normalized depths from the projection matrix
-    // For Vulkan perspective: z_ndc = (far * near_split) / (far - near_split * (far - near))
-    // Simplification: use the sub-frustum approach
-
-    // NDC corners of the full frustum, then scale z to [near_split, far_split]
-    // mapped to normalized device coordinates
-    float near_z = 0.0f;  // Vulkan near plane in NDC
-    float far_z  = 1.0f;  // Vulkan far plane in NDC
-
-    // For cascade sub-frustum: linearly interpolate in NDC z
+    // Sub-frustum depth bounds expressed in Vulkan NDC z.
+    // NDC z is nonlinear under a perspective projection, so the view-space
+    // split distances are pushed through the camera's own projection rather
+    // than scaled linearly by max_shadow_dist. Do not clamp to [0,1]: a shadow
+    // distance beyond the camera far plane intentionally maps just outside
+    // the clip range, and inverse projection reconstructs that finite distance.
+    // Clamping two such splits to the far plane would collapse the cascade and
+    // make the tight-fit orthographic projection divide by zero.
     float max_dist = config_.shadow.max_shadow_dist;
-    float t_near = near_split / max_dist;
-    float t_far  = far_split / max_dist;
-    near_z = t_near;
-    far_z  = t_far;
+    float near_z = view_dist_to_ndc_z(camera_projection, near_split);
+    float far_z  = view_dist_to_ndc_z(camera_projection, far_split);
 
     float3 frustum_corners[8];
     int idx = 0;

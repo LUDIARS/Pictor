@@ -1,0 +1,23 @@
+{
+  "name": "gpu-surface",
+  "description": "GPU とウィンドウ表面の境界。 Vulkan インスタンス/デバイス生成、 スワップチェーン、 コマンド送出とリング/フライト管理。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/surface/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/surface/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/gpu/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/gpu/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(?:gpu_ring_flight|gpu_timer)_test\\.cpp$"
+    }
+  ]
+}

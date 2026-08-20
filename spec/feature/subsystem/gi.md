@@ -27,7 +27,7 @@ GPU dispatch (compute / CSM 実描画) は phase 2 (`GIGpuExecutor`) の領分�
 
 ## 技法
 
-- **影**: Cascaded Shadow Maps (1-4 cascade、既定 2048²、depth array)。hard/PCF/PCSS フィルタ、cascade 割当は `shadow_map_gen.comp`、constant+normal+slope bias
+- **影**: Cascaded Shadow Maps (1-4 cascade、既定 2048²、depth array)。hard/PCF/PCSS フィルタ、cascade 割当は `shadow_map_gen.comp`、constant+normal+slope bias。view-space の split 距離は camera projection で NDC depth へ写像してから inverse VP し、`max_shadow_dist` が camera far を越える場合も clip range へ clamp せず有限距離を復元する
 - **AO**: ランタイム SSAO (hemisphere sampling + bilateral blur)。bake は object-space 高サンプル (256 vs 32)
 - **間接光**: irradiance probe grid。per-probe を **L2 球面調和 (9係数)** で保持、`gi_probe_sample.comp` でオブジェクト位置に補間。bake は per-object SH をキャッシュ
 - **lightmap**: direct+indirect (multi-bounce 最大3)

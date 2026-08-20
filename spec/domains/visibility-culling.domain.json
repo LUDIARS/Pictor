@@ -1,0 +1,17 @@
+{
+  "name": "visibility-culling",
+  "description": "可視性判定。 視錐台・オクルージョンによる描画対象の絞り込みと、 その境界ボリュームの計算。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/culling/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/culling/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_culling_test\\.cpp$"
+    }
+  ]
+}

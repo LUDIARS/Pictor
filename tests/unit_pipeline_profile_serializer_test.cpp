@@ -120,6 +120,19 @@ void test_syntax_error_rejected() {
     PT_ASSERT(!err.empty(), "error message populated on syntax failure");
 }
 
+void test_filter_mask_overflow_rejected() {
+    const std::string json = R"({
+      "render_passes": [
+        { "pass_name": "OpaquePass", "filter_mask": 65536 }
+      ]
+    })";
+    PipelineProfileDef out;
+    std::string err;
+    bool ok = from_pipeline_profile_json(json, out, &err);
+    PT_ASSERT(!ok, "filter_mask wider than uint16 is rejected");
+    PT_ASSERT(!err.empty(), "filter_mask overflow reports parse failure");
+}
+
 void test_unknown_keys_ignored() {
     // Forward compatibility: unknown keys must be silently skipped.
     const std::string j = R"({
@@ -406,6 +419,7 @@ int main() {
     test_roundtrip_ultra();
     test_preset_seeded_override();
     test_syntax_error_rejected();
+    test_filter_mask_overflow_rejected();
     test_unknown_keys_ignored();
     test_builder_structured_pass();
     test_preset_loader_fallback();

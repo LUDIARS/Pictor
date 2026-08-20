@@ -1,0 +1,11 @@
+{
+  "name": "test-support",
+  "description": "テストの共通土台。 テスト間で共有するヘルパとビルド定義。 個々のテストは検証対象のドメインに属する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)tests/(?:test_common\\.h|CMakeLists\\.txt)$"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "draw-batching",
+  "description": "描画呼び出しのバッチ化。 描画対象をソートキーでまとめ、 radix sort で並べ替え、 パスの filter_mask に沿ってバッチを振り分ける。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/batch/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/batch/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(?:batch_builder|radix_sort)_test\\.cpp$"
+    }
+  ]
+}

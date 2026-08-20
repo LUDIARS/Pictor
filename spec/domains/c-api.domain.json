@@ -1,0 +1,14 @@
+{
+  "name": "c-api",
+  "description": "C 言語からの利用境界。 C ABI で公開する関数とハンドル。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/c_api/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/c_api\\.h$"
+    }
+  ]
+}

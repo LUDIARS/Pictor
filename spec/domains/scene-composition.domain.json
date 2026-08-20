@@ -1,0 +1,20 @@
+{
+  "name": "scene-composition",
+  "description": "シーンの構成と毎フレーム更新。 シーングラフ、 変換の伝播、 更新スケジュール。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/scene/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/scene/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/update/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/update/[^/]+$"
+    }
+  ]
+}

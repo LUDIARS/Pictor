@@ -160,7 +160,18 @@ CompiledGraph PipelineCompiler::compile(const PipelineProfileDef&  profile,
 
         // Look up the VkRenderPass via the pass name (only place we use a
         // string — init time, not hot path).
-        cp.render_pass = rps.get(rps.index_of(pd.pass_name));
+        cp.pass_id = rps.index_of(pd.pass_name);
+        if (cp.pass_id == RenderPassRegistry::INVALID_INDEX) {
+            std::fprintf(stderr,
+                         "[PipelineCompiler] pass '%s' is absent from RenderPassRegistry\n",
+                         pd.pass_name.c_str());
+            // A graphics pass without a registry ID cannot resolve either its
+            // render pass or framebuffer. Returning a partial graph would let
+            // the scheduler call a draw recorder outside a render-pass scope.
+            g.shutdown(device);
+            return g;
+        }
+        cp.render_pass = rps.get(cp.pass_id);
         if (cp.render_pass == VK_NULL_HANDLE) {
             std::fprintf(stderr, "[PipelineCompiler] pass '%s' has no VkRenderPass (registry built?)\n",
                          pd.pass_name.c_str());
@@ -179,7 +190,10 @@ CompiledGraph PipelineCompiler::compile(const PipelineProfileDef&  profile,
         const uint32_t copy_count = std::min<uint32_t>(slot_count, static_cast<uint32_t>(cp.framebuffers.size()));
         cp.framebuffer_count = static_cast<uint8_t>(copy_count);
         for (uint32_t s = 0; s < copy_count; ++s) {
-            cp.framebuffers[s] = fbs.get(i, s);
+            // FramebufferRegistry uses RenderPassRegistry indices. The
+            // compiled profile may be a subset, so graph position `i` is not
+            // a valid key once earlier registry-only passes are omitted.
+            cp.framebuffers[s] = fbs.get(cp.pass_id, s);
         }
 
         // ---- input_sets — allocate one set per flight (current layout) ----

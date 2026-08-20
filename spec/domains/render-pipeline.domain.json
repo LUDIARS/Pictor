@@ -1,0 +1,20 @@
+{
+  "name": "render-pipeline",
+  "description": "レンダリングパイプラインの構成と実行。 パス定義の JSON プロファイル読み込み、 パイプラインのコンパイルとグラフ配線、 パス種別ごとのスケジューリング、 コマンド記録の入口を持つ。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/pipeline/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/pipeline/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)profiles/[^/]+\\.json$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(?:attachment_def|compiled_graph_wiring|pipeline_profile_serializer|pipeline_registries|pipeline_tiers)_test\\.cpp$"
+    }
+  ]
+}

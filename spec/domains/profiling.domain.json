@@ -1,0 +1,17 @@
+{
+  "name": "profiling",
+  "description": "実行時プロファイリング。 GPU/CPU 計測の収集、 内省 API、 フレーム時間のベースライン。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/profiler/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/profiler/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/(?:unit_perf_introspection_test|fps_baseline_test)\\.cpp$"
+    }
+  ]
+}
