@@ -11,7 +11,9 @@ compile_commands.json
 # Unity-style asset imports distributed out-of-tree (via Synergos or
 # zip) due to size. Keep them local to the working copy only.
 Art/
-.anatomia/
+.revisor-version
+.anatomia/*
+!.anatomia/domains/
 
 # SHaRC demo scan/scene assets — fetched locally via
 # tools/download_sharc_demo_assets.py, never committed.
