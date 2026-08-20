@@ -230,7 +230,7 @@ bool VulkanContext::create_instance(const VulkanContextConfig& cfg) {
     app_info.pApplicationName   = cfg.app_name;
     app_info.applicationVersion = cfg.app_version;
     app_info.pEngineName        = "Pictor";
-    app_info.engineVersion      = VK_MAKE_VERSION(2, 1, 0);
+    app_info.engineVersion      = VK_MAKE_VERSION(2, 2, 0);
     app_info.apiVersion         = VK_API_VERSION_1_2;
 
     // Collect extensions from provider

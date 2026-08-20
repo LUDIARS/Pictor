@@ -1,0 +1,23 @@
+{
+  "name": "release-metadata",
+  "description": "Pictor のリリース版番号とビルド構成の宣言を保持するドメイン。CMake の project() VERSION、ビルドオプションの既定値、およびそれらを説明する setup spec を含む。実行時の振る舞い (レンダリング・リソース解決・シェーダ) の責務は持たず、プロジェクトのリリース識別子とビルド構成だけを扱う。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)CMakeLists\\.txt$" },
+    { "pathPattern": "(^|/)spec/setup/build-options\\.md$" }
+  ],
+  "cardTemplate": "Summarise the release metadata domain: the declared project version and which build options are exposed. Do not describe runtime rendering behavior.",
+  "source": "spec",
+  "mechanics": [
+    "semver-project-version",
+    "build-option-defaults"
+  ],
+  "specRefs": [
+    "spec/setup/build-options.md",
+    "spec/setup/build.md"
+  ],
+  "rationale": "バージョン更新はコード責務を持たない差分で、既存の visus / pipeline-hot-reload ドメインのどちらにも属さない。リリース識別子とビルド構成の境界を独立に宣言することで、version bump が実装ドメインの coupling として計上されるのを防ぐ。C API の互換世代を表す PICTOR_C_API_VERSION は c_api の責務であり、このドメインには含めない。リリース版の正本ファイル .revisor-version は Revisor 所有のローカル状態なので membership に含めない。",
+  "lockedFields": ["*"],
+  "updatedAt": "2026-08-20T00:00:00.000Z"
+}
