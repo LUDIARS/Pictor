@@ -55,6 +55,7 @@ public:
         uint32_t draw_calls          = 0;  ///< 発行した vkCmdDrawIndexed 数
         uint32_t instances           = 0;  ///< 描画インスタンス総数
         uint64_t triangles           = 0;  ///< index_count/3 × instance の総和
+        uint32_t batches_filtered    = 0;  ///< filter_mask の対象外だったバッチ
         uint32_t batches_skipped     = 0;  ///< GPU 実体未解決で skip したバッチ
         uint32_t passes_unimplemented = 0; ///< SHADOW/DEPTH_ONLY (未実装) の遭遇数
         uint32_t passes_not_recorded = 0;  ///< COMPUTE/POST_PROCESS 等 record 対象外

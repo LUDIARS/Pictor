@@ -1,0 +1,17 @@
+{
+  "name": "memory-management",
+  "description": "描画のためのメモリ確保戦略。 フレームアロケータ、 デバイスメモリのプロファイルと予算管理。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/memory/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/memory/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(?:frame_allocator|device_memory_profile|cache_info)_test\\.cpp$"
+    }
+  ]
+}

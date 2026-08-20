@@ -1,0 +1,20 @@
+{
+  "name": "text-rendering",
+  "description": "テキスト描画。 グリフのラスタライズと配置、 ピクセルフォント。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/text/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/text/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)fonts/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/pixel_text_test\\.cpp$"
+    }
+  ]
+}

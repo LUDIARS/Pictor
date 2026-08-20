@@ -256,6 +256,7 @@ struct CompiledPass {
     uint32_t       filter_mask;          // RenderBatch filter
     uint8_t        sort_mode;            // FRONT_TO_BACK / BACK_TO_FRONT / NONE
     uint8_t        pass_type;            // PassType enum を 1 byte で
+    uint16_t       pass_id;              // pass name を compile 時に解決した callback key
     uint8_t        framebuffer_count;    // 1=per-flight, 3=per-swapchain-image
     uint8_t        is_swapchain : 1;
     uint8_t        is_compute   : 1;
@@ -332,6 +333,11 @@ public:
   - `POST_PROCESS`: pass_type は CompiledPass にすでに反映済。 既存 `PostProcessPipeline` の chain 経路を CompiledPass.pipeline + framebuffer で駆動 (互換維持)
   - `COMPUTE`: `vkCmdDispatch(cmd, group_x, group_y, group_z)`、 dispatch サイズは CompiledPass に pre-resolve
   - `CUSTOM`: `ICustomRenderPass*` を CompiledPass に pre-resolve しておき `cp.custom->execute(cmd, frame_ctx)`
+- pass 固有 callback は `CompiledPass::pass_id` を添字にした flat table から選ぶ。複数の COMPUTE pass も per-frame 文字列比較なしで区別する
+  - `pass_id` は **RenderPassRegistry の index** であり graph 内の位置ではない。 registry は profile の superset を保持し得る (profile 切替で同じ registry を使い回す) ため、 table は `passes.size()` ではなく `max(pass_id) + 1` で張る
+  - profile の pass 名が registry に無ければ compile は空 graph を返して失敗する。ID / render pass / framebuffer が欠けた部分 graph は install しない
+  - `RenderPassRegistry` と同じ index 空間を使う `FramebufferRegistry` も `pass_id` で解決する。graph 内位置で引くと subset profile で別 pass の framebuffer が結び付く
+  - table は `set_compiled_graph()` が張り直し、`take_compiled_graph()` が回収時に破棄する (= 登録済み callback は graph の寿命を越えない)。 名前解決 (`RenderPassScheduler::pass_id_of`) も登録も graph 設置後に行う契約。 未設置 / 範囲外 / `INVALID_PASS_ID` への登録は false を返して拒否する (§7.1 サイレント no-op 禁止)
 - `input_textures[]` は compile 時に **per-flight VkDescriptorSet を一括 build**。 hot path は `cp.input_sets[flight]` を bind するだけ。 layout は 1 種類 (sampled image 0..N) を共有
 - `shader_override` は compile 時に `ShaderRegistry::pipeline(handle)` 解決 → `cp.pipeline` に直値
 

@@ -251,8 +251,8 @@ PipelineProfileDef PipelineProfileManager::create_lite_profile() {
     def.render_passes = {
         {"ShadowPass",      PassType::SHADOW,      INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {"bounds", "transforms"}},
         {"DepthPrePass",    PassType::DEPTH_ONLY,   INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"bounds", "transforms"}},
-        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
-        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, RenderBatchFilter::OPAQUE, false, {"transforms", "shaderKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, RenderBatchFilter::TRANSPARENT, false, {"transforms", "sortKeys"}},
         {"PostProcess",     PassType::POST_PROCESS, INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}},
     };
 
@@ -319,9 +319,9 @@ PipelineProfileDef PipelineProfileManager::create_standard_profile() {
         {"GPUCullPass",     PassType::COMPUTE,       INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, true, {"gpu_bounds"}},
         {"ShadowMapGen",    PassType::COMPUTE,       INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {"gpu_bounds", "gpu_transforms"}},
         {"SSAOGen",         PassType::COMPUTE,       INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}},
-        {"OpaquePass",      PassType::OPAQUE,        INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
+        {"OpaquePass",      PassType::OPAQUE,        INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, RenderBatchFilter::OPAQUE, false, {"transforms", "shaderKeys"}},
         {"SkyboxPass",      PassType::CUSTOM,        INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}},
-        {"TransparentPass", PassType::TRANSPARENT,   INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,   INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, RenderBatchFilter::TRANSPARENT, false, {"transforms", "sortKeys"}},
         {"PostProcess",     PassType::POST_PROCESS,  INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}},
     };
 
@@ -406,9 +406,9 @@ PipelineProfileDef PipelineProfileManager::create_ultra_profile() {
         {"ShadowMapGen",    PassType::COMPUTE,       INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {"gpu_bounds", "gpu_transforms"}},
         {"SSAOGen",         PassType::COMPUTE,       INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}},
         {"GIProbePass",     PassType::COMPUTE,       INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {"gpu_transforms"}},
-        {"GBufferPass",     PassType::OPAQUE,        INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, true, {"gpu_transforms", "gpu_material_ids"}},
+        {"GBufferPass",     PassType::OPAQUE,        INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, RenderBatchFilter::OPAQUE, true, {"gpu_transforms", "gpu_material_ids"}},
         {"LightingPass",    PassType::COMPUTE,       INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}},
-        {"TransparentPass", PassType::TRANSPARENT,   INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"gpu_transforms", "sortKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,   INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, RenderBatchFilter::TRANSPARENT, false, {"gpu_transforms", "sortKeys"}},
         {"PostProcess",     PassType::POST_PROCESS,  INVALID_MESH, {}, {}, SortMode::NONE, 0xFFFF, false, {}},
     };
 
@@ -465,8 +465,8 @@ PipelineProfileDef PipelineProfileManager::create_low_profile() {
     def.gi_config.gi_probes_enabled = false;
 
     def.render_passes = {
-        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
-        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, RenderBatchFilter::OPAQUE, false, {"transforms", "shaderKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, RenderBatchFilter::TRANSPARENT, false, {"transforms", "sortKeys"}},
         {"PostProcess",     PassType::POST_PROCESS, INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {}},
     };
 
@@ -611,8 +611,8 @@ PipelineProfileDef PipelineProfileManager::create_mobile_low_profile() {
 
     // Minimal render passes — single forward pass + tonemap
     def.render_passes = {
-        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
-        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, RenderBatchFilter::OPAQUE, false, {"transforms", "shaderKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, RenderBatchFilter::TRANSPARENT, false, {"transforms", "sortKeys"}},
         {"PostProcess",     PassType::POST_PROCESS, INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {}},
     };
 
@@ -667,8 +667,8 @@ PipelineProfileDef PipelineProfileManager::create_mobile_high_profile() {
     def.render_passes = {
         {"ShadowPass",      PassType::SHADOW,       INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {"bounds", "transforms"}},
         {"DepthPrePass",    PassType::DEPTH_ONLY,   INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"bounds", "transforms"}},
-        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, 0xFFFF, false, {"transforms", "shaderKeys"}},
-        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, 0xFFFF, false, {"transforms", "sortKeys"}},
+        {"OpaquePass",      PassType::OPAQUE,       INVALID_MESH, {}, {}, SortMode::FRONT_TO_BACK, RenderBatchFilter::OPAQUE, false, {"transforms", "shaderKeys"}},
+        {"TransparentPass", PassType::TRANSPARENT,  INVALID_MESH, {}, {}, SortMode::BACK_TO_FRONT, RenderBatchFilter::TRANSPARENT, false, {"transforms", "sortKeys"}},
         {"PostProcess",     PassType::POST_PROCESS, INVALID_MESH, {}, {}, SortMode::NONE,          0xFFFF, false, {}},
     };
 

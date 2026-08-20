@@ -1,0 +1,26 @@
+{
+  "name": "shading-materials",
+  "description": "マテリアルとシェーダの正本。 マテリアル定義、 シェーダレジストリ、 シェーダソースのビルド。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/material/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/material/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/shader/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/shader/[^/]+$"
+    },
+    {
+      "pathPattern": "^shaders/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_shader_registry_test\\.cpp$"
+    }
+  ]
+}

@@ -364,6 +364,21 @@ namespace ShaderKey {
 // Render Batch
 // ============================================================
 
+/// Bit values consumed by RenderPassDef::filter_mask / CompiledPass::filter_mask
+/// (`spec/feature/pipeline-profile-config.md` §render_passes[].filter_mask)。
+/// A batch belongs to exactly one transparency category — BatchBuilder keeps
+/// the two apart even when shader/material keys match (§6.1)。
+namespace RenderBatchFilter {
+    constexpr uint16_t OPAQUE      = 1u << 0;
+    constexpr uint16_t TRANSPARENT = 1u << 1;
+    constexpr uint16_t ALL         = 0xFFFFu;
+
+    /// Map `RenderBatch::transparency` to the single bit that pass masks test.
+    constexpr uint16_t from_transparency(uint8_t transparency) {
+        return transparency ? TRANSPARENT : OPAQUE;
+    }
+}
+
 struct RenderBatch {
     uint64_t sortKey       = 0;
     uint32_t startIndex    = 0;
@@ -371,6 +386,9 @@ struct RenderBatch {
     uint64_t shaderKey     = 0;
     uint32_t materialKey   = 0;
     MeshHandle mesh        = INVALID_MESH;
+    /// 0 = opaque, 1 = transparent. Kept numeric to match the sort-key field
+    /// (`RadixSort::transparency_of(sortKey)` と常に一致する — bits 59-56)。
+    uint8_t transparency   = 0;
 };
 
 // ============================================================

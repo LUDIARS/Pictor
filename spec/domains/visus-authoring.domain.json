@@ -1,0 +1,17 @@
+{
+  "name": "visus-authoring",
+  "description": "Visus (カスタムシェーダ記述) の取り扱い。 シリアライズ、 実体化 (instantiate)、 パーサの堅牢性。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/visus/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/visus/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(?:visus_instantiator|visus_serializer|parser_dos)_test\\.cpp$"
+    }
+  ]
+}

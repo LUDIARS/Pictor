@@ -1,0 +1,14 @@
+{
+  "name": "asset-data",
+  "description": "描画データの読み込みと表現。 メッシュ/テクスチャ等の資産データ構造と入出力。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/data/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/data/[^/]+$"
+    }
+  ]
+}

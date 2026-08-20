@@ -1,0 +1,14 @@
+{
+  "name": "webgl-backend",
+  "description": "WebGL 向けバックエンド。 ブラウザ実行時の描画経路。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/webgl/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/webgl/[^/]+$"
+    }
+  ]
+}

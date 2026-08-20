@@ -1,0 +1,14 @@
+{
+  "name": "vector-graphics",
+  "description": "ベクタ図形の描画。 パスの塗り/線と、 Rive 等ベクタ資産の取り込み。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/vector/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/vector/[^/]+$"
+    }
+  ]
+}

@@ -94,7 +94,9 @@ struct RenderPassDef {
     std::vector<std::string> render_targets;
     std::vector<std::string> input_textures;
     SortMode                sort_mode        = SortMode::FRONT_TO_BACK;
-    uint16_t                filter_mask      = 0xFFFF;
+    /// RenderBatchFilter bit set. Built-in opaque/transparent passes use one
+    /// category each; ALL remains the custom-pass compatibility default.
+    uint16_t                filter_mask      = RenderBatchFilter::ALL;
     bool                    gpu_driven_pass  = false;
     std::vector<std::string> required_streams; // prefetch hints
 

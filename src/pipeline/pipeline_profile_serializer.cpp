@@ -674,6 +674,7 @@ bool parse_render_pass(Parser& pr, RenderPassDef& out) {
         } else if (key == "filter_mask") {
             uint64_t v;
             if (!p.parse_uint_field(v)) return false;
+            if (v > std::numeric_limits<uint16_t>::max()) return false;
             out.filter_mask = static_cast<uint16_t>(v);
             return true;
         } else if (key == "gpu_driven_pass") {

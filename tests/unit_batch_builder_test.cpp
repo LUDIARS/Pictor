@@ -72,6 +72,29 @@ int main() {
     PT_ASSERT_OP(stats.total_objects, ==, registry.total_object_count(),
                  "stats.total_objects == registry count (no double add)");
 
+    // Transparency is a batch boundary even when shader/material keys match.
+    // Otherwise one RenderBatch cannot be filtered safely into opaque and
+    // transparent passes.
+    {
+        SceneRegistry split_registry(memory);
+        BatchBuilder split_builder(split_registry);
+        split_registry.register_object(make_desc(ObjectFlags::STATIC, 0xEULL << 48, 7));
+        split_registry.register_object(make_desc(
+            ObjectFlags::STATIC | ObjectFlags::TRANSPARENT, 0xEULL << 48, 7));
+        allocator.reset();
+        split_builder.invalidate_all();
+        split_builder.build(allocator);
+
+        uint32_t opaque_batches = 0;
+        uint32_t transparent_batches = 0;
+        for (const RenderBatch& batch : split_builder.batches()) {
+            if (batch.transparency) transparent_batches++;
+            else opaque_batches++;
+        }
+        PT_ASSERT_OP(opaque_batches, ==, 1u, "opaque batch kept separate");
+        PT_ASSERT_OP(transparent_batches, ==, 1u, "transparent batch kept separate");
+    }
+
     // ---- sorted_indices: dynamic が空のフレームで stale ポインタを返さない (M-5) ----
     // dynamic オブジェクトを消してから build — 前フレームの frame メモリを
     // 指したままにならないこと。
