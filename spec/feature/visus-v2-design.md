@@ -73,6 +73,7 @@
 | `shader.key_override` | number | `shader_key_override` | CUSTOM kind の shaderKey 下位ビット |
 | `shader` | string / object | `shader_stages` | CUSTOM kind のシェーダ参照 (§2.3 の 3 形式) |
 | `shader.vertex_layout` | object | `shader_stages.vertex_layout` | CUSTOM kind の頂点入力 (§6.2 形式そのまま) |
+| `material.<slot>` | string | 非 model の `materials[].{slot,resource}` | v1 読込互換用。空 slot は `material` |
 | `texture.<slot>` | string | `textures[].{slot,resource}` | part または visus 直下のテクスチャ (slot = uniform 名) |
 | `rive.artboard` / `text.default` | string | `rive_artboard` / `text_default` | kind 固有 |
 | `scale.target_height` | number | (KS `register_model` 第 5 引数) | モデル正規化高さ |
@@ -139,7 +140,7 @@ struct VisusDesc {
 ### 3.3 シリアライザ
 
 - `to_visus_json` は **v2 のみ**出力。
-- `from_visus_json` は `version: 1` を受けたら §2.2 の表で v2 に**変換して読む** (materials/textures → `texture.*` metadata、handle 文字列は捨てる、`shader_stages` → kind=custom の `metadata["shader"]` STAGES)。変換時は `error` ではなく `warnings` (新 out パラメータ) に `"v1 converted"` を積む。
+- `from_visus_json` は `version: 1` を受けたら §2.2 の表で v2 に**変換して読む** (model の materials → `parts`、非 model の materials → `material.*` metadata、textures → `texture.*` metadata、handle 文字列は捨てる、`shader_stages` → kind=custom の `metadata["shader"]` STAGES)。変換時は `error` ではなく `warnings` (新 out パラメータ) に `"v1 converted"` を積む。
 - `tools/visus_migrate` (小 CLI): ディレクトリ内の v1 を v2 へ書き戻す。KS `data/visus/` 9 本の移行に使う。
 - 手書きパーサ方針は維持 (外部依存なし)。`unit_parser_dos_test` に深さ/サイズ上限を v2 の `metadata` 再帰にも適用する。
 

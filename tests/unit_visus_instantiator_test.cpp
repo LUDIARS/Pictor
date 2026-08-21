@@ -1,125 +1,71 @@
-/// VisusDesc → SceneRegistry 経由で N 個の ObjectDescriptor を発行する slot 展開テスト。
+/// VisusDesc (v2) metadata -> ObjectDescriptor 共通フィールド。
+/// handle 解決 / SceneRegistry 登録 / children 再帰は task 2 (VisusRuntime) で追加する。
 
 #include "pictor/visus/visus.h"
-#include "pictor/visus/visus_registry.h"
 #include "pictor/visus/visus_instantiator.h"
-#include "pictor/scene/scene_registry.h"
-#include "pictor/memory/memory_subsystem.h"
 #include "test_common.h"
 
 using namespace pictor;
 using namespace pictor_test;
 
 int main() {
-    MemorySubsystem memory;
-    SceneRegistry   scene(memory);
+    const float4x4 xf = float4x4::identity();
+    const AABB     bb = {{0, 0, 0}, {1, 1, 1}};
 
-    // 1. materials が空 → 1 個だけ発行、 material は INVALID_MATERIAL。
+    // 1. metadata 無しは v1 既定値 (DYNAMIC / layer 0 / lod 0)。
     {
         VisusDesc d;
-        d.name          = "empty_mat";
-        d.geometry_kind = VisusGeometryKind::PRIMITIVE;
-        d.mesh          = 42;
-        d.default_flags = ObjectFlags::STATIC;
-        d.layer         = 1;
-        d.initial_lod   = 3;
+        d.name = "empty_parts";
+        d.kind = VisusKind::PRIMITIVE;
 
-        const float4x4 xf = float4x4::identity();
-        const AABB     bb = {{0, 0, 0}, {1, 1, 1}};
+        const ObjectDescriptor base = visus_base_descriptor(d, xf, bb);
+        PT_ASSERT_OP(base.flags, ==, ObjectFlags::set_layer(ObjectFlags::DYNAMIC, 0), "default flags");
+        PT_ASSERT_OP(base.lodLevel, ==, 0, "default lod");
+        PT_ASSERT_OP(base.shaderKey, ==, uint64_t{0}, "default shaderKey");
 
-        auto ids = instantiate_visus(scene, d, xf, bb);
-        PT_ASSERT_OP(ids.size(), ==, size_t{1}, "no materials -> 1 ObjectDescriptor");
-
-        auto loc = scene.find_object(ids[0]);
-        PT_ASSERT(loc.valid, "registered object is locatable");
     }
 
-    // 2. materials が 3 個 → 3 個発行、 各 ObjectDescriptor は別 material handle 持つ。
+    // 2. metadata の render.* が反映される。
     {
         VisusDesc d;
-        d.name          = "multi_slot";
-        d.geometry_kind = VisusGeometryKind::MODEL;
-        d.mesh          = 7;
-        d.default_flags = ObjectFlags::DYNAMIC;
+        d.name = "multi_part";
+        d.kind = VisusKind::MODEL;
+        d.metadata.set(visus_keys::kRenderFlags, static_cast<int>(ObjectFlags::STATIC));
+        d.metadata.set(visus_keys::kRenderLayer, 2);
+        d.metadata.set(visus_keys::kRenderLod, 3);
+        d.metadata.set(visus_keys::kShaderKeyOverride, 77);
 
-        for (uint32_t i = 0; i < 3; ++i) {
-            VisusMaterialSlot s;
-            s.slot_name = "slot" + std::to_string(i);
-            s.material  = 100 + i;
-            d.materials.push_back(s);
-        }
+        const ObjectDescriptor base = visus_base_descriptor(d, xf, bb);
+        PT_ASSERT_OP(base.flags, ==, ObjectFlags::set_layer(ObjectFlags::STATIC, 2), "render.flags/layer applied");
+        PT_ASSERT_OP(base.lodLevel, ==, 3, "render.lod applied");
+        PT_ASSERT_OP(base.shaderKey, ==, uint64_t{77}, "shader.key_override applied");
 
-        const float4x4 xf = float4x4::identity();
-        const AABB     bb = {{-1, -1, -1}, {1, 1, 1}};
-
-        auto ids = instantiate_visus(scene, d, xf, bb);
-        PT_ASSERT_OP(ids.size(), ==, size_t{3}, "3 slots -> 3 ObjectDescriptors");
-
-        // ids が一意 (slot ごとに別 ObjectId が降る)
-        PT_ASSERT(ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2],
-                  "distinct ObjectIds per slot");
     }
 
-    // 3b. CUSTOM kind の VisusDesc は desc.shader を ObjectDescriptor に
-    //     伝播する (customShader フィールド + shaderKey 上位ビット)。
+    // 3. 不正な metadata (負数 / 小数 / 範囲外) は既定値へ落ちる。
     {
         VisusDesc d;
-        d.name          = "custom_obj";
-        d.geometry_kind = VisusGeometryKind::CUSTOM;
-        d.mesh          = 11;
-        d.shader        = 5;   // ShaderRegistry の handle 想定
-
-        const float4x4 xf = float4x4::identity();
-        const AABB     bb = {{0, 0, 0}, {1, 1, 1}};
-
-        auto ids = instantiate_visus(scene, d, xf, bb);
-        PT_ASSERT_OP(ids.size(), ==, size_t{1}, "CUSTOM with no materials -> 1");
-
-        auto loc = scene.find_object(ids[0]);
-        PT_ASSERT(loc.valid, "CUSTOM object locatable");
-
-        // ShaderKey ヘルパーの round-trip
-        uint64_t key = ShaderKey::with_custom_shader(0, 5);
-        PT_ASSERT(ShaderKey::is_custom(key), "shaderKey carries CUSTOM flag");
-        PT_ASSERT_OP(ShaderKey::custom_shader(key), ==, ShaderHandle{5},
-                     "shaderKey decodes the shader handle");
+        d.name = "bad_meta";
+        d.metadata.set(visus_keys::kRenderFlags, 2.5);
+        d.metadata.set(visus_keys::kRenderLod, -5);
+        d.metadata.set(visus_keys::kRenderLayer, 4);
+        d.metadata.set(visus_keys::kShaderKeyOverride, 1e300);
+        const ObjectDescriptor base = visus_base_descriptor(d, xf, bb);
+        PT_ASSERT_OP(base.flags, ==, ObjectFlags::set_layer(ObjectFlags::DYNAMIC, 0), "fractional flags -> default");
+        PT_ASSERT_OP(base.lodLevel, ==, 0, "negative lod -> default");
+        PT_ASSERT_OP(base.shaderKey, ==, uint64_t{0}, "out-of-range shader key -> default");
     }
 
-    // 3c. 非 CUSTOM kind は shader が立っていても customShader を引かない。
+    // 4. shader.key_override は予約済み custom-shader ビットを設定できない。
     {
         VisusDesc d;
-        d.name          = "primitive_obj";
-        d.geometry_kind = VisusGeometryKind::PRIMITIVE;
-        d.mesh          = 12;
-        d.shader        = 7;   // ignored: kind != CUSTOM
-
-        const float4x4 xf = float4x4::identity();
-        const AABB     bb = {{0, 0, 0}, {1, 1, 1}};
-        auto ids = instantiate_visus(scene, d, xf, bb);
-        PT_ASSERT_OP(ids.size(), ==, size_t{1}, "PRIMITIVE -> 1 object");
-
-        uint64_t plain = ShaderKey::with_custom_shader(0, INVALID_SHADER);
-        PT_ASSERT(!ShaderKey::is_custom(plain),
-                  "INVALID_SHADER does not set the CUSTOM flag");
-    }
-
-    // 3. VisusRegistry に登録 → handle 単調増加 + get で復元できる。
-    {
-        VisusRegistry reg;
-        VisusDesc a; a.name = "a";
-        VisusDesc b; b.name = "b";
-
-        VisusHandle ha = reg.register_visus(a);
-        VisusHandle hb = reg.register_visus(b);
-        PT_ASSERT_OP(ha, ==, 0u, "first handle is 0");
-        PT_ASSERT_OP(hb, ==, 1u, "second handle is 1");
-        PT_ASSERT_OP(reg.count(), ==, size_t{2}, "registry size matches");
-
-        const VisusDesc* got = reg.get(ha);
-        PT_ASSERT(got != nullptr, "get returns non-null");
-        PT_ASSERT(got->name == "a", "get returns the right entry");
-
-        PT_ASSERT(reg.get(99) == nullptr, "out-of-range handle returns nullptr");
+        d.name = "reserved_shader_bits";
+        d.metadata.set(visus_keys::kShaderKeyOverride,
+                       static_cast<double>(ShaderKey::CUSTOM_FLAG));
+        const ObjectDescriptor base = visus_base_descriptor(d, xf, bb);
+        PT_ASSERT_OP(base.shaderKey, ==, uint64_t{0}, "reserved shader bits -> default");
+        PT_ASSERT(!ShaderKey::is_custom(base.shaderKey),
+                  "metadata cannot synthesize a custom shader handle");
     }
 
     return report("unit_visus_instantiator_test");

@@ -1,163 +1,123 @@
 #pragma once
 
-#include "pictor/core/types.h"
-#include "pictor/data/model_data_types.h"  // ModelHandle
+#include "pictor/visus/visus_metadata.h"
 
 #include <cstdint>
-#include <limits>
 #include <string>
-#include <utility>
+#include <string_view>
 #include <vector>
 
 namespace pictor {
 
 // ============================================================
-// Visus — render-object definition
+// Visus v2 — メタデータ駆動の描画定義
 // ============================================================
-// Material 「より大きい」 描画定義。
+// `spec/feature/visus-v2-design.md`。
 //
-//   Texture / Mesh / Shader / Model     ← raw resource
-//           ↓
-//   MaterialDesc (texture + scalar + per-pass variants)
-//           ↓
-//   VisusDesc (geometry + material slot + animation default + render hint)
-//           ↓
-//   ObjectDescriptor (instance: VisusDesc を transform + bounds で具現化)
+// Visus は「ファイル上の定義」であり、 Pictor 内の handle や上位
+// (Ergo / ゲーム) 側のオブジェクトと同一性を保証できない。 よって
+// Visus が持つ identity は `name` のみ。 それ以外の値は `metadata`
+// (key → JSON 値) として保持し、 解釈はホストに委ねる。 Pictor は
+// 規約 key (§2.2) を文書化するだけで構造を強制しない。
 //
-// VisusDesc 自身は instance 情報 (transform / bounds) を持たない。
-// 同じ VisusDesc を 1:N でインスタンス化できるよう、 register 時に
-// 外から transform / bounds を与える設計 (`instantiate_visus`)。
-//
-// Ergo 側プラグインは各プロジェクトの `assets/visus/*.visus.json` を
-// scan し、 material / texture registry と組み合わせて GUI 編集する。
-
-using VisusHandle = uint32_t;
-constexpr VisusHandle INVALID_VISUS = std::numeric_limits<uint32_t>::max();
+// typed フィールドは name / kind / asset / parts / children / metadata
+// の 6 つ。 解決済み handle は JSON に書かず、 実行時 side-table
+// (VisusRuntime、 task 2) にのみ置く。
 
 // ============================================================
-// VisusGeometryKind
+// VisusKind
 // ============================================================
-// kind に応じて VisusDesc 内のどのフィールドが使われるかが決まる。
 
-enum class VisusGeometryKind : uint8_t {
+enum class VisusKind : uint8_t {
     NONE      = 0,
-    PRIMITIVE = 1,  // 単一 MeshHandle (旧 MESH)
-    MODEL     = 2,  // ModelHandle (skin mesh + rig + clips)
-    RIVE      = 3,  // .riv (ベクター)
-    UI        = 4,  // 2D / screen overlay
-    PARTICLE  = 5,  // particle system
-    TEXT      = 6,  // text overlay (string + font + style)
-    CUSTOM    = 7   // shader override / decal / その他
+    MODEL     = 1,  // fbx 等 (skin mesh + rig + clips)。 parts[] でパーツ別シェーダ
+    RIVE      = 2,  // .riv
+    PRIMITIVE = 3,  // 単一 mesh
+    CUSTOM    = 4,  // カスタムシェーダ定義 (metadata["shader"])
+    UI        = 5,
+    PARTICLE  = 6,
+    TEXT      = 7,
+    GROUP     = 8   // asset 無し、 children だけを束ねる
 };
 
-// ============================================================
-// ResourceRef — local 参照 + 任意のネットワーク取得設定
-// ============================================================
-// 実際の HTTP は Pictor が持たない (`IResourceLoader` を呼び出し側が
-// 注入)。 個人データ非保管ルールに従い、 `headers` には credential を
-// 直書きせず `"${env:CDN_TOKEN}"` のような env template のみを置く。
-
-struct ResourceRef {
-    // ---- Local source ----
-    std::string local_path;            // visus file 起点の相対 or 絶対
-
-    // ---- Remote source (任意) ----
-    std::string remote_url;            // 空 = ローカルのみ
-    std::string sha256;                // 完整性検証 (空ならスキップ)
-    uint64_t    size_bytes  = 0;       // 進捗ヒント (0 = 不明)
-
-    enum class FetchPolicy : uint8_t {
-        LOCAL_ONLY   = 0,
-        CACHE_FIRST  = 1,              // ローカル無ければ DL
-        REVALIDATE   = 2,              // sha256 / mtime 不一致なら再 DL
-        ALWAYS_FETCH = 3
-    };
-    FetchPolicy fetch_policy = FetchPolicy::CACHE_FIRST;
-
-    // env template のみ ("${env:NAME}")。 リテラル credential は禁止
-    // ([[project_personal_data_rule]])。
-    std::vector<std::pair<std::string, std::string>> headers;
-
-    bool empty() const { return local_path.empty() && remote_url.empty(); }
-};
+const char* visus_kind_to_str(VisusKind k);
+VisusKind   visus_kind_from_str(std::string_view s);
 
 // ============================================================
-// VisusMaterialSlot — material slot 割当
+// VisusShaderRef — シェーダ参照 (§2.3)
 // ============================================================
-// `slot_name` は ModelDescriptor::material_slots に対応。 PRIMITIVE の
-// ような単一 mesh ケースでは空文字でよい。 `material_resource` を埋め
-// ておけば起動時に material JSON を pull → MaterialRegistry に登録。
+// いずれも名前かパスで、 handle は使わない。
+//   BUILTIN : "builtin:<name>"   ホスト組込み pipeline (既定 "pbr")
+//   STAGES  : { "vert": path, "frag": path, "comp"?: path }  SPIR-V 直指定
+//   VISUS   : "visus:<name>"     kind=custom の別 Visus をシェーダ定義として参照
 
-struct VisusMaterialSlot {
-    std::string    slot_name;
-    MaterialHandle material = INVALID_MATERIAL;
-    ResourceRef    material_resource;
-};
+struct VisusShaderRef {
+    enum class Kind : uint8_t { BUILTIN = 0, STAGES = 1, VISUS = 2 };
 
-// ============================================================
-// VisusTextureSlot — material を経由しない直アサイン
-// ============================================================
-// CUSTOM shader 等で個別の sampler に直接バインドしたい場合に使う。
+    Kind        kind = Kind::BUILTIN;
+    std::string name = "pbr";   // BUILTIN / VISUS
+    std::string vert;           // STAGES
+    std::string frag;           // STAGES
+    std::string comp;           // STAGES (任意)
 
-struct VisusTextureSlot {
-    std::string   slot_name;            // shader uniform 名
-    TextureHandle texture = INVALID_TEXTURE;
-    ResourceRef   texture_resource;
-};
+    static VisusShaderRef builtin(std::string name = "pbr");
+    static VisusShaderRef stages(std::string vert, std::string frag, std::string comp = {});
+    static VisusShaderRef visus(std::string name);
 
-// ============================================================
-// VisusShaderStages — CUSTOM kind 用のシェーダステージ集合
-// ============================================================
-// `VisusDesc::asset` はシェーダ「ファイル」を 1 つしか指せず、 pipeline は
-// 最低 vert+frag を要するため CUSTOM kind では不足する。 本構造体は
-// stage ごとに ResourceRef を分けて持つ
-// (`spec/rendering-extensibility-design.md` §2 phase 1)。
-//
-//   vert / frag : graphics pipeline 用 (両方必須)
-//   comp        : compute pipeline 用 (vert/frag と排他、 空でよい)
-//
-// phase 1 は固定 vert+frag のみを描画に配線する。 comp は将来用に
-// シリアライズだけ通す (phase 2)。
-//
-// パスは compiled SPIR-V (`.spv`) を指す。 GLSL ソースのコンパイルは
-// Pictor の責務ではない (ホスト / ビルドステップが行う)。
-
-struct VisusShaderStages {
-    ResourceRef vert;   // vertex stage SPIR-V
-    ResourceRef frag;   // fragment stage SPIR-V
-    ResourceRef comp;   // compute stage SPIR-V (phase 2、 vert/frag と排他)
-
-    /// mesh 駆動の頂点入力レイアウト
-    /// (`spec/rendering-extensibility-design.md` §6.2 phase 2)。
-    /// 空のとき pipeline は頂点入力空 = phase 1 互換 (`gl_VertexIndex`
-    /// 駆動)。 非空なら vert シェーダが mesh の頂点バッファを読む。
-    VertexLayout vertex_layout;
-
-    bool empty() const {
-        return vert.empty() && frag.empty() && comp.empty() &&
-               vertex_layout.empty();
+    bool is_default_builtin() const { return kind == Kind::BUILTIN && name == "pbr"; }
+    bool has_graphics_stages() const {
+        return kind == Kind::STAGES && !vert.empty() && !frag.empty();
     }
 
-    /// 固定 vert+frag の graphics pipeline として使えるか (phase 1 の判定)。
-    bool has_graphics_stages() const { return !vert.empty() && !frag.empty(); }
+    bool operator==(const VisusShaderRef& o) const {
+        return kind == o.kind && name == o.name && vert == o.vert &&
+               frag == o.frag && comp == o.comp;
+    }
+    bool operator!=(const VisusShaderRef& o) const { return !(*this == o); }
+};
+
+/// JSON 値 (string "builtin:x" / "visus:x" / object {vert,frag,comp}) →
+/// VisusShaderRef。 解釈不能なら false (out は不変)。
+bool visus_shader_ref_from_value(const VisusValue& v, VisusShaderRef& out);
+
+/// VisusShaderRef → JSON 値 (上の逆)。
+VisusValue visus_shader_ref_to_value(const VisusShaderRef& ref);
+
+// ============================================================
+// VisusPart — kind=model の fbx 内パーツ → シェーダ
+// ============================================================
+// `part` は fbx 内部のパーツ名 (ホスト側の draw part 名 / material slot
+// 名)。 "*" は既定 (未列挙パーツ)。
+
+struct VisusPart {
+    std::string    part;
+    VisusShaderRef shader;
+    VisusMetadata  metadata;   // texture.<slot> 等
+
+    bool is_wildcard() const { return part == "*"; }
 };
 
 // ============================================================
-// VisusAnimationDefault — 起動直後に走らせる default アニメ
+// VisusAttach / VisusChildRef — 入れ子 Visus (§2.4)
 // ============================================================
 
-struct VisusAnimationDefault {
-    enum class Kind : uint8_t {
-        NONE                = 0,
-        CLIP                = 1,
-        STATE_MACHINE       = 2,
-        RIVE_ANIMATION      = 3,
-        RIVE_STATE_MACHINE  = 4
-    };
-    Kind        kind  = Kind::NONE;
-    std::string name;             // clip / SM 名 (handle 解決前)
-    bool        loop  = true;
-    float       speed = 1.0f;
+struct VisusAttach {
+    std::string bone;              // 親 kind=model のときだけ有効
+    float       offset[3] = {0.0f, 0.0f, 0.0f};
+
+    bool has_bone() const { return !bone.empty(); }
+    bool has_offset() const {
+        return offset[0] != 0.0f || offset[1] != 0.0f || offset[2] != 0.0f;
+    }
+};
+
+struct VisusChildRef {
+    std::string   visus;           // 子 Visus 名 (同カタログ) または visus ファイル相対パス
+    VisusAttach   attach;
+    VisusMetadata metadata;
+
+    /// パス参照か (".visus.json" で終わる、 または '/' を含む)。
+    bool is_path_ref() const;
 };
 
 // ============================================================
@@ -165,49 +125,37 @@ struct VisusAnimationDefault {
 // ============================================================
 
 struct VisusDesc {
-    // ---- Identity ----
-    std::string name;
-    VisusGeometryKind geometry_kind = VisusGeometryKind::NONE;
+    std::string                name;     // 唯一の identity
+    VisusKind                  kind = VisusKind::NONE;
+    std::string                asset;    // kind に応じた主アセット (visus ファイル起点の相対 or 絶対)
+    std::vector<VisusPart>     parts;    // kind=model
+    std::vector<VisusChildRef> children;
+    VisusMetadata              metadata;
 
-    // ---- Main asset (kind によって意味が変わる) ----
-    //   PRIMITIVE : mesh file       MODEL : model file       RIVE : .riv
-    //   UI        : overlay def     PARTICLE : system def    TEXT : font
-    //   CUSTOM    : shader file
-    ResourceRef asset;
-
-    // ---- Kind-specific extras ----
-    std::string rive_artboard;          // RIVE only (空 = default)
-    std::string text_default;           // TEXT only (default 表示文字列)
-
-    // ---- CUSTOM kind: shader stages (vert/frag/comp) ----
-    // CUSTOM kind では `asset` (単一ファイル) ではなくこちらを使う。
-    // `shader_stages.has_graphics_stages()` が真なら固定 vert+frag の
-    // カスタムシェーダ pipeline で描画される (PBR 経路をバイパス)。
-    VisusShaderStages shader_stages;
-
-    // ---- Resolved handles (loader が埋める / 直アサインも可) ----
-    MeshHandle    mesh           = INVALID_MESH;     // PRIMITIVE
-    ModelHandle   model          = INVALID_MODEL;    // MODEL
-    ShaderHandle  shader         = INVALID_MESH;     // CUSTOM
-    uint32_t      generic_handle = 0;                // RIVE/UI/PARTICLE/TEXT
-
-    // ---- Materials (1 slot = 1 ObjectDescriptor) ----
-    std::vector<VisusMaterialSlot> materials;
-
-    // ---- Direct texture override (material 非経由) ----
-    std::vector<VisusTextureSlot> textures;
-
-    // ---- Pass / render hint ----
-    uint16_t  default_flags = ObjectFlags::DYNAMIC;   // STATIC/TRANSPARENT/...
-    uint16_t  layer         = 0;                       // 2-bit, ObjectFlags::set_layer 用
-    PoolType  pool_hint     = PoolType::DYNAMIC;
-    uint8_t   initial_lod   = 0;
-
-    // ---- Animation default ----
-    VisusAnimationDefault animation_default;
-
-    // ---- Shader key override (CUSTOM kind / decal 用) ----
-    uint64_t shader_key_override = 0;
+    /// `part` 名に一致する VisusPart。 無ければ "*" エントリ、 それも無ければ nullptr。
+    const VisusPart* find_part(std::string_view part) const;
 };
+
+// 規約 key (§2.2)。 ホスト側の読み合わせ用。 Pictor は強制しない。
+namespace visus_keys {
+inline constexpr const char* kAnimationDefault   = "animation.default";
+inline constexpr const char* kAnimationKind      = "animation.kind";
+inline constexpr const char* kAnimationLoop      = "animation.loop";
+inline constexpr const char* kAnimationSpeed     = "animation.speed";
+inline constexpr const char* kAnimationClips     = "animation.clips";
+inline constexpr const char* kRenderFlags        = "render.flags";
+inline constexpr const char* kRenderLayer        = "render.layer";
+inline constexpr const char* kRenderPool         = "render.pool";
+inline constexpr const char* kRenderLod          = "render.lod";
+inline constexpr const char* kShader             = "shader";
+inline constexpr const char* kShaderKeyOverride  = "shader.key_override";
+inline constexpr const char* kShaderVertexLayout = "shader.vertex_layout";
+inline constexpr const char* kMaterial           = "material";
+inline constexpr const char* kMaterialPrefix     = "material.";
+inline constexpr const char* kTexturePrefix      = "texture.";
+inline constexpr const char* kRiveArtboard       = "rive.artboard";
+inline constexpr const char* kTextDefault        = "text.default";
+inline constexpr const char* kScaleTargetHeight  = "scale.target_height";
+} // namespace visus_keys
 
 } // namespace pictor
