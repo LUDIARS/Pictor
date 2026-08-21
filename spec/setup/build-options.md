@@ -7,8 +7,8 @@
 | オプション | 既定 | 効果 | 例 / 根拠 |
 |---|---|---|---|
 | `PICTOR_BUILD_DEMO` | `ON` | デモ + ベンチマーク群をビルド。ウィンドウデモは Vulkan + GLFW 必須 | `-DPICTOR_BUILD_DEMO=OFF` / `:8` |
-| `PICTOR_BUILD_TOOLS` | `OFF` | 開発者ツール target (feature-selector 等) を有効化。`pictor` ライブラリサイズには影響しない | `-DPICTOR_BUILD_TOOLS=ON` / `:9,573` |
-| `PICTOR_BUILD_TESTS` | `ON` | headless テストスイート (CTest) をビルド (非モバイルのみ) | `-DPICTOR_BUILD_TESTS=OFF` / `:10,557` |
+| `PICTOR_BUILD_TOOLS` | `OFF` | 開発者ツール target (feature-selector / `visus_migrate` 等) を有効化。`visus_migrate` は別 executable で、`pictor` ライブラリサイズには影響しない | `-DPICTOR_BUILD_TOOLS=ON` / `:9,780` |
+| `PICTOR_BUILD_TESTS` | `ON` | headless テストスイート (CTest) をビルド (非モバイルのみ)。CI compile coverage のため `visus_migrate` CLI target も有効化 | `-DPICTOR_BUILD_TESTS=OFF` / `:10,757,780` |
 | `PICTOR_ENABLE_PROFILER` | `ON` | 組込みプロファイラを有効化 → define `PICTOR_PROFILER_ENABLED=1` | `-DPICTOR_ENABLE_PROFILER=OFF` / `:11,246` |
 | `PICTOR_USE_LARGE_PAGES` | `OFF` | ラージページ確保を有効化 → define `PICTOR_LARGE_PAGES=1` (PRIVATE) | `-DPICTOR_USE_LARGE_PAGES=ON` / `:12,250` |
 | `PICTOR_BUILD_WEBGL` | `OFF` | WebGL2 バックエンド (別ライブラリ `pictor_webgl`) をビルド。Emscripten 前提 | `-DPICTOR_BUILD_WEBGL=ON` / `:13,390` |

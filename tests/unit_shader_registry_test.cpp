@@ -19,6 +19,22 @@ int main() {
     }
 #endif
 
+    // 0b. build target の無効化はどの backend でも安全に呼べる。 Vulkan 有効時
+    //     のみ実体があり、 未 build の registry でも副作用なく呼べること
+    //     (ホストは render pass 破棄前に無条件で呼ぶ)。
+#ifdef PICTOR_HAS_VULKAN
+    {
+        ShaderRegistry reg;
+        reg.invalidate_build_target();
+        PT_ASSERT(!reg.is_built(), "invalidate on a never-built registry stays unbuilt");
+        // build target を失った registry は未 build 扱いなので、 rebuild は
+        // dangling handle に触れず no-op success で戻る。 ホストは新しい
+        // render pass で build_pipelines() を呼び直す。
+        PT_ASSERT(reg.rebuild_pipelines(),
+                  "unbuilt registry rebuild is still a no-op success");
+    }
+#endif
+
     // 1. vert+frag が揃った定義は登録でき、 handle が 0 始まりの連番。
     {
         ShaderRegistry reg;

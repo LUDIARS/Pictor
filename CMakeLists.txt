@@ -142,6 +142,9 @@ add_library(pictor STATIC
     src/visus/visus_serializer.cpp
     src/visus/visus_v1_compat.cpp
     src/visus/visus_catalog.cpp
+    src/visus/visus_shader_package.cpp
+    src/visus/visus_package_serializer.cpp
+    src/visus/visus_package_catalog.cpp
     src/visus/visus_runtime.cpp
     src/visus/visus_instantiator.cpp
     src/visus/visus_migrate.cpp
@@ -757,20 +760,23 @@ if(PICTOR_BUILD_TESTS AND NOT PICTOR_MOBILE)
 endif()
 
 # ─── Developer tools (opt-in) ────────────────────────────────────────
-# Exposes custom targets under tools/ — purely developer conveniences,
-# no compilation, no impact on libpictor size. When PICTOR_BUILD_TOOLS=ON
-# the available targets are:
+# Exposes developer conveniences under tools/. The feature-selector targets
+# do not add code to libpictor; visus_migrate is a separate small executable.
+# When PICTOR_BUILD_TOOLS=ON the available targets include:
 #
 #   pictor_feature_selector  — open tools/feature-selector/index.html
 #   pictor_measure_sizes     — rebuild libpictor once per toggle and
 #                              write measurements.json for the selector
+#   visus_migrate            — migrate v1 *.visus.json to canonical v2
 #
 # The feature selector is a static HTML tool so it runs anywhere with a
 # browser (including file://). The measure target needs Python 3 on PATH.
 # visus_migrate — v1 *.visus.json → v2 の headless CLI (tools/visus_migrate)。
-# 本体は libpictor の visus_migrate_* なので CI は常にコンパイルする。 CLI 自体も
-# Vulkan 非依存で小さいので PICTOR_BUILD_TOOLS に関わらず作る。
-if(NOT PICTOR_MOBILE AND NOT PICTOR_BUILD_WEBGL)
+# developer tool として PICTOR_BUILD_TOOLS に従う。既定 CI は
+# PICTOR_BUILD_TESTS=ON なので CLI の薄い main も継続してコンパイルされる一方、
+# library-only consumer が tests/tools を両方無効にした場合は余計な executable を作らない。
+if((PICTOR_BUILD_TOOLS OR PICTOR_BUILD_TESTS) AND
+   NOT PICTOR_MOBILE AND NOT PICTOR_BUILD_WEBGL)
     add_executable(visus_migrate tools/visus_migrate/main.cpp)
     target_link_libraries(visus_migrate PRIVATE pictor)
     if(MSVC)

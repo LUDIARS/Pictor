@@ -52,6 +52,7 @@ void PictorRenderer::shutdown() {
     mobile_.reset();
     subsystems_.shutdown();
     sync_subsystem_aliases_(); // alias をすべて null 化
+    clear_profile_source_();
 
     initialized_ = false;
 }
@@ -234,15 +235,28 @@ void PictorRenderer::set_compute_update_shader(ShaderHandle shader) {
 bool PictorRenderer::set_profile(const std::string& name) {
     if (!initialized_) return false;
 
+    // Re-selecting the profile that is already active does not supersede
+    // anything — the active definition is still exactly what the file
+    // produced, so such a call must not silently kill hot reload.
+    const bool switches_profile = profile_manager_->current_profile_name() != name;
+
     if (!profile_manager_->set_profile(name)) return false;
 
     apply_profile(profile_manager_->current_profile());
+    // An explicit programmatic switch supersedes any previously loaded file
+    // profile. A still-registered watcher may observe the old file, but
+    // reload_profile_from_source() must not reactivate it.
+    if (switches_profile) clear_profile_source_();
     return true;
 }
 
 void PictorRenderer::register_custom_profile(const PipelineProfileDef& def) {
     if (!initialized_) return;
+    const bool replaces_file_profile =
+        !profile_source_path_.empty() &&
+        def.profile_name == profile_manager_->current_profile_name();
     profile_manager_->register_profile(def);
+    if (replaces_file_profile) clear_profile_source_();
 }
 
 bool PictorRenderer::load_profile_from_file(const std::string& path,
@@ -252,13 +266,29 @@ bool PictorRenderer::load_profile_from_file(const std::string& path,
         return false;
     }
 
-    // Seed from the currently active profile so a partial config file only
-    // needs to express overrides.
+    // Capture the base before applying the file. Hot reload must keep using
+    // this snapshot; otherwise a key removed from JSON inherits the previous
+    // file-derived value instead of returning to the original base value.
+    // Reloading the *same* path through this API keeps the original snapshot
+    // for the same reason — hosts that hot reload by re-calling this instead
+    // of reload_profile_from_source() get the identical contract.
+    const bool same_source =
+        has_profile_source_base_ && profile_source_path_ == path;
+    const PipelineProfileDef base =
+        same_source ? profile_source_base_ : profile_manager_->current_profile();
+    if (!apply_profile_file_(path, base, error)) return false;
+
+    profile_source_path_     = path;
+    profile_source_base_     = base;
+    has_profile_source_base_ = true;
+    return true;
+}
+
+bool PictorRenderer::apply_profile_file_(const std::string&        path,
+                                         const PipelineProfileDef& base,
+                                         std::string*              error) {
     PipelineProfileDef def;
-    if (!load_pipeline_profile_file(path, profile_manager_->current_profile(),
-                                    def, error)) {
-        return false;
-    }
+    if (!load_pipeline_profile_file(path, base, def, error)) return false;
     if (def.profile_name.empty()) {
         if (error) *error = "profile JSON has empty profile_name";
         return false;
@@ -271,19 +301,25 @@ bool PictorRenderer::load_profile_from_file(const std::string& path,
         return false;
     }
     apply_profile(profile_manager_->current_profile());
-    profile_source_path_ = path;   // ホットリロード (reload_profile_from_source) 用
     return true;
 }
 
 bool PictorRenderer::reload_profile_from_source(std::string* error) {
-    if (profile_source_path_.empty()) {
+    if (!initialized_) {
+        if (error) *error = "renderer not initialized";
+        return false;
+    }
+    if (profile_source_path_.empty() || !has_profile_source_base_) {
         if (error) *error = "no profile source path (load_profile_from_file not used)";
         return false;
     }
-    // `profile_source_path_` を直接渡すと load_profile_from_file 側の
-    // `profile_source_path_ = path` が自己代入になる。 コピーして別実体にする。
-    const std::string path = profile_source_path_;
-    return load_profile_from_file(path, error);
+    return apply_profile_file_(profile_source_path_, profile_source_base_, error);
+}
+
+void PictorRenderer::clear_profile_source_() {
+    profile_source_path_.clear();
+    profile_source_base_ = PipelineProfileDef{};
+    has_profile_source_base_ = false;
 }
 
 void PictorRenderer::reload_active_profile() {

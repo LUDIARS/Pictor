@@ -57,21 +57,7 @@ std::string diagnostic_text(std::string_view text) {
 }
 
 bool read_bounded(const fs::path& path, std::string& text, std::string& error) {
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in) { error = "open failed"; return false; }
-    const std::streamsize size = in.tellg();
-    if (size < 0) { error = "size query failed"; return false; }
-    if (size > static_cast<std::streamsize>(visus_json::kMaxInputBytes)) {
-        error = "visus json is too large";
-        return false;
-    }
-    text.assign(static_cast<size_t>(size), '\0');
-    in.seekg(0, std::ios::beg);
-    if (size > 0 && !in.read(text.data(), size)) {
-        error = "read failed";
-        return false;
-    }
-    return true;
+    return visus_json::read_bounded_file(path.generic_string(), text, &error);
 }
 
 bool replace_file(const fs::path& target, std::string_view text, std::string& error) {

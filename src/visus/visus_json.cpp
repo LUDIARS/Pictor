@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <system_error>
 
@@ -371,6 +373,34 @@ std::string emit(const VisusValue& value) {
     emit_value(out, value, 0);
     out += "\n";
     return out;
+}
+
+bool read_bounded_file(const std::string& path, std::string& text,
+                       std::string* error) {
+    const auto fail = [error](const char* why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (path.empty() || path.find(char{0}) != std::string::npos)
+        return fail("invalid path");
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::file_status status = fs::symlink_status(fs::path(path), ec);
+    if (ec) return fail("file status failed");
+    if (fs::is_symlink(status)) return fail("symbolic link refused");
+    if (!fs::is_regular_file(status)) return fail("not a regular file");
+
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) return fail("open failed");
+    const std::streamsize size = in.tellg();
+    if (size < 0) return fail("size query failed");
+    if (size > static_cast<std::streamsize>(kMaxInputBytes))
+        return fail("json input is too large");
+    text.assign(static_cast<size_t>(size), char{0});
+    in.seekg(0, std::ios::beg);
+    if (size > 0 && !in.read(text.data(), size)) return fail("read failed");
+    return true;
 }
 
 } // namespace pictor::visus_json

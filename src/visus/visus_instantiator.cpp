@@ -51,6 +51,31 @@ void VisusInstance::collect_objects(std::vector<ObjectId>& out) const {
     for (const VisusInstance& c : children) c.collect_objects(out);
 }
 
+const VisusPackageBinding* VisusInstance::find_binding(std::string_view part,
+                                                       std::string_view package) const {
+    for (const VisusPackageBinding& b : bindings) {
+        if (b.part == part && b.package == package) return &b;
+    }
+    return nullptr;
+}
+
+VisusPackageBinding* VisusInstance::find_binding(std::string_view part,
+                                                 std::string_view package) {
+    const VisusInstance* self = this;
+    return const_cast<VisusPackageBinding*>(self->find_binding(part, package));
+}
+
+bool VisusInstance::set_param(std::string_view part, std::string_view package,
+                              std::string key, VisusValue value) {
+    VisusPackageBinding* b = find_binding(part, package);
+    if (!b) return false;
+    const VisusValue* current = b->params.find(key);
+    if (current && *current == value) return true;   // 変化なし: 改訂番号は据え置き
+    b->params.set(std::move(key), std::move(value));
+    ++params_revision_;
+    return true;
+}
+
 // ---- transform ----------------------------------------------------------------
 
 float4x4 visus_compose(const float4x4& local, const float4x4& parent) {
@@ -100,6 +125,24 @@ float4x4 child_transform(const VisusDesc& parent_desc, const VisusResolved* pare
                      : parent_xf;
 }
 
+// 重ね掛けパス (§2.5.3): パッケージ 1 本につき ObjectDescriptor 1 個を
+// base と同じ mesh / transform で追加登録し、 binding を積む。 登録順が
+// そのまま描画順になる。 深度 / ブレンドは package metadata を見た
+// ホストの pipeline 側で決める。
+void register_packages(SceneRegistry& scene, const ObjectDescriptor& base_object,
+                       const std::string& part,
+                       const std::vector<VisusResolvedPackage>& packages,
+                       VisusInstance& inst) {
+    for (const VisusResolvedPackage& pkg : packages) {
+        ObjectDescriptor od = base_object;
+        od.customShader = pkg.shader;
+        od.shaderKey    = pkg.shader_key;
+        const ObjectId id = scene.register_object(od);
+        inst.objects.push_back(id);
+        inst.bindings.push_back(VisusPackageBinding{part, pkg.package, id, pkg.params});
+    }
+}
+
 // この Visus 自身の ObjectDescriptor を登録する (children は含まない)。
 void register_objects(SceneRegistry& scene, const VisusDesc& desc, const VisusResolved* res,
                       const float4x4& xf, const AABB& bounds, VisusInstance& inst) {
@@ -112,15 +155,21 @@ void register_objects(SceneRegistry& scene, const VisusDesc& desc, const VisusRe
                 const VisusResolvedPart& rp = res->parts[i];
                 if (rp.mesh == INVALID_MESH) continue;
                 ObjectDescriptor od = base;
-                od.materialKey = static_cast<uint32_t>(i);
                 od.mesh         = rp.mesh;
                 od.customShader = rp.shader;
                 od.material     = rp.material;
                 // shader_key は key_override (part 優先) + custom ビット込み。
                 od.shaderKey    = rp.shader_key;
+                // materialKey は下流 (compiled_batch_recorder) が
+                // MaterialHandle として variant 解決に使う。 part index の
+                // ような別の意味の値を入れると、 同じ数値を持つ無関係の
+                // material の pass variant を拾ってしまうため、 material が
+                // 解決できた part だけ設定し、 それ以外は既定 (0) のままに
+                // する (= batch は mesh / shaderKey で分かれる)。
                 if (rp.material != INVALID_MATERIAL)
                     od.materialKey = static_cast<uint32_t>(rp.material);
                 inst.objects.push_back(scene.register_object(od));
+                register_packages(scene, od, rp.part, rp.packages, inst);
             }
             break;
         }
@@ -137,6 +186,7 @@ void register_objects(SceneRegistry& scene, const VisusDesc& desc, const VisusRe
             if (res->material != INVALID_MATERIAL)
                 od.materialKey = static_cast<uint32_t>(res->material);
             inst.objects.push_back(scene.register_object(od));
+            register_packages(scene, od, std::string{}, res->packages, inst);
             break;
         }
         case VisusKind::CUSTOM:

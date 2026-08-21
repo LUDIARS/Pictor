@@ -27,7 +27,7 @@ struct VisusMigrateResult {
     std::string              new_json;   // MIGRATED のとき v2 本文 (dry_run の確認用)
 };
 
-/// 1 ファイルを移行。
+/// 1 通常ファイルを移行 (symlink は dry-run を含め拒否)。
 VisusMigrateResult visus_migrate_file(const std::string& path, bool dry_run);
 
 /// `dir` 直下 (recursive なら配下全部) の `*.visus.json` を移行。 決定的順序。

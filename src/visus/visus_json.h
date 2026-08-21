@@ -21,4 +21,11 @@ bool parse(std::string_view text, VisusValue& out, std::string* error = nullptr)
 /// VisusValue → pretty-printed JSON (2 スペースインデント、 末尾改行あり)。
 std::string emit(const VisusValue& value);
 
+/// `path` の通常ファイルを kMaxInputBytes 上限で `text` へ読む。
+/// symlink / 非通常ファイル / NUL 入りパスは拒否する。 失敗時は false で
+/// `error` (non-null) に短い理由。 catalog / migrate の読込プロローグを
+/// 一本化したもの — セキュリティ関連の修正はここ 1 箇所に入れる。
+bool read_bounded_file(const std::string& path, std::string& text,
+                       std::string* error = nullptr);
+
 } // namespace pictor::visus_json

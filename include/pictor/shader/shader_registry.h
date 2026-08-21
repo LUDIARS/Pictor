@@ -113,7 +113,25 @@ public:
     /// 再利用する。全件成功時だけ device idle 後に差し替えるため、1 本でも
     /// 失敗したら false を返し、既存 pipeline は変更しない。未 build は true。
     /// Vulkan 無効時は headless host から同じ配線を使える no-op。
+    ///
+    /// **前提**: 記憶した render pass / layout がまだ生きていること。 swapchain
+    /// 再生成などで render pass を作り直したホストは、 rebuild する前に
+    /// `invalidate_build_target()` (+ 新しい引数での `build_pipelines()`) を
+    /// 呼ぶ責務がある。 破棄済み handle は non-null のままなので Pictor 側から
+    /// は検知できない。
     bool rebuild_pipelines();
+
+#ifdef PICTOR_HAS_VULKAN
+    /// 記憶した build target (render pass / subpass / layout) を無効化し、
+    /// 未 build 状態へ戻す。 render pass や pipeline layout を破棄するホストが、
+    /// 破棄の**前に**呼ぶ。 以降 `rebuild_pipelines()` は dangling handle を
+    /// 触らず no-op success を返し、 ホストは新しい target で
+    /// `build_pipelines()` を呼び直せる (built_ が false に戻るため、
+    /// build_pipelines の「build 済みなら即 true」 で弾かれない)。
+    /// 既存 pipeline 群には触れない — 破棄は次の `build_pipelines()` (新しい
+    /// 候補と差し替える直前に device idle 後の破棄) か `shutdown()` が行う。
+    void invalidate_build_target();
+#endif
 
     /// 全 pipeline / shader module を破棄する。 登録定義は残す。
     void shutdown();
@@ -123,6 +141,14 @@ private:
 
 #ifdef PICTOR_HAS_VULKAN
     VkShaderModule load_module_(const std::string& path) const;
+
+    // shaders_ 全件の pipeline を `out` へ build する。 out は
+    // shaders_.size() に揃えられ、 失敗分は VK_NULL_HANDLE のまま。
+    // 1 本でも失敗したら false。 メンバ pipelines_ には触れない。
+    bool build_candidates_(VkRenderPass     render_pass,
+                           uint32_t         subpass,
+                           VkPipelineLayout pipeline_layout,
+                           std::vector<VkPipeline>& out);
 
     VulkanContext*          vk_     = nullptr;
     VkDevice                device_ = VK_NULL_HANDLE;

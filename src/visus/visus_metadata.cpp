@@ -169,6 +169,17 @@ void VisusMetadata::set(std::string key, VisusValue value) {
     index_.emplace(entries_.back().first, index);
 }
 
+void VisusMetadata::merge_from(const VisusMetadata& over) {
+    if (this == &over || over.empty()) return;
+
+    // `set` は既存 key の位置を維持し、 新規 key を末尾へ足しつつ index_ を
+    // 保つ。 索引の更新を 1 箇所に閉じ込めるためここでも再利用する。
+    entries_.reserve(entries_.size() + over.entries_.size());
+    for (const Entry& entry : over.entries_) {
+        set(entry.first, entry.second);
+    }
+}
+
 bool VisusMetadata::erase(std::string_view key) {
     const auto found = index_.find(key);
     if (found == index_.end()) return false;

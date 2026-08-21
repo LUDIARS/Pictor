@@ -50,6 +50,12 @@ std::vector<std::string> FileWatchSet::poll_changed(uint64_t now_ms) {
             continue;
         }
         // pending と同じ値のまま — settle 待ち。
+        if (now_ms < e.pending_since_ms) {
+            // クロックの逆行 / 基点の混在。 アンダーフローで settle 窓を
+            // すり抜けて書き込み途中のファイルを拾わないよう仕切り直す。
+            e.pending_since_ms = now_ms;
+            continue;
+        }
         if (now_ms - e.pending_since_ms >= settle_ms_) {
             e.mtime_ns   = cur;
             e.pending_ns = -2;

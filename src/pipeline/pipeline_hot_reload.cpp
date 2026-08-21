@@ -79,6 +79,13 @@ PipelineHotReload::PollResult PipelineHotReload::poll(uint64_t now_ms) {
     if (now_ms == 0) now_ms = steady_now_ms_();
 
     PollResult result;
+    if (has_polled_ && now_ms < last_poll_ms_) {
+        // クロックの逆行 / 基点の混在 (0 = steady_clock 予約値とホスト
+        // 独自クロックが混ざった等)。 uint64 減算のアンダーフローで間引き
+        // が無効化されるのを防ぐため、 基準を仕切り直して今回は間引く。
+        last_poll_ms_ = now_ms;
+        return result;
+    }
     if (has_polled_ && interval_ms_ > 0 && now_ms - last_poll_ms_ < interval_ms_) {
         return result;   // 間引き
     }

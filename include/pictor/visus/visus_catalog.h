@@ -38,8 +38,9 @@ public:
                           std::vector<std::string>* errors   = nullptr,
                           std::vector<std::string>* warnings = nullptr);
 
-    /// 1 ファイルを読んで追加。 name が空ならファイル名 (".visus.json" を除く)
-    /// を name にする。 ファイル名と name が食い違うときは warnings。
+    /// 1 通常ファイルを読んで追加 (symlink は拒否)。name が空ならファイル名
+    /// (".visus.json" を除く) を name にする。ファイル名と name が
+    /// 食い違うときは warnings。
     bool load_file(const std::string&        path,
                    std::string*              error    = nullptr,
                    std::vector<std::string>* warnings = nullptr);

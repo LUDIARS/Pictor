@@ -42,15 +42,49 @@ namespace pictor {
 // bounds を渡す契約。 bone アタッチした子は親から動くので、 タイトな
 // per-object bounds が要るホストは instantiate 後に自分で上書きする。
 
+// ============================================================
+// VisusPackageBinding — 重ね掛けした 1 パスと、 その動的パラメータ (§2.5.4)
+// ============================================================
+// パッケージ 1 本につき ObjectDescriptor 1 個 (= 描画パス 1 本) を登録し、
+// その実パラメータをここに持つ。 `params` が動的パラメータの正本で、
+// ホストは `set_param` で書き換えて `params_revision` の変化を見て GPU へ
+// 再アップロードする。 uniform への実バインドはホストの責務。
+
+struct VisusPackageBinding {
+    std::string   part;      // model の draw part 名 (非 model は空)
+    std::string   package;
+    ObjectId      object = INVALID_OBJECT_ID;
+    VisusMetadata params;
+};
+
 struct VisusInstance {
     std::string                name;
     float4x4                   transform = float4x4::identity();
     std::vector<ObjectId>      objects;    // この Visus 自身の ObjectDescriptor (part 順)
     std::vector<VisusInstance> children;   // children 順
     uint32_t                   generic_handle = 0; // RIVE / UI / PARTICLE / TEXT
+    std::vector<VisusPackageBinding> bindings;     // 重ね掛けしたパス (登録順 = 描画順)
 
     /// 自身 + 子孫の ObjectId を深さ優先で集める (破棄用)。
     void collect_objects(std::vector<ObjectId>& out) const;
+
+    /// `part` (非 model は "") の `package` の binding。 無ければ nullptr。
+    const VisusPackageBinding* find_binding(std::string_view part,
+                                            std::string_view package) const;
+    VisusPackageBinding*       find_binding(std::string_view part,
+                                            std::string_view package);
+
+    /// 動的パラメータを 1 つ書き換える。 binding が無ければ false。
+    /// 値が実際に変わったときだけ `params_revision` が上がる。
+    bool set_param(std::string_view part, std::string_view package,
+                   std::string key, VisusValue value);
+
+    /// この Visus (children は含まない) の params 改訂番号。 ホストはこの値の
+    /// 変化を見て uniform を再アップロードする。
+    uint64_t params_revision() const { return params_revision_; }
+
+private:
+    uint64_t params_revision_ = 0;
 };
 
 /// VisusDesc の metadata から ObjectDescriptor の共通部 (flags / lod /
