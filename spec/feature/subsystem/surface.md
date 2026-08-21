@@ -45,9 +45,20 @@ create_swapchain       ← format=B8G8R8A8_SRGB 優先、present=FIFO(vsync)/IMM
 create_image_views
 create_render_pass     ← config.create_default_render_pass=true のとき (color-only, finalLayout=PRESENT_SRC)
 create_framebuffers    ← 同上
-create_command_pool_and_buffers
-create_sync_objects    ← per-frame: image_available_sem / render_finished_sem / in_flight_fence
+create_command_pool
+rebuild_per_image_resources ← swapchain image 単位: command buffer / render_finished_sem /
+                          images-in-flight 追跡 (PerImageResourcePool が所有)
+create_sync_objects    ← flight 単位: image_available_sem / in_flight_fence
 ```
+
+**per-image リソース**: swapchain image 数に依存する command buffer /
+render-finished セマフォ / images-in-flight 追跡は `PerImageResourcePool`
+(`per_image_resource_pool.h`) が唯一の所有者。Vulkan 呼び出しは backend policy
+`VulkanPerImageBackend` (`vulkan_per_image_backend.h`) に分離してある。
+`rebuild(count)` は **replacement-before-retire** — 新しい一式を全部作れたときだけ
+旧一式を生成の逆順 (セマフォ n-1..0 → command buffer) で解放して差し替え、途中で
+失敗したら新しい側だけ巻き戻して現行の一式を無傷で残す。`command_buffers()` の長さは
+常に `swapchain_image_count()` と一致する。
 
 **毎フレーム acquire/present**:
 
@@ -58,7 +69,14 @@ bool     present(uint32_t image_index);  // vkQueuePresentKHR
                                 // OUT_OF_DATE / SUBOPTIMAL → recreate_swapchain()
 ```
 
-**リサイズ**: `recreate_swapchain()` = deviceWaitIdle → cleanup_swapchain → swapchain/views/(renderpass/FB) 再生成。acquire/present の out-of-date で自動発火、手動でも呼べる。
+**リサイズ**: `recreate_swapchain()` = deviceWaitIdle → cleanup_swapchain →
+swapchain/views/(renderpass/FB) 再生成 → `rebuild_per_image_resources()`。
+swapchain image 数は再生成で変わりうる (present mode / surface capabilities 次第で
+`minImageCount` がずれる) ため、image 数に依存するリソースも同じ個数へ作り直す。
+途中で失敗した場合は `discard_swapchain_resources()` で swapchain と per-image
+リソースを畳んで「空」に揃えるので、古い個数の配列を掴んだまま添字する経路は残らない
+(`acquire_next_image()` は空を検知して再生成を試み `UINT32_MAX` を返す)。
+acquire/present の out-of-date で自動発火、手動でも呼べる。
 
 **`create_default_render_pass=false`**: ホストが profile 駆動の `RenderPassRegistry` / `FramebufferRegistry` で pass/FB を管理する場合 (PrivateGame Phase 4 等)、既定 RP/FB をスキップできる。
 
