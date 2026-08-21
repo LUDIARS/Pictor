@@ -148,7 +148,15 @@ void test_model_parts_and_children() {
     // 再 resolve は no-op (resolver を呼び直さない)
     rt.resolve(cat, "kuzuha", rs, &warnings);
     PT_ASSERT_OP(rs.models.size(), ==, size_t{1}, "already resolved → not reloaded");
-    PT_ASSERT(rt.invalidate("kuzuha") && !rt.is_resolved("kuzuha"), "invalidate");
+    PT_ASSERT(rt.invalidate("kuzuha") && rt.size() == 0,
+              "invalidating a root also drops child and shared-shader dependencies");
+
+    PT_ASSERT(rt.resolve(cat, "kuzuha", rs, &warnings), "resolve invalidated tree");
+    PT_ASSERT_OP(rs.models.size(), ==, size_t{2}, "root model reloaded");
+    PT_ASSERT_OP(rs.generics.size(), ==, size_t{2}, "child asset reloaded");
+    PT_ASSERT_OP(rs.shaders.size(), ==, size_t{4}, "direct and shared shaders re-registered");
+    PT_ASSERT(rt.get("fx_shader") && rt.get("kuzuha_facial"),
+              "dependent entries repopulated with the refreshed tree");
 }
 
 void test_custom_kind_and_errors() {

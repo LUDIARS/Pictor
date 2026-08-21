@@ -18,11 +18,11 @@ namespace {
 // disproportionate heap growth.
 constexpr size_t kMaxJsonValues     = 100'000;
 
-// Per-object key count. `VisusMetadata` keeps insertion order in a flat vector
-// and `set` scans it linearly, so an object with N distinct keys costs O(N^2)
-// to build. Without this cap a flat ~1 MB object stays under kMaxJsonValues yet
-// burns billions of comparisons. Convention keys number under 20 (§2.2), so
-// 1024 leaves ample room for host-specific metadata.
+// Per-object key count. `VisusMetadata` stores every key twice (ordered flat
+// vector for round-trip output + lookup index), so a flat ~1 MB object stays
+// under kMaxJsonValues yet expands to several times its source size. Convention
+// keys number under 20 (§2.2), so 1024 leaves ample room for host-specific
+// metadata.
 constexpr size_t kMaxObjectMembers  = 1024;
 
 // ---- encode ---------------------------------------------------------------
@@ -242,6 +242,10 @@ struct Parser {
         while (true) {
             std::string key;
             if (!parse_string(key)) return false;
+            // Duplicate keys would make the document's meaning depend on which
+            // one wins. `obj` already indexes the keys inserted so far, so this
+            // needs no second key container.
+            if (obj.has(key)) return fail("duplicate object key");
             if (!expect(':')) return false;
             VisusValue v;
             if (!parse_value(v)) return false;

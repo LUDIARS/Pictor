@@ -1,6 +1,7 @@
 /// VisusValue / VisusMetadata — 値セマンティクス・順序保持・アクセサ。
 
 #include "pictor/visus/visus_metadata.h"
+#include "pictor/visus/visus_serializer.h"
 #include "test_common.h"
 
 #include <string>
@@ -80,6 +81,29 @@ void test_move_leaves_null_source() {
     PT_ASSERT(moved.is_null(), "move assignment nulls the source too");         // NOLINT
 }
 
+// パーサが埋めた metadata も lookup index を持つこと。 上の test_ordered_metadata
+// は直接 `set()` を呼ぶだけなので、 JSON 経由で entries_ / index_ が揃うことは
+// 別に押さえる。 index_ を更新し忘れると find() が常に nullptr を返し、 JSON 由来の
+// VisusDesc が (name / kind / asset / parts / children ごと) 全部空になる。
+void test_parsed_metadata_is_indexed() {
+    const char* json = R"({
+      "version": 2, "name": "x", "kind": "model", "asset": "a.fbx",
+      "metadata": { "render.flags": 2, "animation.default": "Idle" }
+    })";
+    VisusDesc d;
+    PT_ASSERT(from_visus_json(json, d), "parse succeeds");
+    PT_ASSERT(d.name == "x" && d.kind == VisusKind::MODEL && d.asset == "a.fbx",
+              "typed fields readable after parse (root lookup uses the index)");
+    PT_ASSERT(d.metadata.get_number("render.flags").value_or(-1) == 2.0,
+              "parsed metadata key is findable via index");
+    PT_ASSERT(d.metadata.get_string("animation.default").value_or("") == "Idle",
+              "second parsed key is findable");
+    PT_ASSERT(d.metadata.erase("render.flags") && !d.metadata.has("render.flags"),
+              "erase keeps parser-populated entries_ and index_ consistent");
+    PT_ASSERT(d.metadata.get_string("animation.default").value_or("") == "Idle",
+              "erase refreshes shifted parser-populated indexes");
+}
+
 } // namespace
 
 int main() {
@@ -87,5 +111,6 @@ int main() {
     test_ordered_metadata();
     test_deep_copy();
     test_move_leaves_null_source();
+    test_parsed_metadata_is_indexed();
     return report("unit_visus_metadata_test");
 }

@@ -123,17 +123,26 @@ bool replace_file(const fs::path& target, std::string_view text, std::string& er
 } // namespace
 
 VisusMigrateResult visus_migrate_file(const std::string& path, bool dry_run) {
+    // NUL チェックは fs::path を組む前に行う。 embedded NUL を含む文字列から
+    // 作った path は NUL 手前で切れた別のファイルを指すため、 先に stat すると
+    // 「呼び出し側が渡したのとは違うファイル」 を検査したことになる。
+    if (path.empty() || path.find('\0') != std::string::npos)
+        return fail(path, "invalid visus path");
+
     // ディレクトリ走査と同じ symlink 契約を単ファイル経路にも掛ける。 リンクを
     // 辿って読むと置換 (rename) がリンク自身を潰し、 リンク先の内容を無関係な
-    // 場所へ書き出したのと同じ結果になる。 status が取れないケースは
-    // read_bounded 側の "open failed" に任せる。
-    std::error_code link_ec;
-    if (fs::is_symlink(fs::path(path), link_ec) && !link_ec)
-        return fail(path, "symbolic link refused");
+    // 場所へ書き出したのと同じ結果になる。 symlink_status はリンクを辿らないので
+    // リンク自身の種別が取れる。
+    const fs::path source(path);
+    std::error_code status_ec;
+    const fs::file_status status = fs::symlink_status(source, status_ec);
+    if (status_ec) return fail(path, "file status failed");
+    if (fs::is_symlink(status)) return fail(path, "symbolic link refused");
+    if (!fs::is_regular_file(status)) return fail(path, "not a regular file");
 
     std::string text;
     std::string err;
-    if (!read_bounded(fs::path(path), text, err)) return fail(path, std::move(err));
+    if (!read_bounded(source, text, err)) return fail(path, std::move(err));
 
     VisusValue root;
     if (!visus_json::parse(text, root, &err)) return fail(path, "parse error: " + err);
@@ -157,7 +166,7 @@ VisusMigrateResult visus_migrate_file(const std::string& path, bool dry_run) {
     }
     // ファイル名 stem を name の既定にする (catalog と同じ規則)。
     if (desc.name.empty()) {
-        std::string fn = fs::path(path).filename().generic_string();
+        std::string fn = source.filename().generic_string();
         if (ends_with(fn, kSuffix)) fn.resize(fn.size() - kSuffix.size());
         desc.name = fn;
     }
@@ -165,7 +174,7 @@ VisusMigrateResult visus_migrate_file(const std::string& path, bool dry_run) {
     r.status   = VisusMigrateResult::Status::MIGRATED;
 
     if (!dry_run) {
-        if (!replace_file(fs::path(path), r.new_json, err))
+        if (!replace_file(source, r.new_json, err))
             return fail(path, std::move(err));
     }
     return r;

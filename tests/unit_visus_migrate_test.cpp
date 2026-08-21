@@ -124,6 +124,29 @@ void test_migrate_directory() {
     PT_ASSERT(visus_migrate_summary_line(unsafe_summary).find("\\x0a") != std::string::npos,
               "summary escapes terminal control characters in untrusted paths");
 
+    constexpr char nul_path_data[] = "prefix\0suffix.visus.json";
+    const std::string nul_path(nul_path_data, sizeof(nul_path_data) - 1);
+    PT_ASSERT(visus_migrate_file(nul_path, true).status == VisusMigrateResult::Status::FAILED,
+              "embedded NUL migration path is rejected before filesystem access");
+
+    // 単一ファイル API も directory scan と同じく symlink を追従しない。
+    // 作成権限がない Windows 環境では、このケースだけを skip する。
+    const fs::path link_target = dir / "link-target.visus.json";
+    const fs::path link = dir / "linked.visus.json";
+    write_all(link_target, kV1);
+    ec.clear();
+    fs::create_symlink(link_target, link, ec);
+    if (!ec) {
+        const VisusMigrateResult linked = visus_migrate_file(link.generic_string(), false);
+        PT_ASSERT(linked.status == VisusMigrateResult::Status::FAILED &&
+                  linked.message.find("symbolic link") != std::string::npos,
+                  "direct migration refuses a symbolic link");
+        PT_ASSERT(fs::is_symlink(link, ec), "refused migration preserves the link");
+        PT_ASSERT(read_all(link_target) == kV1, "refused migration preserves the target");
+        fs::remove(link, ec);
+    }
+    fs::remove(link_target, ec);
+
     // 単ファイル / 不在
     PT_ASSERT(visus_migrate_file((dir / "nope.visus.json").generic_string(), true).status == VisusMigrateResult::Status::FAILED,
               "missing file fails");

@@ -121,6 +121,17 @@ public:
     /// name). Reconfigures all downstream subsystems. No-op if uninitialized.
     void reload_active_profile();
 
+    /// 最後に `load_profile_from_file()` で読んだファイルパス (未使用なら空)。
+    /// ホットリロード (`pipeline_hot_reload.h`) が監視対象にする。
+    const std::string& profile_source_path() const { return profile_source_path_; }
+
+    /// `profile_source_path()` をディスクから読み直して再適用する。
+    /// `load_profile_from_file()` を一度も使っていなければ false。
+    /// パイプライン設定 (構造) のホットリロード用 seam — 値の変更は
+    /// リロードではなく register_custom_profile + reload_active_profile で
+    /// プログラム的に流し込む (`pipeline-hot-reload.md`)。
+    bool reload_profile_from_source(std::string* error = nullptr);
+
     // ---- Mobile Lifecycle ----
     //
     // Platform hosts (Android JNI / iOS) forward OS-level
@@ -337,6 +348,8 @@ private:
     GPUBufferManager*       gpu_buffer_manager_ = nullptr;
     GPUDrivenPipeline*      gpu_pipeline_       = nullptr;
     PipelineProfileManager* profile_manager_    = nullptr;
+    /// load_profile_from_file() の読込元 (ホットリロード用、 未使用なら空)。
+    std::string             profile_source_path_;
     RenderPassScheduler*    pass_scheduler_     = nullptr;
     Profiler*               profiler_           = nullptr;
     OverlayRenderer*        overlay_            = nullptr;

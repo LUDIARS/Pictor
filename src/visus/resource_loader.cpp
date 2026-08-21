@@ -26,6 +26,9 @@ std::vector<uint8_t> FileSystemResourceLoader::fetch(std::string_view path,
     if (path.empty()) {
         return set_error("FileSystemResourceLoader: path is empty");
     }
+    if (path.find('\0') != std::string_view::npos) {
+        return set_error("FileSystemResourceLoader: path contains NUL");
+    }
     const std::string local_path(path);
 
     std::string full;

@@ -5,7 +5,9 @@
 
 #include <cmath>
 #include <limits>
+#include <string>
 #include <string_view>
+#include <unordered_set>
 
 namespace pictor {
 
@@ -188,14 +190,27 @@ bool visus_desc_from_value(const VisusValue&         value,
 
     out = VisusDesc{};
     out.name  = root.get_string("name").value_or("");
-    out.kind  = visus_kind_from_str(root.get_string("kind").value_or("none"));
+    const std::string kind = root.get_string("kind").value_or("none");
+    out.kind  = visus_kind_from_str(kind);
+    if (out.kind == VisusKind::NONE && kind != "none") {
+        warn(warnings, "unknown visus kind; using none");
+    }
     out.asset = root.get_string("asset").value_or("");
 
     if (const VisusValue::Array* parts = root.get_array("parts")) {
         out.parts.reserve(parts->size());
+        // `parts` は信頼できない JSON 由来で、 要素数は kMaxJsonValues までしか
+        // 縛られていない。 既出 part を線形走査すると数万要素で O(N^2) になるため
+        // hash set で照合する (visus_json.cpp の kMaxObjectMembers と同じ理由)。
+        std::unordered_set<std::string> seen_parts;
         for (const VisusValue& pv : *parts) {
             VisusPart p;
-            if (part_from_value(pv, p, warnings)) out.parts.push_back(std::move(p));
+            if (!part_from_value(pv, p, warnings)) continue;
+            if (!seen_parts.insert(p.part).second) {
+                warn(warnings, "parts[]: duplicate part ignored");
+                continue;
+            }
+            out.parts.push_back(std::move(p));
         }
     }
     if (const VisusValue::Array* children = root.get_array("children")) {

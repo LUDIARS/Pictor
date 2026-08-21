@@ -98,6 +98,10 @@ size_t VisusCatalog::load_directory(const std::string&        dir,
 bool VisusCatalog::load_file(const std::string&        path,
                              std::string*              error,
                              std::vector<std::string>* warnings) {
+    if (path.empty() || path.find('\0') != std::string::npos) {
+        if (error) *error = "invalid visus path";
+        return false;
+    }
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in) {
         if (error) *error = "open failed";
@@ -188,11 +192,17 @@ const VisusCatalogEntry* VisusCatalog::entry_by_source_(std::string_view source_
 }
 
 std::string VisusCatalog::resolve_path(const VisusDesc& desc, std::string_view rel) const {
-    const fs::path rp{std::string(rel)};
-    if (rp.is_absolute()) return rp.lexically_normal().generic_string();
-    const VisusCatalogEntry* e = entry(desc.name);
-    if (!e || e->source_path.empty()) return std::string(rel);
-    return (fs::path(e->source_path).parent_path() / rp).lexically_normal().generic_string();
+    if (rel.empty() || rel.find('\0') != std::string_view::npos) return {};
+    try {
+        const fs::path rp{std::string(rel)};
+        if (rp.is_absolute()) return rp.lexically_normal().generic_string();
+        const VisusCatalogEntry* e = entry(desc.name);
+        if (!e || e->source_path.empty()) return std::string(rel);
+        return (fs::path(e->source_path).parent_path() / rp).lexically_normal().generic_string();
+    } catch (const fs::filesystem_error&) {
+        // Untrusted JSON may not be representable as a native filesystem path.
+        return {};
+    }
 }
 
 const VisusDesc* VisusCatalog::resolve_child(const VisusDesc&     parent,

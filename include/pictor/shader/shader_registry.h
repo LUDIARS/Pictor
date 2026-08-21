@@ -41,6 +41,8 @@ class VulkanContext;
 /// SPIR-V ファイルへのパス (Visus の `VisusShaderRef` STAGES 形式
 /// = `metadata["shader"]` の `vert` / `frag` から解決済み)。
 struct CustomShaderDef {
+    // Paths are trusted host inputs. UGC/CDN paths must be authorized by the
+    // IVisusResolver before they reach ShaderRegistry.
     std::string name;        ///< 表示名 / デバッグ用 (Visus name など)
     std::string vert_spv;    ///< vertex stage SPIR-V のパス
     std::string frag_spv;    ///< fragment stage SPIR-V のパス
@@ -63,7 +65,7 @@ struct CustomShaderDef {
 ///   2. (Vulkan 有効時) `build_pipelines()` を描画ターゲットの render pass
 ///      が確定したあとに 1 度呼ぶ。 登録済み全シェーダの `VkPipeline` を
 ///      生成する。
-///   3. レンダラは `ObjectDescriptor::customShader` (または
+///   3. instantiate 後のレンダラは `ObjectDescriptor::customShader` (または
 ///      `ShaderKey::custom_shader(shaderKey)`) から `ShaderHandle` を得て
 ///      `pipeline(handle)` で `VkPipeline` を引く。
 class ShaderRegistry {
@@ -105,6 +107,14 @@ public:
     bool is_built() const { return built_; }
 #endif
 
+    /// ホットリロード用: 登録済み定義の SPIR-V をディスクから読み直し、
+    /// 候補 pipeline 群を build する (`pipeline-hot-reload.md`)。
+    /// 最初の `build_pipelines()` の引数 (render pass / layout) を記憶して
+    /// 再利用する。全件成功時だけ device idle 後に差し替えるため、1 本でも
+    /// 失敗したら false を返し、既存 pipeline は変更しない。未 build は true。
+    /// Vulkan 無効時は headless host から同じ配線を使える no-op。
+    bool rebuild_pipelines();
+
     /// 全 pipeline / shader module を破棄する。 登録定義は残す。
     void shutdown();
 
@@ -118,6 +128,11 @@ private:
     VkDevice                device_ = VK_NULL_HANDLE;
     std::vector<VkPipeline> pipelines_;
     bool                    built_  = false;
+
+    // rebuild_pipelines() 用に最初の build 引数を記憶する。
+    VkRenderPass     built_render_pass_ = VK_NULL_HANDLE;
+    uint32_t         built_subpass_     = 0;
+    VkPipelineLayout built_layout_      = VK_NULL_HANDLE;
 #endif
 };
 

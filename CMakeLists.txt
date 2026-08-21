@@ -75,6 +75,7 @@ endif()
 add_library(pictor STATIC
     # Core
     src/core/types.cpp
+    src/core/file_watch.cpp
     src/core/cache_info.cpp
     src/core/device_memory_profile.cpp
 
@@ -150,6 +151,7 @@ add_library(pictor STATIC
     src/pipeline/pipeline_profile.cpp
     src/pipeline/pipeline_builder.cpp
     src/pipeline/pipeline_profile_serializer.cpp
+    src/pipeline/pipeline_hot_reload.cpp
     src/pipeline/pipeline_profile_loader.cpp
     src/pipeline/render_pass_scheduler.cpp
     src/pipeline/attachment_def.cpp

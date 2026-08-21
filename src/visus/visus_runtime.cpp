@@ -131,7 +131,11 @@ void VisusRuntime::set(VisusResolved resolved) {
 bool VisusRuntime::invalidate(std::string_view name) {
     auto it = resolved_.find(name);
     if (it == resolved_.end()) return false;
-    resolved_.erase(it);
+    // Children and `visus:` shader entries can be shared by several roots.
+    // Without a reverse dependency graph, erasing just this entry would let a
+    // later root resolve reuse stale dependent handles. Clear atomically so
+    // the next resolve rebuilds one coherent generation of the side-table.
+    resolved_.clear();
     return true;
 }
 

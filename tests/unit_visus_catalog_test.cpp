@@ -46,6 +46,11 @@ void test_add_find_duplicate() {
               "first source path accepted");
     PT_ASSERT(!cat.add(make("c", VisusKind::RIVE), "same/source.visus.json", &err),
               "duplicate source path rejected");
+    constexpr char nul_path_data[] = "asset\0outside";
+    const std::string nul_path(nul_path_data, sizeof(nul_path_data) - 1);
+    PT_ASSERT(cat.resolve_path(*cat.find("a"), nul_path).empty(),
+              "embedded NUL resource path fails closed");
+    PT_ASSERT(!cat.load_file(nul_path, &err), "embedded NUL catalog path is rejected");
     PT_ASSERT(cat.find("a") && cat.find("a")->kind == VisusKind::MODEL, "find keeps first");
     PT_ASSERT(cat.find("zzz") == nullptr, "missing");
     PT_ASSERT_OP(cat.size(), ==, size_t{2}, "size");

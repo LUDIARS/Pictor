@@ -10,6 +10,15 @@ using namespace pictor;
 using namespace pictor_test;
 
 int main() {
+    // Headless builds expose the same hot-reload seam as Vulkan hosts. It is a
+    // no-op so host wiring does not need backend-specific preprocessor guards.
+#ifndef PICTOR_HAS_VULKAN
+    {
+        ShaderRegistry reg;
+        PT_ASSERT(reg.rebuild_pipelines(), "headless rebuild is a successful no-op");
+    }
+#endif
+
     // 1. vert+frag が揃った定義は登録でき、 handle が 0 始まりの連番。
     {
         ShaderRegistry reg;

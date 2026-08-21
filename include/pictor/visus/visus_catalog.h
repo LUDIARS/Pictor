@@ -17,7 +17,7 @@ namespace pictor {
 // ディレクトリの `*.visus.json` を読み、 children の名前 / パス参照を
 // 解決し、 循環参照と入れ子深さ (上限 kMaxChildDepth) を検査する。
 //
-// ResourceRef / handle の解決は持たない。 実行時資源は VisusRuntime
+// asset path / handle の実資源解決は持たない。 実行時資源は VisusRuntime
 // (task 2) の責務。
 
 struct VisusCatalogEntry {
@@ -72,6 +72,7 @@ public:
     /// いるため、 戻り値も絶対パスになる。 root を設定した
     /// `FileSystemResourceLoader` は絶対パスを拒む (sandbox) ので、 そのローダへ
     /// 渡す側が root 相対へ落とす責務を持つ (task 2 の VisusRuntime)。
+    /// filesystem path として不正 (embedded NUL 等) なら空文字を返す。
     std::string resolve_path(const VisusDesc& desc, std::string_view rel) const;
 
     /// 全エントリの children を検査: 未解決参照 / 循環 / 深さ超過を

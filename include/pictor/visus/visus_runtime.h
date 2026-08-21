@@ -29,7 +29,10 @@ namespace pictor {
 // IVisusResolver — ホストが実装する資源ロード窓口
 // ============================================================
 // 受け取るパスは VisusCatalog::resolve_path 済み (visus ファイル起点を
-// 解決した generic パス)。 既定実装はすべて「未対応 = INVALID / false」。
+// 解決した generic パス) だが、asset root 内への containment は保証しない。
+// JSON を信頼しないホストは resolver で allowlisted root / asset manifest / 署名を
+// 検証すること。特に SPIR-V は GPU executable input なので trusted asset のみ許可する。
+// 既定実装はすべて「未対応 = INVALID / false」。
 
 struct VisusModelPart {
     std::string name;                         // fbx 内の draw part / material slot 名
@@ -155,6 +158,9 @@ public:
     const VisusResolved* get(std::string_view name) const;
     bool                 is_resolved(std::string_view name) const { return get(name) != nullptr; }
 
+    /// `name` が解決済みなら side-table 全体を無効化する。 children と
+    /// `visus:` shader は entries 間で共有され、依存元を個別 entry からは
+    /// 復元できないため、部分無効化は stale handle を残す。
     bool invalidate(std::string_view name);
     void clear() { resolved_.clear(); }
     size_t size() const { return resolved_.size(); }

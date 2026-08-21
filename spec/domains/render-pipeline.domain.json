@@ -14,10 +14,16 @@
       "pathPattern": "(^|/)profiles/[^/]+\\.json$"
     },
     {
-      "pathPattern": "(^|/)tests/unit_(?:attachment_def|compiled_graph_wiring|pipeline_profile_serializer|pipeline_registries|pipeline_tiers)_test\\.cpp$"
+      "pathPattern": "(^|/)tests/unit_(?:attachment_def|compiled_graph_wiring|pipeline_hot_reload|pipeline_profile_serializer|pipeline_registries|pipeline_tiers)_test\\.cpp$"
     },
     {
       "pathPattern": "(^|/)spec/feature/rendering-extensibility-design\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)spec/feature/pipeline-hot-reload\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)spec/tasks/[^/]*pipeline-hot-reload[^/]*\\.md$"
     }
   ]
 }
