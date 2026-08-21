@@ -12,8 +12,8 @@ compile_commands.json
 # zip) due to size. Keep them local to the working copy only.
 Art/
 .revisor-version
-.anatomia/*
-!.anatomia/domains/
+# Anatomia のローカル状態。ドメイン定義の正本は spec/domains/ に置く。
+.anatomia/
 
 # SHaRC demo scan/scene assets — fetched locally via
 # tools/download_sharc_demo_assets.py, never committed.
