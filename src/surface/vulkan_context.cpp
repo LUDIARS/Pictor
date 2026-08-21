@@ -56,8 +56,18 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
         if (!create_render_pass())              return false;
         if (!create_framebuffers())             return false;
     }
-    if (!create_command_pool_and_buffers()) return false;
-    if (!create_sync_objects())             return false;
+    if (!create_command_pool())             return false;
+    // per-image リソース (command buffer / render-finished セマフォ /
+    // images-in-flight 追跡) は swapchain image 数に追従する。 初期化でも
+    // 再生成でも同じ経路で揃える。
+    if (!rebuild_per_image_resources())     return false;
+    if (!create_sync_objects()) {
+        // ここまでに per-image リソースを作り終えているが initialized_ は
+        // false のままなので ~VulkanContext() は shutdown() を呼ばない。
+        // pool が握った command buffer / セマフォを明示的に返しておく。
+        discard_swapchain_resources();
+        return false;
+    }
 
     initialized_ = true;
     return true;
@@ -68,16 +78,18 @@ void VulkanContext::shutdown() {
 
     vkDeviceWaitIdle(device_);
 
-    // Sync objects (per-flight + per-image)。 images_in_flight_ は借用なので破棄しない。
-    for (VkSemaphore s : render_finished_sems_) if (s) vkDestroySemaphore(device_, s, nullptr);
+    // per-image リソース (command buffer / render-finished セマフォ /
+    // images-in-flight 追跡)。 command pool より先に畳む。
+    VulkanPerImageBackend backend(device_, command_pool_);
+    per_image_.destroy(backend);
+
+    // flight 単位の同期オブジェクト。
     for (VkSemaphore s : image_available_sems_) if (s) vkDestroySemaphore(device_, s, nullptr);
-    for (VkFence     f : in_flight_fences_)      if (f) vkDestroyFence(device_, f, nullptr);
-    render_finished_sems_.clear();
+    for (VkFence     f : in_flight_fences_)     if (f) vkDestroyFence(device_, f, nullptr);
     image_available_sems_.clear();
     in_flight_fences_.clear();
-    images_in_flight_.clear();
 
-    // Command pool (frees command buffers implicitly)
+    // Command pool (frees any remaining command buffers implicitly)
     if (command_pool_) vkDestroyCommandPool(device_, command_pool_, nullptr);
 
     cleanup_swapchain();
@@ -97,20 +109,39 @@ void VulkanContext::shutdown() {
 }
 
 bool VulkanContext::recreate_swapchain() {
+    // GPU が旧 swapchain / 旧 per-image リソースを使い終わるまで待つ。
+    // これ以降、 旧リソースの解放は安全。
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
 
-    if (!create_swapchain())    return false;
-    if (!create_image_views())  return false;
+    if (!create_swapchain())    { discard_swapchain_resources(); return false; }
+    if (!create_image_views())  { discard_swapchain_resources(); return false; }
     if (create_default_rp_on_init_) {
-        if (!create_render_pass())  return false;
-        if (!create_framebuffers()) return false;
+        if (!create_render_pass())  { discard_swapchain_resources(); return false; }
+        if (!create_framebuffers()) { discard_swapchain_resources(); return false; }
     }
 
+    // swapchain image 数は再生成で変わりうる (present mode / surface
+    // capabilities が変われば minImageCount がずれる)。 image 数に依存する
+    // リソースを新しい個数へ作り直さないと、 consumer の
+    // command_buffers()[image_index] や present() の render-finished
+    // セマフォ参照が配列外になる。
+    if (!rebuild_per_image_resources()) { discard_swapchain_resources(); return false; }
+
+    // 新しい image 集合に対する acquire 履歴は無い。 添字を先頭へ戻す。
+    last_acquired_image_ = 0;
     return true;
 }
 
 uint32_t VulkanContext::acquire_next_image() {
+    // 再生成に失敗して discard_swapchain_resources() が走ったあとは swapchain も
+    // per-image リソースも空。 このまま vkAcquireNextImageKHR を呼ぶと NULL
+    // swapchain を渡すことになるので、 このフレームは描かず再生成を試みる。
+    if (swapchain_ == VK_NULL_HANDLE || per_image_.empty()) {
+        recreate_swapchain();
+        return UINT32_MAX;
+    }
+
     // 現在の flight の fence を待つ — これが「CPU が GPU に対して何フレーム
     // 先行できるか」を frames_in_flight_ 段に制限する (Q-3)。
     VkFence flight_fence = in_flight_fences_[current_frame_];
@@ -140,12 +171,14 @@ uint32_t VulkanContext::acquire_next_image() {
     // この image を最後に使った flight がまだ GPU 実行中なら待つ。 frames_in_flight_
     // が swapchain image 数と一致しない場合に、 同一 image の command buffer /
     // framebuffer を前 flight と同時使用してしまうのを防ぐ (images-in-flight 追跡)。
-    if (images_in_flight_[index] != VK_NULL_HANDLE &&
-        images_in_flight_[index] != flight_fence) {
-        VK_CHECK(vkWaitForFences(device_, 1, &images_in_flight_[index], VK_TRUE, UINT64_MAX));
+    // 追跡配列は per_image_ が swapchain image 数に合わせて保持しており、
+    // 範囲外 index は null fence として返るので配列外アクセスにならない。
+    VkFence image_fence = per_image_.in_flight_fence(index);
+    if (image_fence != VK_NULL_HANDLE && image_fence != flight_fence) {
+        VK_CHECK(vkWaitForFences(device_, 1, &image_fence, VK_TRUE, UINT64_MAX));
     }
-    images_in_flight_[index] = flight_fence;
-    last_acquired_image_     = index;
+    per_image_.set_in_flight_fence(index, flight_fence);
+    last_acquired_image_ = index;
 
     // Image acquired; a submit signaling flight_fence will follow, so it is
     // safe to reset the fence now (must happen before that submit).
@@ -155,7 +188,27 @@ uint32_t VulkanContext::acquire_next_image() {
 
 bool VulkanContext::present(uint32_t image_index) {
     // present は「その image を描き終えた」render-finished セマフォ (image 単位) を待つ。
-    VkSemaphore wait_sem    = render_finished_sems_[image_index];
+    // セマフォは per_image_ が swapchain image 数と同じ個数で保持している。
+    VkSemaphore wait_sem = per_image_.render_finished(image_index);
+    if (wait_sem == VK_NULL_HANDLE) {
+        // 再生成直後などで image_index が現在の image 集合の範囲外。 present を
+        // 投げると未定義動作なので、 このフレームは捨てる。
+        fprintf(stderr, "[Pictor] present: stale image index %u (swapchain has %u images)\n",
+                image_index, per_image_.image_count());
+        // 呼び出し側は既に submit を発行しており、 その submit は
+        // in_flight_fences_[current_frame_] を signal する。 成功パスと同じく
+        // flight を進めないと、 同じ flight を掴んだまま次フレームへ入り
+        // render-finished セマフォの再 signal が前回の signal と衝突する。
+        current_frame_ = (current_frame_ + 1u) % std::max<uint32_t>(1, frames_in_flight_);
+        // その submit が signal した render-finished セマフォは誰も wait しない
+        // ので signaled のまま残る。 そのまま次に同じ image を使うと「既に
+        // signaled なセマフォへの再 signal」になるため、 ここで実際に再生成して
+        // per-image セマフォを作り直し、 signal 状態を捨てる (device idle は
+        // recreate_swapchain() が取るので、 submit の完了も待たれる)。
+        recreate_swapchain();
+        return false;
+    }
+
     VkPresentInfoKHR info{};
     info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     info.waitSemaphoreCount = 1;
@@ -760,7 +813,7 @@ bool VulkanContext::create_framebuffers() {
 
 // ---------- private: command pool ----------
 
-bool VulkanContext::create_command_pool_and_buffers() {
+bool VulkanContext::create_command_pool() {
     VkCommandPoolCreateInfo pool_info{};
     pool_info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pool_info.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -771,15 +824,18 @@ bool VulkanContext::create_command_pool_and_buffers() {
         return false;
     }
 
-    command_buffers_.resize(swapchain_images_.size());
-    VkCommandBufferAllocateInfo alloc_info{};
-    alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    alloc_info.commandPool        = command_pool_;
-    alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    alloc_info.commandBufferCount = static_cast<uint32_t>(command_buffers_.size());
+    return true;
+}
 
-    if (vkAllocateCommandBuffers(device_, &alloc_info, command_buffers_.data()) != VK_SUCCESS) {
-        fprintf(stderr, "[Pictor] Failed to allocate command buffers\n");
+// ---------- private: per-image resources ----------
+
+bool VulkanContext::rebuild_per_image_resources() {
+    VulkanPerImageBackend backend(device_, command_pool_);
+    const uint32_t image_count = static_cast<uint32_t>(swapchain_images_.size());
+    if (!per_image_.rebuild(backend, image_count)) {
+        fprintf(stderr,
+                "[Pictor] Failed to rebuild per-image resources for %u swapchain images\n",
+                image_count);
         return false;
     }
     return true;
@@ -804,25 +860,23 @@ bool VulkanContext::create_sync_objects() {
         if (vkCreateSemaphore(device_, &sem_info, nullptr, &image_available_sems_[i]) != VK_SUCCESS ||
             vkCreateFence(device_, &fence_info, nullptr, &in_flight_fences_[i]) != VK_SUCCESS) {
             fprintf(stderr, "[Pictor] Failed to create per-flight sync objects\n");
+            // 途中まで作れたぶんを畳む。 initialize() の失敗経路では
+            // initialized_ が false のままなので shutdown() は走らず、 ここで
+            // 返さないと flight 単位のセマフォ / fence が漏れる。
+            for (VkSemaphore s : image_available_sems_) if (s) vkDestroySemaphore(device_, s, nullptr);
+            for (VkFence     f : in_flight_fences_)     if (f) vkDestroyFence(device_, f, nullptr);
+            image_available_sems_.clear();
+            in_flight_fences_.clear();
             return false;
         }
     }
 
-    // swapchain image 単位: render-finished セマフォ (present 待ち)。 present の
-    // 待機セマフォを flight 単位にすると、 再 signal 時に前回 present の wait と
-    // 衝突し得る (validation 警告)。 image 単位なら acquire→submit→present が
-    // 同一 image に紐づくので安全。 image 数は recreate_swapchain でも不変前提
-    // (command_buffers_ も同様の前提でリサイズしていない)。
-    const size_t image_count = swapchain_images_.size();
-    render_finished_sems_.assign(image_count, VK_NULL_HANDLE);
-    for (size_t i = 0; i < image_count; ++i) {
-        if (vkCreateSemaphore(device_, &sem_info, nullptr, &render_finished_sems_[i]) != VK_SUCCESS) {
-            fprintf(stderr, "[Pictor] Failed to create render-finished semaphore\n");
-            return false;
-        }
-    }
-    // image→flight fence マッピング (借用ハンドル、 所有しない)。
-    images_in_flight_.assign(image_count, VK_NULL_HANDLE);
+    // swapchain image 単位のオブジェクト (render-finished セマフォ / image→flight
+    // fence マッピング) は per_image_ が持つ。 present の待機セマフォを flight
+    // 単位にすると、 再 signal 時に前回 present の wait と衝突し得る
+    // (validation 警告)。 image 単位なら acquire→submit→present が同一 image に
+    // 紐づくので安全。 image 数は swapchain 再生成で変わりうるので、
+    // rebuild_per_image_resources() が毎回その時点の image 数へ作り直す。
 
     current_frame_       = 0;
     last_acquired_image_ = 0;
@@ -831,6 +885,9 @@ bool VulkanContext::create_sync_objects() {
 
 // ---------- private: cleanup ----------
 
+/// swapchain 本体に紐づくリソースのみを解放する。 per-image リソースは
+/// image 数が確定したあとに rebuild_per_image_resources() が差し替えるので
+/// ここでは触らない。
 void VulkanContext::cleanup_swapchain() {
     for (auto fb : framebuffers_) {
         if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
@@ -852,6 +909,17 @@ void VulkanContext::cleanup_swapchain() {
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);
         swapchain_ = VK_NULL_HANDLE;
     }
+}
+
+void VulkanContext::discard_swapchain_resources() {
+    // 再生成に失敗したときの後始末。 中途半端に作れた swapchain / per-image
+    // リソースを全部畳んで、 consumer から見て「空」に揃える。 長さ 0 の
+    // command_buffers() と null セマフォが返るので、 古い個数の配列を
+    // 掴んだまま添字して配列外を踏む経路が残らない。
+    cleanup_swapchain();
+    VulkanPerImageBackend backend(device_, command_pool_);
+    per_image_.destroy(backend);
+    last_acquired_image_ = 0;
 }
 
 VkCommandBuffer VulkanContext::begin_single_time_commands() {

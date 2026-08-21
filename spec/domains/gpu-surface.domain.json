@@ -17,7 +17,7 @@
       "pathPattern": "(^|/)include/pictor/gpu/[^/]+$"
     },
     {
-      "pathPattern": "(^|/)tests/unit_(?:gpu_ring_flight|gpu_timer)_test\\.cpp$"
+      "pathPattern": "(^|/)tests/unit_(?:gpu_ring_flight|gpu_timer|swapchain_per_image_pool)_test\\.cpp$"
     }
   ]
 }
