@@ -13,7 +13,10 @@ set(PICTOR_TESTS
     unit_radix_sort_test
     unit_batch_builder_test
     unit_culling_test
+    unit_visus_metadata_test
     unit_visus_serializer_test
+    unit_visus_catalog_test
+    unit_visus_resource_loader_test
     unit_visus_instantiator_test
     unit_shader_registry_test
     unit_pipeline_profile_serializer_test

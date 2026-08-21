@@ -1,48 +1,46 @@
 #include "pictor/visus/visus_instantiator.h"
 
+#include <cmath>
+#include <limits>
+
 namespace pictor {
 
-std::vector<ObjectId> instantiate_visus(
-    SceneRegistry&    scene,
-    const VisusDesc&  desc,
-    const float4x4&   transform,
-    const AABB&       bounds)
+namespace {
+
+uint64_t number_or(const VisusMetadata& m, const char* key,
+                   uint64_t def, uint64_t max) {
+    const auto v = m.get_number(key);
+    if (!v || !std::isfinite(*v) || *v < 0.0 ||
+        *v > static_cast<double>(max) ||
+        std::trunc(*v) != *v) return def;
+    return static_cast<uint64_t>(*v);
+}
+
+} // namespace
+
+ObjectDescriptor visus_base_descriptor(const VisusDesc& desc,
+                                       const float4x4&  transform,
+                                       const AABB&      bounds)
 {
-    // 共通部分を 1 度組み立てて、 slot ごとに material/materialKey だけ差替える。
     ObjectDescriptor base{};
-    base.mesh        = desc.mesh;
-    base.transform   = transform;
-    base.bounds      = bounds;
-    base.flags       = ObjectFlags::set_layer(desc.default_flags, desc.layer);
-    base.shaderKey   = desc.shader_key_override;
-    base.lodLevel    = desc.initial_lod;
+    base.transform = transform;
+    base.bounds    = bounds;
 
-    // CUSTOM kind: `desc.shader` (ShaderHandle) を ObjectDescriptor に伝播する。
-    // 従来は捨てられていた (`spec/rendering-extensibility-design.md` §2)。
-    // - `customShader` フィールドに直接設定 (レンダラが参照する正)。
-    // - `shaderKey` 上位ビットにも畳み込み、 SoA stream を増やさずに
-    //   バッチ整列でカスタムシェーダ object をグループ化する。
-    // 固定 PBR マテリアル層は温存し、 customShader が有効な object のみ
-    // PBR 経路をバイパスする。
-    if (desc.geometry_kind == VisusGeometryKind::CUSTOM &&
-        desc.shader != INVALID_SHADER) {
-        base.customShader = desc.shader;
-        base.shaderKey    = ShaderKey::with_custom_shader(base.shaderKey, desc.shader);
-    }
-
-    std::vector<ObjectId> ids;
-    const size_t slot_count = desc.materials.empty() ? 1 : desc.materials.size();
-    ids.reserve(slot_count);
-
-    for (size_t i = 0; i < slot_count; ++i) {
-        ObjectDescriptor od = base;
-        if (!desc.materials.empty()) {
-            od.material    = desc.materials[i].material;
-            od.materialKey = static_cast<uint32_t>(desc.materials[i].material);
-        }
-        ids.push_back(scene.register_object(od));
-    }
-    return ids;
+    const uint16_t flags = static_cast<uint16_t>(
+        number_or(desc.metadata, visus_keys::kRenderFlags, ObjectFlags::DYNAMIC,
+                  std::numeric_limits<uint16_t>::max()));
+    const uint16_t layer = static_cast<uint16_t>(
+        number_or(desc.metadata, visus_keys::kRenderLayer, 0, 3));
+    base.flags     = ObjectFlags::set_layer(flags, layer);
+    base.lodLevel  = static_cast<uint8_t>(
+        number_or(desc.metadata, visus_keys::kRenderLod, 0,
+                  std::numeric_limits<uint8_t>::max()));
+    // ShaderKey reserves the upper 32 bits for the custom-shader flag and
+    // handle. Metadata may only supply the lower variant bits; otherwise an
+    // untrusted Visus file could synthesize a resolved custom shader.
+    base.shaderKey = number_or(desc.metadata, visus_keys::kShaderKeyOverride, 0,
+                               std::numeric_limits<uint32_t>::max());
+    return base;
 }
 
 } // namespace pictor

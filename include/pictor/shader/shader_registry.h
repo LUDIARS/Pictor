@@ -38,7 +38,8 @@ namespace pictor {
 class VulkanContext;
 
 /// 1 個のカスタムシェーダ登録。 `vert_spv` / `frag_spv` は compiled
-/// SPIR-V ファイルへのパス (Visus の `shader_stages` から解決済み)。
+/// SPIR-V ファイルへのパス (Visus の `VisusShaderRef` STAGES 形式
+/// = `metadata["shader"]` の `vert` / `frag` から解決済み)。
 struct CustomShaderDef {
     std::string name;        ///< 表示名 / デバッグ用 (Visus name など)
     std::string vert_spv;    ///< vertex stage SPIR-V のパス
@@ -56,7 +57,9 @@ struct CustomShaderDef {
 ///
 /// 使い方:
 ///   1. `register_shader()` で CustomShaderDef を登録 → `ShaderHandle` 取得。
-///      この handle を Visus loader が `VisusDesc::shader` に詰める。
+///      Visus v2 は JSON に handle を持たないので (`spec/feature/visus-v2-design.md`
+///      §2.1)、 この handle は実行時 side-table (VisusRuntime) が
+///      `metadata["shader"]` の解決結果として保持する。
 ///   2. (Vulkan 有効時) `build_pipelines()` を描画ターゲットの render pass
 ///      が確定したあとに 1 度呼ぶ。 登録済み全シェーダの `VkPipeline` を
 ///      生成する。

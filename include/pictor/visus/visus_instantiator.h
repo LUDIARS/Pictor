@@ -1,33 +1,24 @@
 #pragma once
 
 #include "pictor/visus/visus.h"
-#include "pictor/scene/scene_registry.h"
-
-#include <vector>
+#include "pictor/core/types.h"
 
 namespace pictor {
 
-// ============================================================
-// instantiate_visus — VisusDesc + transform/bounds → ObjectId[]
-// ============================================================
-// 1 Visus = N ObjectDescriptor (N = max(materials.size(), 1))。
+// VisusDesc の metadata から ObjectDescriptor の共通フィールドを作る。
+// flags / lod は VisusDesc の
+// metadata (`render.flags` / `render.layer` / `render.lod`、 無ければ v1
+// 既定値 DYNAMIC / 0 / 0) から複写する。 `shader.key_override` は
+// shaderKey 下位ビットへ。
 //
-//   - materials が空     : 1 個だけ INVALID_MATERIAL で登録
-//   - materials が N > 0 : slot ごとに 1 個ずつ ObjectDescriptor を登録
-//
-// 各 ObjectDescriptor の共通フィールド (mesh / transform / bounds /
-// flags / lod) は VisusDesc から複写、 material と materialKey は slot
-// 単位で差し込む。
-//
-// 親子・コンポジションは作らない (Ergo 側ノード表現の責務)。
-//
-// 戻り値: 生成された ObjectId のリスト (slot 順)。 SceneRegistry への
-// 登録は完了済。
+// Visus v2 は JSON に handle を持たないため、 この helper は mesh / material /
+// customShader を解決しない。 SceneRegistry への登録を伴う instantiate API は
+// VisusRuntime と同時に task 2 (`visus-v2-design.md` §3.2) で導入する。
 
-std::vector<ObjectId> instantiate_visus(
-    SceneRegistry&     scene,
-    const VisusDesc&   desc,
-    const float4x4&    transform,
-    const AABB&        bounds);
+/// VisusDesc の metadata から ObjectDescriptor の共通部 (flags / lod /
+/// shaderKey) を組み立てる。
+ObjectDescriptor visus_base_descriptor(const VisusDesc& desc,
+                                       const float4x4&  transform,
+                                       const AABB&      bounds);
 
 } // namespace pictor

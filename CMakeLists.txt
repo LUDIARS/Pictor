@@ -135,8 +135,12 @@ add_library(pictor STATIC
     src/shader/shader_registry.cpp
 
     # Visus (render-object definition layer)
-    src/visus/visus_registry.cpp
+    src/visus/visus_metadata.cpp
+    src/visus/visus_types.cpp
+    src/visus/visus_json.cpp
     src/visus/visus_serializer.cpp
+    src/visus/visus_v1_compat.cpp
+    src/visus/visus_catalog.cpp
     src/visus/visus_instantiator.cpp
     src/visus/resource_loader.cpp
 
