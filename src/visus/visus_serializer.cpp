@@ -139,6 +139,33 @@ std::string to_visus_json(const VisusDesc& desc) {
     return visus_json::emit(visus_desc_to_value(desc));
 }
 
+bool visus_document_version(const VisusMetadata&      root,
+                            double&                   out_version,
+                            std::string*              error,
+                            std::vector<std::string>* warnings) {
+    const VisusValue* version_value = root.find("version");
+    if (version_value && !version_value->is_number()) {
+        if (error) *error = "visus version must be a number";
+        return false;
+    }
+    // `version` は任意。 欠けているときに無条件で v2 と見なすと、 version を
+    // 落とした v1 文書が「name だけ残して他は全部 default」という形で黙って
+    // 成功してしまう。 v1 固有のトップレベル構造が残っていれば v1 として読む。
+    if (version_value) {
+        out_version = version_value->as_number();
+        return true;
+    }
+    out_version = kCurrentVersion;
+    for (std::string_view k : kV1OnlyKeys) {
+        if (root.has(k)) {
+            warn(warnings, "visus version missing; read as version 1");
+            out_version = 1.0;
+            break;
+        }
+    }
+    return true;
+}
+
 bool visus_desc_from_value(const VisusValue&         value,
                            VisusDesc&                out,
                            std::string*              error,
@@ -149,26 +176,8 @@ bool visus_desc_from_value(const VisusValue&         value,
     }
     const VisusMetadata& root = value.as_object();
 
-    const VisusValue* version_value = root.find("version");
-    if (version_value && !version_value->is_number()) {
-        if (error) *error = "visus version must be a number";
-        return false;
-    }
-    // `version` は任意。 欠けているときに無条件で v2 と見なすと、 version を
-    // 落とした v1 文書が「name だけ残して他は全部 default」という形で黙って
-    // 成功してしまう。 v1 固有のトップレベル構造が残っていれば v1 として読む。
     double version = kCurrentVersion;
-    if (version_value) {
-        version = version_value->as_number();
-    } else {
-        for (std::string_view k : kV1OnlyKeys) {
-            if (root.has(k)) {
-                warn(warnings, "visus version missing; read as version 1");
-                version = 1.0;
-                break;
-            }
-        }
-    }
+    if (!visus_document_version(root, version, error, warnings)) return false;
     if (version == 1.0) {
         return visus_v1::convert(root, out, warnings);
     }

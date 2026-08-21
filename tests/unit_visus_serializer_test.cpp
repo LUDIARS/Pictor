@@ -325,12 +325,14 @@ void test_syntax_error() {
     PT_ASSERT(!from_visus_json(R"({"version":"1"})", d, &err), "non-numeric version fails");
     PT_ASSERT(!from_visus_json("{\"name\":\"line\nbreak\"}", d, &err),
               "unescaped control character fails");
-    PT_ASSERT(!from_visus_json(R"({"name":"\uD800\u0041"})", d, &err),
+    // MSVC は raw string 内の \uXXXX (サロゲート) も UCN として検査し C3850 を出すので、
+    // JSON エスケープは通常リテラルで書く。
+    PT_ASSERT(!from_visus_json("{\"name\":\"\\uD800\\u0041\"}", d, &err),
               "mismatched surrogate pair fails");
-    PT_ASSERT(!from_visus_json(R"({"name":"\uDC00"})", d, &err),
+    PT_ASSERT(!from_visus_json("{\"name\":\"\\uDC00\"}", d, &err),
               "lone low surrogate fails");
 
-    PT_ASSERT(from_visus_json(R"({"name":"\uD83D\uDE00"})", d, &err),
+    PT_ASSERT(from_visus_json("{\"name\":\"\\uD83D\\uDE00\"}", d, &err),
               "valid surrogate pair parses");
     PT_ASSERT(d.name == "\xF0\x9F\x98\x80", "surrogate pair emits valid UTF-8");
 }

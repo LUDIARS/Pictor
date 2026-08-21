@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -104,7 +106,7 @@ public:
     /// 既存 key は値を置換 (順序は維持)、 無ければ末尾へ追加。
     void set(std::string key, VisusValue value);
     bool erase(std::string_view key);
-    void clear() { entries_.clear(); }
+    void clear() { entries_.clear(); index_.clear(); }
 
     size_t   size()  const { return entries_.size(); }
     bool     empty() const { return entries_.empty(); }
@@ -116,6 +118,9 @@ public:
 
 private:
     Entries entries_;
+    // JSON may contain tens of thousands of keys. Keep ordered storage for
+    // round-trip output and a logarithmic lookup index to avoid quadratic parse time.
+    std::map<std::string, size_t, std::less<>> index_;
 };
 
 } // namespace pictor

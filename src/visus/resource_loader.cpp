@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <limits>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -70,6 +71,8 @@ std::vector<uint8_t> FileSystemResourceLoader::fetch(std::string_view path,
 
     const std::streamsize sz = f.tellg();
     if (sz < 0) return set_error("tellg failed");
+    if (static_cast<uintmax_t>(sz) > std::numeric_limits<size_t>::max())
+        return set_error("file is too large for this process");
     f.seekg(0, std::ios::beg);
 
     std::vector<uint8_t> buf(static_cast<size_t>(sz));

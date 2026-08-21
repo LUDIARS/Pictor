@@ -141,7 +141,9 @@ add_library(pictor STATIC
     src/visus/visus_serializer.cpp
     src/visus/visus_v1_compat.cpp
     src/visus/visus_catalog.cpp
+    src/visus/visus_runtime.cpp
     src/visus/visus_instantiator.cpp
+    src/visus/visus_migrate.cpp
     src/visus/resource_loader.cpp
 
     # Pipeline
@@ -763,6 +765,17 @@ endif()
 #
 # The feature selector is a static HTML tool so it runs anywhere with a
 # browser (including file://). The measure target needs Python 3 on PATH.
+# visus_migrate — v1 *.visus.json → v2 の headless CLI (tools/visus_migrate)。
+# 本体は libpictor の visus_migrate_* なので CI は常にコンパイルする。 CLI 自体も
+# Vulkan 非依存で小さいので PICTOR_BUILD_TOOLS に関わらず作る。
+if(NOT PICTOR_MOBILE AND NOT PICTOR_BUILD_WEBGL)
+    add_executable(visus_migrate tools/visus_migrate/main.cpp)
+    target_link_libraries(visus_migrate PRIVATE pictor)
+    if(MSVC)
+        target_compile_options(visus_migrate PRIVATE /utf-8)
+    endif()
+endif()
+
 if(PICTOR_BUILD_TOOLS AND NOT PICTOR_MOBILE)
     set(_pictor_tools_selector "${CMAKE_SOURCE_DIR}/tools/feature-selector/index.html")
     if(EXISTS "${_pictor_tools_selector}")

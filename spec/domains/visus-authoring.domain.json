@@ -1,6 +1,6 @@
 {
   "name": "visus-authoring",
-  "description": "Visus (メタデータ駆動の描画定義) の取り扱い。 型 / メタデータ、 シリアライズ (v2 読み書き + v1 読込互換)、 カタログ (name 索引・パス解決・循環/深さ検査)、 資源ローダ、 実体化 (instantiate)、 パーサの堅牢性。",
+  "description": "Visus (メタデータ駆動の描画定義) の取り扱い。 型 / metadata、 シリアライズ (v2 読み書き・v1 読込互換)、 カタログ、 runtime 解決、 実体化 (instantiate)、 v1 移行、 パーサの堅牢性。",
   "presetRules": [],
   "templateRules": [],
   "membership": [
@@ -11,16 +11,16 @@
       "pathPattern": "(^|/)include/pictor/visus/[^/]+$"
     },
     {
-      "pathPattern": "(^|/)tests/unit_visus_[^/]+_test\\.cpp$"
-    },
-    {
-      "pathPattern": "(^|/)tests/unit_parser_dos_test\\.cpp$"
+      "pathPattern": "(^|/)tests/unit_(?:visus_[^/]+|parser_dos)_test\\.cpp$"
     },
     {
       "pathPattern": "(^|/)spec/feature/visus-v2-design\\.md$"
     },
     {
       "pathPattern": "(^|/)spec/tasks/[^/]*visus-v2[^/]*\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)tools/visus_migrate/[^/]+\\.cpp$"
     }
   ]
 }

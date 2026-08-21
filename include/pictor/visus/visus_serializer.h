@@ -59,6 +59,15 @@ bool from_visus_json(const std::string&        json,
                      std::string*              error    = nullptr,
                      std::vector<std::string>* warnings = nullptr);
 
+/// 文書ルートの実効 version を返す。 `version` key が無い文書は v1 固有の
+/// トップレベル key の有無で 1.0 / 2.0 を判定する (欠落 v1 を v2 と誤認しない
+/// ため、 読込経路と migrate 経路は必ずこの判定を共有する)。 `version` が数値
+/// でなければ false。
+bool visus_document_version(const VisusMetadata&      root,
+                            double&                   out_version,
+                            std::string*              error    = nullptr,
+                            std::vector<std::string>* warnings = nullptr);
+
 /// VisusDesc → 汎用 JSON 値 (version 2 の構造)。 エディタ / migrate 用。
 VisusValue visus_desc_to_value(const VisusDesc& desc);
 

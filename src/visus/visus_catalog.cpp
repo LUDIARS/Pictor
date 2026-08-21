@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <utility>
 
 namespace pictor {
 
@@ -52,18 +53,34 @@ size_t VisusCatalog::load_directory(const std::string&        dir,
     }
     // 決定的な順序で読む (ディレクトリ列挙順は OS 依存)。
     std::vector<fs::path> files;
+    // 読まなかった候補は理由付きで報告する。 黙って落とすと、 catalog に載って
+    // いない Visus が「そもそも無かった」のか「弾かれた」のか区別できない。
+    std::vector<std::pair<fs::path, std::string>> rejected;
     fs::directory_iterator it(dir, ec);
     const fs::directory_iterator end;
     while (it != end && !ec) {
+        const bool has_suffix = ends_with(
+            it->path().filename().generic_string(), kSuffix);
         std::error_code file_ec;
-        if (it->is_regular_file(file_ec) &&
-            ends_with(it->path().filename().generic_string(), kSuffix)) {
+        if (!has_suffix) {
+            // not a visus file
+        } else if (it->is_symlink(file_ec)) {
+            rejected.emplace_back(it->path(), "symbolic link refused");
+        } else if (file_ec) {
+            rejected.emplace_back(it->path(), "file status failed");
+        } else if (it->is_regular_file(file_ec)) {
             files.push_back(it->path());
+        } else if (file_ec) {
+            rejected.emplace_back(it->path(), "file status failed");
         }
         it.increment(ec);
     }
     if (ec) push(errors, "visus catalog: directory enumeration failed: " + dir);
     std::sort(files.begin(), files.end());
+    std::sort(rejected.begin(), rejected.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& [path, reason] : rejected)
+        push(errors, path.generic_string() + ": " + reason);
 
     size_t loaded = 0;
     for (const fs::path& f : files) {
