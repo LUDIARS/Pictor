@@ -53,9 +53,10 @@ hot.poll();
 
 ### 1.3 既存 seam への追加
 
-- `PictorRenderer::profile_source_path()` — 最後に `load_profile_from_file()` で読んだパス。
-- `PictorRenderer::reload_profile_from_source(error*)` — 上記パスを読み直して再適用。`set_profile / load_profile_from_file / reload_active_profile` と同じ経路なので compiled graph の再 compile も既存どおり自動。
-- `ShaderRegistry::rebuild_pipelines()` — 初回 `build_pipelines()` の引数 (render pass / subpass / layout) を記憶し、SPIR-V から候補 pipeline 群を構築する。全件成功時だけ内部で `vkDeviceWaitIdle` して旧 pipeline 群と差し替える。1 本でも失敗したら候補を破棄して旧 pipeline 群を維持する = **シェーダが壊れていても last-known-good 描画を失わない**。Vulkan 無効時は同じホスト配線を使える no-op。
+- `PictorRenderer::profile_source_path()` — 現在 active な file-backed profile の読込元。**別 profile** への `set_profile()`、同名 profile の `register_custom_profile()`、`shutdown()` で programmatic な定義へ切り替えた時点で解除し、古い watcher が stale file を再有効化しない。現在の profile を選び直すだけの `set_profile()` は何も supersede しないので解除しない (ここで解除するとホットリロードが黙って死ぬ)。
+- `PictorRenderer::reload_profile_from_source(error*)` — 上記パスを読み直して再適用。現在の profile が file-backed でなければ失敗する。partial JSON の基底は最初の `load_profile_from_file` 時点の profile に固定し、ファイルから key を削除したときは前回の file-derived 値を引き継がず基底値へ戻す。同じ path を `load_profile_from_file` で読み直す配線も同じ基底を再利用するので契約は同一。`load_profile_from_file / reload_active_profile` と同じ適用経路なので compiled graph の再 compile も既存どおり自動。
+- `ShaderRegistry::rebuild_pipelines()` — 初回 `build_pipelines()` の引数 (render pass / subpass / layout) を記憶し、size/alignment/header magic を検査した SPIR-V から候補 pipeline 群を構築する。全件成功時だけ内部で `vkDeviceWaitIdle` して旧 pipeline 群と差し替える。1 本でも失敗したら候補を破棄して旧 pipeline 群を維持する = **シェーダが壊れていても last-known-good 描画を失わない**。Vulkan 無効時は同じホスト配線を使える no-op。
+- `ShaderRegistry::invalidate_build_target()` — 記憶した render pass / subpass / layout を捨てて未 build 状態へ戻す (以降の `rebuild_pipelines()` は dangling handle を触らず no-op success)。**ホストの責務**: `VulkanContext::recreate_swapchain()` は `create_default_render_pass` 有効時に render pass を破棄・再生成するため、記憶済み handle が dangling になる。破棄済み Vulkan handle は non-null のままで Pictor 側から検知できないので、render pass / pipeline layout を作り直すホストは**破棄の前に**本 API を呼び、新しい target で `build_pipelines()` を呼び直す。これを怠るとリサイズ後の `.spv` 保存が dangling `VkRenderPass` に対して `vkCreateGraphicsPipelines` を呼ぶ。invalidate は既存 pipeline 群に触れないので、続く `build_pipelines()` が旧 pipeline 群を wait idle 後に破棄してから差し替える (リサイズのたびに漏らさない)。
 
 ## 2. ホスト側の配線 (別タスク)
 
@@ -73,5 +74,5 @@ hot.poll();
 ## 4. テスト
 
 - `unit_file_watch_test`: mtime 変更検出 / settle 待ち / 不在→出現 / 変更が続く間は発火しない。
-- `unit_pipeline_hot_reload_test`: group 分配 / interval 間引き / watch_directory の拡張子フィルタ / コールバック発火内容。
-- ShaderRegistry rebuild は headless では no-op API 契約を unit test する。実 Vulkan の last-known-good 差し替えは実機確認 (no-run 規約)。
+- `unit_pipeline_hot_reload_test`: group 分配 / interval 間引き / watch_directory の拡張子フィルタ / コールバック発火内容 / profile override 削除時の基底値復帰。
+- ShaderRegistry rebuild は headless では no-op API 契約を unit test する。`invalidate_build_target()` は未 build registry で副作用が無いことを unit test する。実 Vulkan の last-known-good 差し替えと、swapchain 再生成 → invalidate → 再 build の順序は実機確認 (no-run 規約)。

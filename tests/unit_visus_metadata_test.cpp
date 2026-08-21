@@ -104,6 +104,30 @@ void test_parsed_metadata_is_indexed() {
               "erase refreshes shifted parser-populated indexes");
 }
 
+void test_ordered_merge() {
+    VisusMetadata base;
+    base.set("first", 1);
+    base.set("shared", "old");
+    VisusMetadata over;
+    over.set("shared", "new");
+    over.set("last", 3);
+
+    base.merge_from(over);
+    std::vector<std::string> keys;
+    for (const auto& [key, _] : base) keys.push_back(key);
+    PT_ASSERT(keys == std::vector<std::string>({"first", "shared", "last"}),
+              "merge preserves existing order and appends new keys");
+    PT_ASSERT(base.get_string("shared").value_or("") == "new",
+              "merge replaces existing values");
+    // 追加された key も索引に載っていないと、 以降の find / get_* / set /
+    // erase が全て miss する (読み経路は index_ しか見ない)。
+    PT_ASSERT(base.get_number("last").value_or(-1) == 3.0,
+              "merge indexes newly appended keys");
+    base.set("last", 4);
+    PT_ASSERT_OP(base.size(), ==, size_t{3}, "set on a merged key replaces, not duplicates");
+    PT_ASSERT(base.erase("last") && !base.has("last"), "merged key is erasable");
+}
+
 } // namespace
 
 int main() {
@@ -112,5 +136,6 @@ int main() {
     test_deep_copy();
     test_move_leaves_null_source();
     test_parsed_metadata_is_indexed();
+    test_ordered_merge();
     return report("unit_visus_metadata_test");
 }

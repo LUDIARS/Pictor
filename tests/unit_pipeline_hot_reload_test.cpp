@@ -1,5 +1,7 @@
 /// PipelineHotReload — group 分配 / interval 間引き / watch_directory フィルタ。
 
+#include "pictor/pipeline/pipeline_profile.h"
+#include "pictor/core/pictor_renderer.h"
 #include "pictor/pipeline/pipeline_hot_reload.h"
 #include "test_common.h"
 
@@ -139,10 +141,80 @@ void test_callback_less_group_still_reports() {
     fs::remove_all(dir, ec);
 }
 
+void test_file_profile_detaches_when_programmatic_state_supersedes_it() {
+    std::error_code ec;
+    const fs::path profile_path =
+        fs::temp_directory_path(ec) / "pictor_hot_file.profile.json";
+    write_file(profile_path, "{\"profile_name\":\"HotFile\"}");
+
+    PictorRenderer renderer;
+    renderer.initialize();
+    std::string error;
+    PT_ASSERT(renderer.load_profile_from_file(profile_path.generic_string(), &error),
+              error.c_str());
+    PT_ASSERT(renderer.profile_source_path() == profile_path.generic_string(),
+              "file-backed profile exposes its source");
+
+    PipelineProfileDef replacement = PipelineProfileManager::create_lite_profile();
+    replacement.profile_name = "HotFile";
+    renderer.register_custom_profile(replacement);
+    PT_ASSERT(renderer.profile_source_path().empty(),
+              "programmatic replacement detaches the old file source");
+    PT_ASSERT(!renderer.reload_profile_from_source(&error),
+              "detached source cannot reactivate a stale file profile");
+
+    PT_ASSERT(renderer.load_profile_from_file(profile_path.generic_string(), &error),
+              error.c_str());
+    PT_ASSERT(renderer.set_profile("Lite"), "programmatic profile switch succeeds");
+    PT_ASSERT(renderer.profile_source_path().empty(),
+              "programmatic selection detaches the old file source");
+
+    PT_ASSERT(renderer.load_profile_from_file(profile_path.generic_string(), &error),
+              error.c_str());
+    renderer.shutdown();
+    PT_ASSERT(renderer.profile_source_path().empty(),
+              "shutdown detaches the file source before reinitialization");
+
+    fs::remove(profile_path, ec);
+}
+
+void test_file_profile_reload_uses_the_original_base() {
+    std::error_code ec;
+    const fs::path profile_path =
+        fs::temp_directory_path(ec) / "pictor_hot_reload_base.profile.json";
+
+    PictorRenderer renderer;
+    renderer.initialize();
+    const uint8_t base_msaa = renderer.profile_manager().current_profile().msaa_samples;
+    const uint8_t override_msaa = base_msaa == 4 ? 2 : 4;
+
+    write_file(profile_path,
+               override_msaa == 4
+                   ? "{\"profile_name\":\"HotBase\",\"msaa_samples\":4}"
+                   : "{\"profile_name\":\"HotBase\",\"msaa_samples\":2}");
+    std::string error;
+    PT_ASSERT(renderer.load_profile_from_file(profile_path.generic_string(), &error),
+              error.c_str());
+    PT_ASSERT_OP(renderer.profile_manager().current_profile().msaa_samples,
+                 ==, override_msaa, "file override is active");
+
+    // Removing the key must restore the value from the base captured by the
+    // first load, not inherit the previous file-derived override.
+    write_file(profile_path, "{\"profile_name\":\"HotBase\"}");
+    PT_ASSERT(renderer.reload_profile_from_source(&error), error.c_str());
+    PT_ASSERT_OP(renderer.profile_manager().current_profile().msaa_samples,
+                 ==, base_msaa, "deleted override returns to the original base");
+
+    renderer.shutdown();
+    fs::remove(profile_path, ec);
+}
+
 } // namespace
 
 int main() {
     test_groups_and_interval();
     test_callback_less_group_still_reports();
+    test_file_profile_detaches_when_programmatic_state_supersedes_it();
+    test_file_profile_reload_uses_the_original_base();
     return report("unit_pipeline_hot_reload_test");
 }

@@ -17,6 +17,8 @@ namespace pictor {
 namespace {
 
 constexpr std::size_t kMaxShaderModuleBytes = std::size_t{64} << 20;
+constexpr std::uint32_t kSpirvMagic = 0x07230203u;
+constexpr std::size_t kSpirvHeaderWords = 5;
 
 } // namespace
 #endif
@@ -54,7 +56,8 @@ VkShaderModule ShaderRegistry::load_module_(const std::string& path) const {
         return VK_NULL_HANDLE;
     }
     const std::streamsize end = f.tellg();
-    if (end <= 0 || static_cast<std::uintmax_t>(end) > kMaxShaderModuleBytes ||
+    if (end < static_cast<std::streamsize>(kSpirvHeaderWords * sizeof(std::uint32_t)) ||
+        static_cast<std::uintmax_t>(end) > kMaxShaderModuleBytes ||
         end % static_cast<std::streamsize>(sizeof(std::uint32_t)) != 0) {
         std::fprintf(stderr, "[shader] invalid SPIR-V size: %s\n", path.c_str());
         return VK_NULL_HANDLE;
@@ -65,6 +68,10 @@ VkShaderModule ShaderRegistry::load_module_(const std::string& path) const {
     if (!f.read(reinterpret_cast<char*>(words.data()),
                 static_cast<std::streamsize>(sz))) {
         std::fprintf(stderr, "[shader] read failed: %s\n", path.c_str());
+        return VK_NULL_HANDLE;
+    }
+    if (words[0] != kSpirvMagic) {
+        std::fprintf(stderr, "[shader] invalid SPIR-V magic: %s\n", path.c_str());
         return VK_NULL_HANDLE;
     }
 
@@ -85,7 +92,17 @@ bool ShaderRegistry::build_pipelines(VulkanContext& vk,
                                      uint32_t         subpass,
                                      VkPipelineLayout pipeline_layout) {
     if (built_) return true;
-    if (shaders_.empty()) { built_ = true; return true; }
+    if (shaders_.empty()) {
+        // 空 build でも context / 引数は記憶する。 後から register された
+        // シェーダを rebuild_pipelines() が実 build できるようにするため。
+        vk_     = &vk;
+        device_ = vk.device();
+        built_render_pass_ = render_pass;
+        built_subpass_     = subpass;
+        built_layout_      = pipeline_layout;
+        built_ = true;
+        return true;
+    }
     if (render_pass == VK_NULL_HANDLE || pipeline_layout == VK_NULL_HANDLE) {
         std::fprintf(stderr, "[shader] build_pipelines: render pass / layout "
                              "must be valid\n");
@@ -97,7 +114,32 @@ bool ShaderRegistry::build_pipelines(VulkanContext& vk,
     built_render_pass_ = render_pass;
     built_subpass_     = subpass;
     built_layout_      = pipeline_layout;
-    pipelines_.assign(shaders_.size(), VK_NULL_HANDLE);
+
+    // 初回 build: 失敗したシェーダは VK_NULL_HANDLE のまま警告してスキップ
+    // する (部分成功を許す)。 all-or-nothing の差し替えは rebuild 側の責務。
+    std::vector<VkPipeline> candidates;
+    const bool all_ok = build_candidates_(render_pass, subpass,
+                                          pipeline_layout, candidates);
+    // invalidate_build_target() → build_pipelines() の再 build 経路では旧
+    // pipeline 群がまだ生きている (invalidate は built_ を戻すだけで破棄
+    // しない)。 上書きすると handle を失うので、 提出済み command buffer の
+    // 参照が切れるのを待ってから破棄する。
+    if (!pipelines_.empty()) {
+        vkDeviceWaitIdle(device_);
+        for (VkPipeline p : pipelines_) {
+            if (p != VK_NULL_HANDLE) vkDestroyPipeline(device_, p, nullptr);
+        }
+    }
+    pipelines_ = std::move(candidates);
+    built_ = true;
+    return all_ok;
+}
+
+bool ShaderRegistry::build_candidates_(VkRenderPass     render_pass,
+                                       uint32_t         subpass,
+                                       VkPipelineLayout pipeline_layout,
+                                       std::vector<VkPipeline>& out) {
+    out.assign(shaders_.size(), VK_NULL_HANDLE);
 
     // graphics pipeline 生成は共通ヘルパー `build_graphics_pipeline()` に
     // 委譲する (§6.3 項目6 — PostProcessPipeline との重複統合)。
@@ -129,18 +171,17 @@ bool ShaderRegistry::build_pipelines(VulkanContext& vk,
         gd.cull_back     = true;   // mesh — 背面カリング
         gd.depth_test    = true;   // mesh — 深度テスト
 
-        const bool ok = build_graphics_pipeline(device_, gd, pipelines_[i]);
+        const bool ok = build_graphics_pipeline(device_, gd, out[i]);
         vkDestroyShaderModule(device_, vs, nullptr);
         vkDestroyShaderModule(device_, fs, nullptr);
         if (!ok) {
             std::fprintf(stderr, "[shader] vkCreateGraphicsPipelines failed: "
                                  "%s\n", def.name.c_str());
-            pipelines_[i] = VK_NULL_HANDLE;
+            out[i] = VK_NULL_HANDLE;
             all_ok = false;
         }
     }
 
-    built_ = true;
     return all_ok;
 }
 
@@ -150,38 +191,64 @@ VkPipeline ShaderRegistry::pipeline(ShaderHandle handle) const {
     return pipelines_[handle];
 }
 
+void ShaderRegistry::invalidate_build_target() {
+    // 記憶した handle は破棄後も non-null のままなので、 dangling を
+    // Pictor 側から検知する手段が無い。 ホストが破棄前にここを呼ぶことで
+    // 「記憶なし」 へ戻し、 rebuild_pipelines() が古い render pass /
+    // layout を使って未定義動作に入るのを防ぐ。
+    built_render_pass_ = VK_NULL_HANDLE;
+    built_subpass_     = 0;
+    built_layout_      = VK_NULL_HANDLE;
+    // build target を失った以上 build 済みとは言えない。 ホストが新しい
+    // render pass で build_pipelines() を呼び直せるよう false へ戻す
+    // (build_pipelines は built_ のとき即 true で戻るため)。
+    built_ = false;
+}
+
 #endif // PICTOR_HAS_VULKAN
 
 bool ShaderRegistry::rebuild_pipelines() {
 #ifdef PICTOR_HAS_VULKAN
     if (!built_) return true;   // まだ build していない — リロード対象なし
-    if (!vk_ || device_ == VK_NULL_HANDLE) return true;   // 空 build (shaders_ 空) だった
+    if (!vk_ || device_ == VK_NULL_HANDLE) {
+        // built_ なのに context 未記憶 — build-after-register の契約外。
+        // 「何も build せず成功」を返すと呼び出し側が回復不能になるため
+        // 失敗として報告する。
+        std::fprintf(stderr, "[shader] rebuild_pipelines: no recorded build "
+                             "context\n");
+        return false;
+    }
+    if (shaders_.empty()) return true;   // リロード対象なし
 
-    VulkanContext&   vk          = *vk_;
-    VkRenderPass     render_pass = built_render_pass_;
-    uint32_t         subpass     = built_subpass_;
-    VkPipelineLayout layout      = built_layout_;
-
-    // Candidate pipelines are built while the current set remains live. A
-    // malformed or half-written SPIR-V file therefore cannot destroy the
-    // last-known-good render path.
-    std::vector<VkPipeline> old_pipelines = std::move(pipelines_);
-    built_ = false;
-    if (!build_pipelines(vk, render_pass, subpass, layout)) {
-        for (VkPipeline p : pipelines_) {
-            if (p != VK_NULL_HANDLE) vkDestroyPipeline(device_, p, nullptr);
-        }
-        pipelines_ = std::move(old_pipelines);
-        built_ = true;
+    if (built_render_pass_ == VK_NULL_HANDLE ||
+        built_layout_ == VK_NULL_HANDLE) {
+        std::fprintf(stderr, "[shader] rebuild_pipelines: recorded render "
+                             "pass / layout are invalid\n");
         return false;
     }
 
-    // Only the successful candidate set is published. Wait before destroying
-    // pipelines that may still be referenced by submitted command buffers.
+    // 候補 pipeline はローカル vector へ build し、 現行 pipelines_ には
+    // 一切触れない。 壊れた / 書き込み途中の SPIR-V が 1 本でもあれば候補
+    // 全体を破棄して false — last-known-good の描画経路はそのまま残る
+    // (shader_registry.h / pipeline-hot-reload.md の契約)。
+    std::vector<VkPipeline> candidates;
+    if (!build_candidates_(built_render_pass_, built_subpass_, built_layout_,
+                           candidates)) {
+        // 候補はまだどの command buffer にも bind されていないため、
+        // device idle を待たずに破棄してよい。
+        for (VkPipeline p : candidates) {
+            if (p != VK_NULL_HANDLE) vkDestroyPipeline(device_, p, nullptr);
+        }
+        return false;
+    }
+
+    // 全件成功時のみ差し替える。 提出済み command buffer が旧 pipeline を
+    // 参照している可能性があるため、 破棄前に device idle を待つ。
     vkDeviceWaitIdle(device_);
-    for (VkPipeline p : old_pipelines) {
+    for (VkPipeline p : pipelines_) {
         if (p != VK_NULL_HANDLE) vkDestroyPipeline(device_, p, nullptr);
     }
+    pipelines_ = std::move(candidates);
 #endif
     return true;
 }
@@ -198,6 +265,12 @@ void ShaderRegistry::shutdown() {
     pipelines_.clear();
     vk_    = nullptr;
     built_ = false;
+    // 記憶した build target も捨てる。 shutdown 後に再 build せず
+    // rebuild_pipelines() を呼ばれても、 破棄済み render pass / layout を
+    // 掴んだままにしない。
+    built_render_pass_ = VK_NULL_HANDLE;
+    built_subpass_     = 0;
+    built_layout_      = VK_NULL_HANDLE;
 #endif
 }
 

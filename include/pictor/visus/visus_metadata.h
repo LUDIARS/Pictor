@@ -105,6 +105,9 @@ public:
 
     /// 既存 key は値を置換 (順序は維持)、 無ければ末尾へ追加。
     void set(std::string key, VisusValue value);
+    /// `over` の key を上書きマージする。既存 key の位置は維持し、新規 key は
+    /// 末尾へ追加する。`over` の件数 × 索引引きの対数時間 (二乗にはならない)。
+    void merge_from(const VisusMetadata& over);
     bool erase(std::string_view key);
     void clear() { entries_.clear(); index_.clear(); }
 

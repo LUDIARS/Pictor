@@ -215,6 +215,16 @@ void test_load_directory_and_path_refs() {
     PT_ASSERT(katana && katana->name == "katana", "path reference resolves by source_path");
     PT_ASSERT(cat.validate().empty(), "all resolved after loading child");
 
+    const fs::path linked = dir / "linked.visus.json";
+    ec.clear();
+    fs::create_symlink(dir / "kuzuha.visus.json", linked, ec);
+    if (!ec) {
+        PT_ASSERT(!cat.load_file(linked.generic_string(), &err),
+                  "direct catalog load refuses symbolic links");
+        PT_ASSERT(err.find("symbolic link") != std::string::npos,
+                  "direct catalog symlink refusal is explicit");
+    }
+
     fs::remove_all(dir, ec);
 }
 

@@ -54,7 +54,8 @@ void VisusRuntime::resolve_model_(const VisusCatalog& catalog,
                                   const std::string& asset,
                                   IVisusResolver& resolver,
                                   VisusResolved& out,
-                                  std::vector<std::string>* warnings) {
+                                  std::vector<std::string>* warnings,
+                                  const VisusPackageCatalog* packages) {
     std::string err;
     if (asset.empty()) return;
 
@@ -98,6 +99,11 @@ void VisusRuntime::resolve_model_(const VisusCatalog& catalog,
         }
         rp.shader_key = ShaderKey::with_custom_shader(
             key_override(metadata, desc.metadata), rp.shader);
+        // base の上に重ね掛けする実効パッケージ列 (§2.5.3)。
+        const std::vector<VisusPackageRef> empty_refs;
+        resolve_packages_(catalog, desc,
+                          configured ? configured->packages : empty_refs,
+                          resolver, packages, rp.packages, warnings);
         out.parts.push_back(std::move(rp));
     }
     for (const VisusPart& configured : desc.parts) {
@@ -139,10 +145,11 @@ bool VisusRuntime::invalidate(std::string_view name) {
     return true;
 }
 
-bool VisusRuntime::resolve(const VisusCatalog&       catalog,
-                           std::string_view          name,
-                           IVisusResolver&           resolver,
-                           std::vector<std::string>* warnings) {
+bool VisusRuntime::resolve(const VisusCatalog&        catalog,
+                           std::string_view           name,
+                           IVisusResolver&            resolver,
+                           std::vector<std::string>*  warnings,
+                           const VisusPackageCatalog* packages) {
     const VisusDesc* desc = catalog.find(name);
     if (!desc) {
         warn(warnings, "visus not found: " + std::string(name));
@@ -150,14 +157,15 @@ bool VisusRuntime::resolve(const VisusCatalog&       catalog,
     }
     std::vector<std::string> stack;
     std::map<std::string, uint16_t, std::less<>> visited_depths;
-    return resolve_rec_(catalog, *desc, resolver, 0, stack, visited_depths, warnings);
+    return resolve_rec_(catalog, *desc, resolver, 0, stack, visited_depths, warnings, packages);
 }
 
 bool VisusRuntime::resolve_rec_(const VisusCatalog& catalog, const VisusDesc& desc,
                                 IVisusResolver& resolver, int depth,
                                 std::vector<std::string>& stack,
                                 std::map<std::string, uint16_t, std::less<>>& visited_depths,
-                                std::vector<std::string>* warnings) {
+                                std::vector<std::string>* warnings,
+                                const VisusPackageCatalog* packages) {
     for (const std::string& s : stack) {
         if (s == desc.name) {
             warn(warnings, "visus cycle at: " + desc.name);
@@ -184,7 +192,7 @@ bool VisusRuntime::resolve_rec_(const VisusCatalog& catalog, const VisusDesc& de
 
     bool ok = true;
     if (!is_resolved(desc.name)) {
-        ok = resolve_one_(catalog, desc, resolver, warnings);
+        ok = resolve_one_(catalog, desc, resolver, warnings, packages);
     }
 
     stack.push_back(desc.name);
@@ -195,7 +203,7 @@ bool VisusRuntime::resolve_rec_(const VisusCatalog& catalog, const VisusDesc& de
             warn(warnings, desc.name + ": " + err);
             continue;
         }
-        resolve_rec_(catalog, *child, resolver, depth + 1, stack, visited_depths, warnings);
+        resolve_rec_(catalog, *child, resolver, depth + 1, stack, visited_depths, warnings, packages);
     }
     stack.pop_back();
     visited = static_cast<uint16_t>(visited | depth_bit);
@@ -222,9 +230,15 @@ ShaderHandle VisusRuntime::resolve_shader_ref_(const VisusCatalog& catalog,
                 warn(warnings, owner.name + ": shader stages need both vert and frag");
                 return INVALID_SHADER;
             }
+            const VisusShaderRef resolved = resolve_stage_paths(catalog, owner, ref);
+            if (!resolved.has_graphics_stages()) {
+                // 元は vert/frag が揃っていたが、 resolve_path が不正パスで
+                // 空を返した。 空パスを resolver へ渡さない。
+                warn(warnings, owner.name + ": shader stage path could not be resolved");
+                return INVALID_SHADER;
+            }
             std::string err;
-            const ShaderHandle h = resolver.register_shader_stages(
-                resolve_stage_paths(catalog, owner, ref), metadata, &err);
+            const ShaderHandle h = resolver.register_shader_stages(resolved, metadata, &err);
             if (h == INVALID_SHADER && !err.empty()) warn(warnings, owner.name + ": " + err);
             return h;
         }
@@ -278,7 +292,8 @@ ShaderHandle VisusRuntime::resolve_shader_ref_(const VisusCatalog& catalog,
 
 bool VisusRuntime::resolve_one_(const VisusCatalog& catalog, const VisusDesc& desc,
                                 IVisusResolver& resolver,
-                                std::vector<std::string>* warnings) {
+                                std::vector<std::string>* warnings,
+                                const VisusPackageCatalog* packages) {
     VisusResolved r;
     r.name = desc.name;
     r.kind = desc.kind;
@@ -286,6 +301,11 @@ bool VisusRuntime::resolve_one_(const VisusCatalog& catalog, const VisusDesc& de
 
     const std::string asset = desc.asset.empty() ? std::string{}
                                                  : catalog.resolve_path(desc, desc.asset);
+    if (!desc.asset.empty() && asset.empty()) {
+        // resolve_path は不正パス (NUL / filesystem 非対応) で空を返す。
+        // 黙って「アセット無し」に落とすと透明オブジェクトになるため警告。
+        warn(warnings, desc.name + ": asset path could not be resolved: " + desc.asset);
+    }
 
     switch (desc.kind) {
         case VisusKind::PRIMITIVE:
@@ -304,7 +324,7 @@ bool VisusRuntime::resolve_one_(const VisusCatalog& catalog, const VisusDesc& de
             break;
 
         case VisusKind::MODEL: {
-            resolve_model_(catalog, desc, asset, resolver, r, warnings);
+            resolve_model_(catalog, desc, asset, resolver, r, warnings, packages);
             break;
         }
 
@@ -337,8 +357,109 @@ bool VisusRuntime::resolve_one_(const VisusCatalog& catalog, const VisusDesc& de
 
     r.shader_key = ShaderKey::with_custom_shader(key_override(VisusMetadata{}, desc.metadata),
                                                  r.shader);
+    // MODEL は part ごとに実効列を持つ (resolve_model_)。 PRIMITIVE は
+    // Visus 直下のアサインをそのまま重ね掛け列として持つ。 それ以外の
+    // kind は instantiate 側 (register_packages) に重ね掛けパスの登録先が
+    // 無いため、 黙って解決 (= shader handle 消費) せず警告して無視する。
+    if (desc.kind == VisusKind::PRIMITIVE) {
+        const std::vector<VisusPackageRef> no_part_level;
+        resolve_packages_(catalog, desc, no_part_level, resolver, packages,
+                          r.packages, warnings);
+    } else if (desc.kind != VisusKind::MODEL && !desc.packages.empty()) {
+        warn(warnings, desc.name +
+                       ": shader_packages are only supported on kind=model/"
+                       "primitive — ignored");
+    }
     set(std::move(r));
     return true;
+}
+
+// ---- シェーダーパッケージ (§2.5) ---------------------------------------------
+
+ShaderHandle VisusRuntime::resolve_package_shader_(const VisusCatalog& catalog,
+                                                   const VisusDesc& owner,
+                                                   const VisusPackageCatalog& packages,
+                                                   const VisusShaderPackage& pkg,
+                                                   const VisusMetadata& metadata,
+                                                   IVisusResolver& resolver,
+                                                   std::vector<std::string>* warnings) {
+    switch (pkg.shader.kind) {
+        case VisusShaderRef::Kind::BUILTIN:
+            return pkg.shader.is_default_builtin() ? INVALID_SHADER
+                                                   : resolver.builtin_shader(pkg.shader.name);
+
+        case VisusShaderRef::Kind::STAGES: {
+            if (!pkg.shader.has_graphics_stages()) {
+                warn(warnings, owner.name + " (" + pkg.name +
+                               "): shader package needs both vert and frag");
+                return INVALID_SHADER;
+            }
+            // stage パスはパッケージファイル起点で解決する (§2.5.1)。
+            VisusShaderRef ref = pkg.shader;
+            if (!ref.vert.empty()) ref.vert = packages.resolve_path(pkg.name, ref.vert);
+            if (!ref.frag.empty()) ref.frag = packages.resolve_path(pkg.name, ref.frag);
+            if (!ref.comp.empty()) ref.comp = packages.resolve_path(pkg.name, ref.comp);
+            if (!ref.has_graphics_stages()) {
+                warn(warnings, owner.name + " (" + pkg.name +
+                               "): shader stage path could not be resolved");
+                return INVALID_SHADER;
+            }
+            std::string err;
+            const ShaderHandle h = resolver.register_shader_stages(ref, metadata, &err);
+            if (h == INVALID_SHADER && !err.empty())
+                warn(warnings, owner.name + " (" + pkg.name + "): " + err);
+            return h;
+        }
+
+        case VisusShaderRef::Kind::VISUS:
+            // visus:<name> は Visus カタログ側の kind=custom を参照する。
+            return resolve_shader_ref_(catalog, owner, pkg.shader, metadata,
+                                       resolver, 0, warnings);
+    }
+    return INVALID_SHADER;
+}
+
+void VisusRuntime::resolve_packages_(const VisusCatalog& catalog, const VisusDesc& desc,
+                                     const std::vector<VisusPackageRef>& part_level,
+                                     IVisusResolver& resolver,
+                                     const VisusPackageCatalog* packages,
+                                     std::vector<VisusResolvedPackage>& out,
+                                     std::vector<std::string>* warnings) {
+    const std::vector<VisusPackageRef> effective =
+        visus_effective_packages(desc.packages, part_level);
+    if (effective.empty()) return;
+    if (!packages) {
+        warn(warnings, desc.name + ": shader packages assigned but no package catalog given");
+        return;
+    }
+
+    out.reserve(effective.size());
+    for (const VisusPackageRef& ref : effective) {
+        const VisusShaderPackage* pkg = packages->find(ref.package);
+        if (!pkg) {
+            warn(warnings, desc.name + ": shader package not found: " + ref.package);
+            continue;
+        }
+        VisusResolvedPackage rp;
+        rp.package  = ref.package;
+        rp.params   = visus_package_effective_params(*pkg, ref);
+        rp.metadata = visus_package_effective_metadata(*pkg, ref);
+        rp.shader   = resolve_package_shader_(catalog, desc, *packages, *pkg,
+                                              rp.metadata, resolver, warnings);
+        // シェーダが解決できなかったパッケージはパスごと落とす。 積むと
+        // instantiate 側 (register_packages) が base と同一の
+        // ObjectDescriptor を登録し、 同じ mesh が base pipeline で二重描画
+        // される (深度/アルファが壊れる)。 既定 builtin (= 明示的に既定
+        // pipeline を使うアサイン) は失敗ではないので通す。
+        if (rp.shader == INVALID_SHADER && !pkg->shader.is_default_builtin()) {
+            warn(warnings, desc.name + ": shader package shader unresolved, pass dropped: " +
+                           ref.package);
+            continue;
+        }
+        rp.shader_key = ShaderKey::with_custom_shader(
+            key_override(rp.metadata, desc.metadata), rp.shader);
+        out.push_back(std::move(rp));
+    }
 }
 
 } // namespace pictor

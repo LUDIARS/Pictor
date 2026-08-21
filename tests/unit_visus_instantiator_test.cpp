@@ -305,6 +305,60 @@ void test_primitive_carries_resolved_shader_and_material() {
     }
 }
 
+// 重ね掛けパス (§2.5.3): part ごとに base + パッケージ数の ObjectDescriptor が
+// 出て、 binding から動的パラメータを書き換えられる。
+void test_package_overlay_passes() {
+    MemorySubsystem memory;
+    SceneRegistry   scene(memory);
+
+    VisusCatalog cat;
+    VisusDesc d;
+    d.name  = "kuzuha";
+    d.kind  = VisusKind::MODEL;
+    d.asset = "k.fbx";
+    cat.add(d);
+
+    VisusResolved r = resolved_model();
+    VisusResolvedPackage toon;
+    toon.package    = "toon";
+    toon.shader     = 77;
+    toon.shader_key = ShaderKey::with_custom_shader(0, 77);
+    toon.params.set("rim_power", 2.0);
+    VisusResolvedPackage outline;
+    outline.package = "outline";
+    outline.shader  = 78;
+    r.parts[0].packages = {toon, outline};   // cloak: base + 2 パス
+    r.parts[1].packages = {toon};            // face:  base + 1 パス
+
+    VisusRuntime rt;
+    rt.set(r);
+
+    VisusInstance inst;
+    std::vector<std::string> w;
+    const AABB bb = {{-1, -1, -1}, {1, 1, 1}};
+    PT_ASSERT(instantiate_visus(scene, cat, rt, "kuzuha", float4x4::identity(), bb, inst, &w),
+              "instantiates");
+    PT_ASSERT_OP(inst.objects.size(), ==, size_t{5}, "2 base + 3 overlay passes");
+    PT_ASSERT_OP(inst.bindings.size(), ==, size_t{3}, "one binding per overlay pass");
+    PT_ASSERT(inst.bindings[0].part == "cloak" && inst.bindings[0].package == "toon",
+              "bindings follow registration order");
+    PT_ASSERT(inst.bindings[1].package == "outline", "overlay order preserved");
+    PT_ASSERT(inst.bindings[2].part == "face", "later parts come after");
+
+    // 動的パラメータ: 正本は binding が持ち、 変更で改訂番号が上がる。
+    PT_ASSERT_OP(inst.params_revision(), ==, uint64_t{0}, "fresh instance");
+    PT_ASSERT(inst.set_param("cloak", "toon", "rim_power", VisusValue(5.0)), "set_param");
+    PT_ASSERT_OP(inst.params_revision(), ==, uint64_t{1}, "revision bumped");
+    const VisusPackageBinding* b = inst.find_binding("cloak", "toon");
+    PT_ASSERT(b && b->params.get_number("rim_power").value_or(0.0) == 5.0, "value written");
+    PT_ASSERT(inst.find_binding("face", "toon")->params.get_number("rim_power").value_or(0.0) == 2.0,
+              "other bindings keep their own copy");
+    PT_ASSERT(inst.set_param("cloak", "toon", "rim_power", VisusValue(5.0)), "same value ok");
+    PT_ASSERT_OP(inst.params_revision(), ==, uint64_t{1}, "no bump when nothing changed");
+    PT_ASSERT(!inst.set_param("cloak", "nope", "x", VisusValue(1.0)), "unknown package");
+    PT_ASSERT(inst.find_binding("nope", "toon") == nullptr, "unknown part");
+}
+
 } // namespace
 
 int main() {
@@ -314,5 +368,6 @@ int main() {
     test_bone_without_resolver_and_non_model_parent();
     test_cycle_and_missing_root();
     test_primitive_carries_resolved_shader_and_material();
+    test_package_overlay_passes();
     return report("unit_visus_instantiator_test");
 }

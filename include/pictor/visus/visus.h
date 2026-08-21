@@ -84,6 +84,27 @@ bool visus_shader_ref_from_value(const VisusValue& v, VisusShaderRef& out);
 VisusValue visus_shader_ref_to_value(const VisusShaderRef& ref);
 
 // ============================================================
+// VisusPackageRef — シェーダーパッケージのアサイン (§2.5.2)
+// ============================================================
+// パッケージ本体 (VisusShaderPackage、 `visus_shader_package.h`) は
+// `<name>.shaderpkg.json` に置く再利用資源で、 Visus からは name 参照
+// のみ (インライン定義は許さない)。 Visus 直下の列は全パーツへ重ね掛け、
+// parts[] の列はその後ろに append される (マージ規則は §2.5.3 /
+// `visus_effective_packages`)。
+//
+// JSON は文字列 ("toon") か object:
+//   { "package": "outline", "enabled": false, "params": {}, "metadata": {} }
+
+struct VisusPackageRef {
+    std::string   package;          // パッケージ名 (必須)
+    bool          enabled = true;   // false = 継承した同名アサインを無効化
+    VisusMetadata params;           // 既定 params への key 単位の上書き
+    VisusMetadata metadata;         // 既定 metadata への key 単位の上書き
+
+    bool valid() const { return !package.empty(); }
+};
+
+// ============================================================
 // VisusPart — kind=model の fbx 内パーツ → シェーダ
 // ============================================================
 // `part` は fbx 内部のパーツ名 (ホスト側の draw part 名 / material slot
@@ -91,8 +112,9 @@ VisusValue visus_shader_ref_to_value(const VisusShaderRef& ref);
 
 struct VisusPart {
     std::string    part;
-    VisusShaderRef shader;
+    VisusShaderRef shader;     // base パス (§2.5.3)。 パッケージはこの後ろに重なる
     VisusMetadata  metadata;   // texture.<slot> 等
+    std::vector<VisusPackageRef> packages;   // このパーツ固有のアサイン (§2.5.2)
 
     bool is_wildcard() const { return part == "*"; }
 };
@@ -131,6 +153,7 @@ struct VisusDesc {
     std::vector<VisusPart>     parts;    // kind=model
     std::vector<VisusChildRef> children;
     VisusMetadata              metadata;
+    std::vector<VisusPackageRef> packages;  // 全パーツへ重ね掛けするアサイン (§2.5.2)
 
     /// `part` 名に一致する VisusPart。 無ければ "*" エントリ、 それも無ければ nullptr。
     const VisusPart* find_part(std::string_view part) const;
@@ -156,6 +179,7 @@ inline constexpr const char* kTexturePrefix      = "texture.";
 inline constexpr const char* kRiveArtboard       = "rive.artboard";
 inline constexpr const char* kTextDefault        = "text.default";
 inline constexpr const char* kScaleTargetHeight  = "scale.target_height";
+inline constexpr const char* kShaderPackages     = "shader_packages";
 } // namespace visus_keys
 
 } // namespace pictor

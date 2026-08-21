@@ -59,7 +59,7 @@
 - `metadata` の値は JSON スカラー / 配列 / オブジェクト。C++ 側は `VisusMetadata` (順序保持の key → `VisusValue` variant) として保持し、`get_string / get_number / get_bool / get_array` のアクセサを提供する。未知 key は保持して round-trip する。
 - `kind=custom` のシェーダ参照は `metadata["shader"]` に置く。この値は §2.3 の 3 形式のいずれかとし、`metadata["shader.vertex_layout"]` と同様にランタイムが解釈する。これにより `VisusDesc` の typed フィールドは 6 個のままにする。
 - **handle は一切書かない**。resolved handle は実行時の side-table (`VisusRuntime`、§3.2) のみ。
-- **ResourceRef は廃止**し、`asset` / shader stage / `texture.*` はすべて**パス文字列**。remote 取得が要るホストは `IResourceLoader` 実装側で URL 変換する (Pictor は持たない)。
+- **ResourceRef は廃止**し、`asset` / shader stage / `texture.*` はすべて**パス文字列**。remote 取得が要るホストは `IResourceLoader` 実装側で URL 変換する (Pictor は持たない)。同梱の `FileSystemResourceLoader` は configured root の containment を OS の handle / directory fd で検証して symlink 差し替え競合も拒否し、割当て前の configurable size limit (既定 512 MiB) を適用する。
 - `kind=group` を追加: asset 無し、children だけを束ねる Visus (例: `kuzuha_full` = kuzuha + 武器 + エフェクト)。
 
 ### 2.2 規約 key (ホスト側の読み合わせ用、Pictor は強制しない)
@@ -94,6 +94,126 @@ part が列挙されていない fbx パーツは `"part": "*"` のエントリ�
 - `attach.bone` は親が kind=model のときだけ有効。子 instance の transform = 親 transform × bone world × `attach.offset`。bone が無い/親が model でない場合は親 transform そのまま (警告ログ)。
 - 子は**独立した Visus** として instantiate され、親の ObjectId 群とは別に返る (`VisusInstance::children`)。親を消すとき子も消す責務はホスト (KS) 側。
 - 深さ制限 8 (DoS 対策、`unit_parser_dos_test` と同じ方針)。
+
+### 2.5 シェーダーパッケージ (neco 方針 2026-08-20)
+
+> 「メタデータは元来ある**マテリアル**の上位層にあたる。シェーダーとゲーム中動的に変えるパラメータのペアを**シェーダーパッケージ**として Visus にアサインする。複数アサインできる」
+
+`parts[].shader` (§2.3) は「シェーダ 1 本」しか表せず、そのシェーダが読むパラメータは
+`metadata` に平置きされていて対応関係が無い。シェーダーパッケージはこの 2 つを 1 単位に束ねる。
+
+**シェーダーパッケージ = シェーダ参照 + 動的パラメータ (`params`) + パイプライン設定 (`metadata`)**。
+再利用資源として独立ファイルに置き、Visus からは **name で参照**する。マテリアル (material JSON)
+が「テクスチャ + 定数の束」なのに対し、シェーダーパッケージは「それを描くシェーダごと束ねた上位層」。
+
+#### 2.5.1 ファイル (`<name>.shaderpkg.json`)
+
+```jsonc
+{
+  "version": 1,
+  "name": "toon",                       // 唯一の identity。ファイル名と一致させる
+  "shader": "builtin:toon",             // §2.3 の 3 形式 (builtin: / {vert,frag,comp} / visus:)
+  "params": {                           // ★ゲーム中に動的に変える値。ここに書くのは既定値
+    "rim_power": 2.0,
+    "tint": [1.0, 1.0, 1.0, 1.0],
+    "texture.ramp": "../tex/toon_ramp.png"
+  },
+  "metadata": {                         // ★静的なパイプライン設定 (差し替えは再ビルド)
+    "shader.vertex_layout": { },
+    "shader.key_override": 3,
+    "blend": "alpha"
+  }
+}
+```
+
+- `params` と `metadata` の線引き = **ゲーム中に変わるか**。`params` は変わる (ホットリロード対象外、
+  プログラム経路で書き換える。#736 の方針と同じ)。`metadata` は pipeline の作り方を決めるので変えない。
+- `params` の key は uniform 名 / `texture.<slot>` / `material.<slot>`。Pictor は**解釈しない** (§2.2 と同じく
+  ホストへ委ねる)。値は JSON スカラー / 配列 / オブジェクト。
+- shader stage のパスは**パッケージファイル起点**で解決する (Visus ファイル起点ではない)。
+
+#### 2.5.2 Visus へのアサイン
+
+```jsonc
+{
+  "version": 2, "name": "kuzuha", "kind": "model",
+  "shader_packages": [                    // ★Visus 直下 = 全パーツへ重ね掛け。配列順 = 描画順
+    "toon",
+    { "package": "outline", "params": { "width": 0.02 } }
+  ],
+  "parts": [
+    { "part": "T_Face_bsc",
+      "shader": "builtin:pbr",            // base パス (従来通り。省略時 builtin:pbr)
+      "shader_packages": [                // ★パーツ別。Visus 直下の列の後ろに append
+        { "package": "outline", "enabled": false },   // このパーツだけ輪郭を外す
+        { "package": "skin_sss", "params": { "thickness": 0.4 } }
+      ] }
+  ]
+}
+```
+
+- 参照は文字列 (`"toon"`) か object (`{ "package": name, "enabled"?: bool, "params"?: {}, "metadata"?: {} }`)。
+  **インライン定義は許さない** — パッケージは常に名前を持つ再利用資源とする。
+- `params` / `metadata` はパッケージ既定値への**上書きマージ** (key 単位。未指定 key は既定のまま)。
+
+#### 2.5.3 実効パッケージ列 (重ね掛け + パーツ別のマージ規則)
+
+1. Visus 直下 `shader_packages` を配列順に並べる。
+2. パーツの `shader_packages` を順に見る。
+   - 同じ package 名が既に列にある → **その位置のまま** `enabled` / `params` / `metadata` を上書きマージ。
+   - 無い → 列の末尾へ追加。
+3. `enabled: false` のエントリを除外したものが**実効列**。
+4. 描画パスは **base (typed `shader`) が 1 本 + 実効列を順に重ね掛け**。
+   実効列が空なら従来と同じ 1 draw で、v2 既存ファイルの互換は保たれる。
+
+実装は package 名と metadata key の索引を一時的に作り、上記の順序を保ったまま入力件数に
+対して線形にマージする。大きな外部 JSON で同名探索が二乗時間になることは許容しない。
+
+重ね掛けの順序 = `SceneRegistry` への登録順。深度書き込み / ブレンドは各パッケージの `metadata` を
+見てホストの pipeline が決める (Pictor は順序だけ保証する)。
+
+#### 2.5.4 C++ API
+
+```cpp
+struct VisusShaderPackage {            // ファイル 1 本 = 1 パッケージ
+    std::string    name;
+    VisusShaderRef shader;
+    VisusMetadata  params;             // 動的パラメータの既定値
+    VisusMetadata  metadata;           // pipeline 設定
+};
+struct VisusPackageRef {               // Visus / part からの参照
+    std::string   package;
+    bool          enabled = true;
+    VisusMetadata params;              // 既定値への上書き
+    VisusMetadata metadata;
+};
+/// Visus 直下 + part の参照列を §2.5.3 の規則でマージした実効列。
+std::vector<VisusPackageRef> visus_effective_packages(
+    const std::vector<VisusPackageRef>& visus_level,
+    const std::vector<VisusPackageRef>& part_level);
+
+class VisusPackageCatalog {            // *.shaderpkg.json を name → package
+    size_t load_directory(const std::string& dir, ...);
+    const VisusShaderPackage* find(std::string_view name) const;
+    std::string resolve_path(std::string_view package, std::string_view rel) const;
+};
+```
+
+`VisusRuntime::resolve` は `const VisusPackageCatalog*` を任意引数で受け (既定 nullptr = 従来通り)、
+実効列を解決して `VisusResolvedPart::packages` / `VisusResolved::packages` に
+`VisusResolvedPackage { package, shader, shader_key, params }` として積む。`params` は
+**既定 + 上書きをマージ済みの実値**で、これが instantiate 後の動的変更の初期値になる。
+
+`instantiate_visus` は part ごとに base + 実効パッケージ数の `ObjectDescriptor` を登録し、
+`VisusInstance::bindings` に `{ part, package, object, params }` を返す。ホストは
+
+```cpp
+inst.set_param("T_Face_bsc", "toon", "rim_power", 3.5);   // params_revision が上がる
+```
+
+で書き換え、`params_revision()` の変化を見て GPU へ再アップロードする。Pictor はパラメータの
+**正本と改訂番号を持つだけ**で、uniform への実バインドはホスト (§4) の責務。
+
 
 ## 3. C++ API (Pictor)
 
@@ -150,14 +270,27 @@ struct VisusDesc {
 - `SkinnedLayer` のハードコード `register_model(...)` を **VisusCatalog 駆動**へ: `data/visus/*.visus.json` の kind=model を走査し、`asset` + `metadata["animation.clips"]` + part の `texture.diffuse` + `scale.target_height` で `ModelLibrary::register_model` 相当を組む。`enemy_variation.json` の `visus` キーと `player_base.json` の visus 名で引く。
 - `ModelDrawPart::name` と `parts[].part` を突き合わせ、part ごとに `SkinnedDraw::shader_key` を決める (現状は visus 全体 1 本)。`SkinnedRenderer::record()` は既に `ShaderKey::is_custom()` で pipeline を切り替えられる。
 - `children`: `kuzuha.visus.json` に `kuzuha_facial` (kind=rive or model、顔パーツ) を `attach.bone = "Head"` で持たせ、SkinnedLayer がアクターごとに子を instantiate して bone 追従させる。これが「Facial の Visus を Kuzuha が持てる」の実証。
+- **シェーダーパッケージ (§2.5)**: `data/shaderpkg/*.shaderpkg.json` を `VisusPackageCatalog` で読み、
+  `VisusRuntime::resolve(..., &packages)` に渡す。`SkinnedRenderer` は `VisusInstance::bindings` の
+  ObjectId を重ね掛けパスとして描き、`params` を uniform へ流す (`params_revision` が変わったときだけ
+  再アップロード)。ゲーム中の値変更 (被弾フラッシュ・輪郭の太さ等) はこの経路。
 - kzs-web `/visus/` エディタ: 生 JSON 編集から、`metadata` の key/value 表 + `parts` 表 (fbx からパーツ名を列挙) + `children` ツリーの 3 ペインへ。`kuzu_visus_preview` は v2 ローダで起動。
 
 ## 5. 互換と移行順
 
+### 5.1 C++ source compatibility
+
+本変更は `VisusDesc`、`VisusRegistry`、`IResourceLoader::fetch` を置換する**意図的な
+source-breaking migration** であり、旧 handle-based C++ API の adapter は提供しない。
+JSON は v1 読込互換を維持するが、C++ consumer は下記順序の host wiring が完了するまで
+pre-v2 の Pictor revision を pin し、Pictor 更新と consumer の API 移行を同一リリースで行う。
+Pictor C API はこれらの Visus C++ 型を公開していないため `PICTOR_C_API_VERSION` は変更しない。
+
 1. Pictor: 型 + シリアライザ (v1 読込互換) + カタログ + テスト (task 1)。
 2. Pictor: instantiate v2 (parts / children) + runtime + migrate CLI (task 2)。
-3. KS: `data/visus/` を v2 へ migrate、SkinnedLayer を Visus 駆動化、Facial 子 Visus を 1 本追加、kzs-web エディタ v2 (KS リポの task)。
-4. v1 読込互換は KS 移行完了後の次リリースで削除。
+3. Pictor: シェーダーパッケージ (§2.5) の型 / カタログ / runtime / instantiate + テスト (task 3)。
+4. KS: `data/visus/` を v2 へ migrate、SkinnedLayer を Visus 駆動化、Facial 子 Visus を 1 本追加、kzs-web エディタ v2 (KS リポの task)。
+5. v1 読込互換は KS 移行完了後の次リリースで削除。
 
 ## 6. 非ゴール
 

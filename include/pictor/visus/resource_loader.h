@@ -34,11 +34,23 @@ public:
 // FileSystemResourceLoader — local 専用 (Pictor 同梱の default)
 // ============================================================
 // root + path で実ファイルを開く。 root が設定されているときは絶対パスと
-// root 外への脱出を拒否する (visus JSON は UGC / CDN 由来になり得る)。
+// root 外への脱出を拒否し、OS の handle / directory fd を基準に読むことで
+// 検証後の symlink / junction 差し替えも拒否する (visus JSON は UGC / CDN
+// 由来になり得る)。
+// 読込前に `max_file_bytes` (既定 512 MiB) も検査し、巨大入力による
+// 無制限 allocation を避ける。
+//
+// **root が空文字のときは containment を一切かけない** (size limit だけが
+// 効く)。 パスをプロセス権限そのままで開くので、 信頼できない visus JSON
+// (UGC / CDN 由来) を扱うホストは必ず root を設定すること。
 
 class FileSystemResourceLoader : public IResourceLoader {
 public:
-    explicit FileSystemResourceLoader(std::string root);
+    static constexpr uint64_t kDefaultMaxFileBytes = uint64_t{512} * 1024 * 1024;
+
+    explicit FileSystemResourceLoader(
+        std::string root,
+        uint64_t    max_file_bytes = kDefaultMaxFileBytes);
 
     std::vector<uint8_t> fetch(std::string_view path,
                                std::string*     error = nullptr) override;
@@ -47,6 +59,7 @@ public:
 
 private:
     std::string root_;
+    uint64_t    max_file_bytes_;
 };
 
 } // namespace pictor

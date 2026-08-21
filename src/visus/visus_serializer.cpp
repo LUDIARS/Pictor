@@ -1,5 +1,7 @@
 #include "pictor/visus/visus_serializer.h"
 
+#include "pictor/visus/visus_package_serializer.h"
+
 #include "visus_json.h"
 #include "visus_v1_compat.h"
 
@@ -28,11 +30,39 @@ void warn(std::vector<std::string>* warnings, std::string msg) {
 
 // ---- VisusDesc → value ------------------------------------------------------
 
+VisusValue packages_to_value(const std::vector<VisusPackageRef>& packages) {
+    VisusValue::Array out;
+    out.reserve(packages.size());
+    for (const VisusPackageRef& r : packages) out.push_back(visus_package_ref_to_value(r));
+    return VisusValue(std::move(out));
+}
+
+/// `shader_packages` 配列を読む。 空 / 非配列なら何も積まない。 同名の重複は
+/// 実効列マージ (§2.5.3) で先勝ちマージされるのでここでは落とさない。
+void packages_from_value(const VisusMetadata& owner, const char* context,
+                         std::vector<VisusPackageRef>& out,
+                         std::vector<std::string>* warnings) {
+    const VisusValue::Array* arr = owner.get_array(visus_keys::kShaderPackages);
+    if (!arr) return;
+    out.reserve(arr->size());
+    for (const VisusValue& v : *arr) {
+        VisusPackageRef ref;
+        std::vector<std::string> local;
+        if (!visus_package_ref_from_value(v, ref, &local)) {
+            for (std::string& w : local) warn(warnings, std::string(context) + w);
+            continue;
+        }
+        out.push_back(std::move(ref));
+    }
+}
+
 VisusValue part_to_value(const VisusPart& p) {
     VisusMetadata o;
     o.set("part", p.part);
     o.set("shader", visus_shader_ref_to_value(p.shader));
     if (!p.metadata.empty()) o.set("metadata", VisusValue(p.metadata));
+    if (!p.packages.empty())
+        o.set(visus_keys::kShaderPackages, packages_to_value(p.packages));
     return VisusValue(std::move(o));
 }
 
@@ -78,6 +108,7 @@ bool part_from_value(const VisusValue& v, VisusPart& out,
         }
     }
     if (const VisusMetadata* m = o.get_object("metadata")) out.metadata = *m;
+    packages_from_value(o, "parts[].", out.packages, warnings);
     return true;
 }
 
@@ -134,6 +165,8 @@ VisusValue visus_desc_to_value(const VisusDesc& desc) {
     root.set("children", VisusValue(std::move(children)));
 
     root.set("metadata", VisusValue(desc.metadata));
+    if (!desc.packages.empty())
+        root.set(visus_keys::kShaderPackages, packages_to_value(desc.packages));
     return VisusValue(std::move(root));
 }
 
@@ -226,6 +259,7 @@ bool visus_desc_from_value(const VisusValue&         value,
         }
     }
     if (const VisusMetadata* m = root.get_object("metadata")) out.metadata = *m;
+    packages_from_value(root, "", out.packages, warnings);
     return true;
 }
 

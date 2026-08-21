@@ -112,6 +112,9 @@ public:
     /// the active profile — re-running apply_profile() so the RenderPassScheduler,
     /// GI system, GPU-driven pipeline and update scheduler all reconfigure.
     /// This is the runtime-reload seam for tooling (e.g. the Ergo-web editor).
+    /// partial JSON の基底は現在 active な profile。ただし同じ path を読み
+    /// 直したときは最初の読込時の基底を再利用するので、`reload_profile_from_source()`
+    /// と同じく「JSON から消した override は基底値へ戻る」。
     /// Returns false on I/O or parse error; `error` (optional) carries why.
     bool load_profile_from_file(const std::string& path,
                                 std::string*       error = nullptr);
@@ -121,12 +124,17 @@ public:
     /// name). Reconfigures all downstream subsystems. No-op if uninitialized.
     void reload_active_profile();
 
-    /// 最後に `load_profile_from_file()` で読んだファイルパス (未使用なら空)。
+    /// 現在の profile を `load_profile_from_file()` で読んだファイルパス。
+    /// 別 profile への `set_profile()` / 同名 profile の
+    /// `register_custom_profile()` / `shutdown()` の後は空になる
+    /// (現在の profile を選び直すだけの `set_profile()` では解除しない)。
     /// ホットリロード (`pipeline_hot_reload.h`) が監視対象にする。
     const std::string& profile_source_path() const { return profile_source_path_; }
 
     /// `profile_source_path()` をディスクから読み直して再適用する。
-    /// `load_profile_from_file()` を一度も使っていなければ false。
+    /// 現在の profile がファイル由来でなければ false。
+    /// partial JSON の基底は最初の file load 時点に固定されるため、削除した
+    /// override は前回の file-derived 値を残さず、その基底値へ戻る。
     /// パイプライン設定 (構造) のホットリロード用 seam — 値の変更は
     /// リロードではなく register_custom_profile + reload_active_profile で
     /// プログラム的に流し込む (`pipeline-hot-reload.md`)。
@@ -324,6 +332,14 @@ public:
     PipelineProfileManager& profile_manager() { return *profile_manager_; }
 
 private:
+    /// `base` を既定値として profile file を読み、登録・適用する。
+    /// source tracking は呼び出し側が成功後に更新する。
+    bool apply_profile_file_(const std::string&        path,
+                             const PipelineProfileDef& base,
+                             std::string*              error);
+
+    void clear_profile_source_();
+
     /// Profile switch procedure (§8.4)。 subsystems_.apply_profile に委譲した後、
     /// 動的に生成/破棄される alias (gpu_pipeline_ / gi_system_ / bake_system_) を再同期。
     void apply_profile(const PipelineProfileDef& profile);
@@ -348,8 +364,12 @@ private:
     GPUBufferManager*       gpu_buffer_manager_ = nullptr;
     GPUDrivenPipeline*      gpu_pipeline_       = nullptr;
     PipelineProfileManager* profile_manager_    = nullptr;
-    /// load_profile_from_file() の読込元 (ホットリロード用、 未使用なら空)。
+    /// 現在の file-backed profile の読込元 (それ以外なら空)。
     std::string             profile_source_path_;
+    /// file profile の初回読込時に使った基底。reload でも同じ基底を使い、
+    /// JSON から削除された override が前回値として残らないようにする。
+    PipelineProfileDef      profile_source_base_;
+    bool                    has_profile_source_base_ = false;
     RenderPassScheduler*    pass_scheduler_     = nullptr;
     Profiler*               profiler_           = nullptr;
     OverlayRenderer*        overlay_            = nullptr;

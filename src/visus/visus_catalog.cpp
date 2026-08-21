@@ -98,30 +98,8 @@ size_t VisusCatalog::load_directory(const std::string&        dir,
 bool VisusCatalog::load_file(const std::string&        path,
                              std::string*              error,
                              std::vector<std::string>* warnings) {
-    if (path.empty() || path.find('\0') != std::string::npos) {
-        if (error) *error = "invalid visus path";
-        return false;
-    }
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in) {
-        if (error) *error = "open failed";
-        return false;
-    }
-    const std::streamsize size = in.tellg();
-    if (size < 0) {
-        if (error) *error = "size query failed";
-        return false;
-    }
-    if (size > static_cast<std::streamsize>(visus_json::kMaxInputBytes)) {
-        if (error) *error = "visus json is too large";
-        return false;
-    }
-    std::string json(static_cast<size_t>(size), '\0');
-    in.seekg(0, std::ios::beg);
-    if (size > 0 && !in.read(json.data(), size)) {
-        if (error) *error = "read failed";
-        return false;
-    }
+    std::string json;
+    if (!visus_json::read_bounded_file(path, json, error)) return false;
 
     VisusDesc desc;
     std::vector<std::string> local_warnings;

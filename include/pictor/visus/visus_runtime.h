@@ -4,6 +4,8 @@
 #include "pictor/data/model_data_types.h"   // ModelHandle
 #include "pictor/visus/visus.h"
 #include "pictor/visus/visus_catalog.h"
+#include "pictor/visus/visus_package_catalog.h"
+#include "pictor/visus/visus_shader_package.h"
 
 #include <cstdint>
 #include <map>
@@ -113,12 +115,28 @@ public:
 // 解決結果
 // ============================================================
 
+// ============================================================
+// VisusResolvedPackage — アサインされたシェーダーパッケージの解決結果 (§2.5.4)
+// ============================================================
+// `params` は「パッケージ既定値 + アサイン時の上書き」をマージ済みの実値で、
+// instantiate 後にホストが書き換える動的パラメータの初期値になる
+// (`VisusInstance::set_param`)。 `metadata` は pipeline 設定 (静的)。
+
+struct VisusResolvedPackage {
+    std::string   package;
+    ShaderHandle  shader     = INVALID_SHADER;
+    uint64_t      shader_key = 0;
+    VisusMetadata params;
+    VisusMetadata metadata;
+};
+
 struct VisusResolvedPart {
     std::string    part;                          // resolver が列挙した実 draw part 名
     MeshHandle     mesh       = INVALID_MESH;
     ShaderHandle   shader     = INVALID_SHADER;   // STAGES / VISUS / builtin 非既定
     MaterialHandle material   = INVALID_MATERIAL;
     uint64_t       shader_key = 0;                // key_override + custom ビット
+    std::vector<VisusResolvedPackage> packages;   // base の上に重ね掛けする実効列 (§2.5.3)
 };
 
 struct VisusResolved {
@@ -131,6 +149,7 @@ struct VisusResolved {
     uint32_t     generic_handle = 0;                // RIVE / UI / PARTICLE / TEXT
     uint64_t     shader_key     = 0;                // CUSTOM / 非 model の shaderKey
     std::vector<VisusResolvedPart> parts;           // MODEL: resolver の draw part 順
+    std::vector<VisusResolvedPackage> packages;     // 非 MODEL: Visus 直下のアサイン
 
     const VisusResolvedPart* find_part(std::string_view part) const;
 };
@@ -147,10 +166,14 @@ public:
     /// 解決済みの name は飛ばす (再解決は `invalidate` 後)。 未解決 child /
     /// 循環 / 深さ超過 / resolver エラーは `warnings` に積み、 戻り値は
     /// 「root が解決できたか」。
-    bool resolve(const VisusCatalog&       catalog,
-                 std::string_view          name,
-                 IVisusResolver&           resolver,
-                 std::vector<std::string>* warnings = nullptr);
+    /// `packages` (任意) を渡すと Visus / part にアサインされたシェーダー
+    /// パッケージ (§2.5) も解決する。 nullptr のとき packages を持つ Visus は
+    /// warnings に「カタログ未指定」を積み、 base シェーダだけで解決する。
+    bool resolve(const VisusCatalog&        catalog,
+                 std::string_view           name,
+                 IVisusResolver&            resolver,
+                 std::vector<std::string>*  warnings = nullptr,
+                 const VisusPackageCatalog* packages = nullptr);
 
     /// 手組みの解決結果を登録 (テスト / ホスト独自経路)。 同名は上書き。
     void set(VisusResolved resolved);
@@ -167,16 +190,32 @@ public:
 
 private:
     bool resolve_one_(const VisusCatalog& catalog, const VisusDesc& desc,
-                      IVisusResolver& resolver, std::vector<std::string>* warnings);
+                      IVisusResolver& resolver, std::vector<std::string>* warnings,
+                      const VisusPackageCatalog* packages);
     void resolve_model_(const VisusCatalog& catalog, const VisusDesc& desc,
                         const std::string& asset, IVisusResolver& resolver,
                         VisusResolved& out,
-                        std::vector<std::string>* warnings);
+                        std::vector<std::string>* warnings,
+                        const VisusPackageCatalog* packages);
     bool resolve_rec_(const VisusCatalog& catalog, const VisusDesc& desc,
                       IVisusResolver& resolver, int depth,
                       std::vector<std::string>& stack,
                       std::map<std::string, uint16_t, std::less<>>& visited_depths,
-                      std::vector<std::string>* warnings);
+                      std::vector<std::string>* warnings,
+                      const VisusPackageCatalog* packages);
+    /// 実効列 (§2.5.3) を解決して `out` へ積む。
+    void resolve_packages_(const VisusCatalog& catalog, const VisusDesc& desc,
+                           const std::vector<VisusPackageRef>& part_level,
+                           IVisusResolver& resolver,
+                           const VisusPackageCatalog* packages,
+                           std::vector<VisusResolvedPackage>& out,
+                           std::vector<std::string>* warnings);
+    ShaderHandle resolve_package_shader_(const VisusCatalog& catalog, const VisusDesc& owner,
+                                         const VisusPackageCatalog& packages,
+                                         const VisusShaderPackage& pkg,
+                                         const VisusMetadata& metadata,
+                                         IVisusResolver& resolver,
+                                         std::vector<std::string>* warnings);
     ShaderHandle resolve_shader_ref_(const VisusCatalog& catalog, const VisusDesc& owner,
                                      const VisusShaderRef& ref, const VisusMetadata& metadata,
                                      IVisusResolver& resolver, int depth,

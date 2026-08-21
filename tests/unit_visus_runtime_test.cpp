@@ -1,6 +1,7 @@
 /// VisusRuntime — IVisusResolver 注入で name → handle / part 別 shaderKey が埋まる。
 
 #include "pictor/visus/visus_catalog.h"
+#include "pictor/visus/visus_package_catalog.h"
 #include "pictor/visus/visus_runtime.h"
 #include "test_common.h"
 
@@ -327,8 +328,153 @@ void test_visus_shader_ref_rejects_cached_non_custom() {
     rt.resolve(cat, "user", rs, &w);
     PT_ASSERT(has(w, "is not kind=custom"),
               "cached non-custom visus: target is still reported");
-    PT_ASSERT(rt.get("user")->parts[0].shader == INVALID_SHADER,
+    PT_ASSERT(rt.get("user") && rt.get("user")->parts[0].shader == INVALID_SHADER,
               "non-custom visus: reference yields no shader");
+}
+
+// ---- シェーダーパッケージ (§2.5) ---------------------------------------------
+
+VisusShaderPackage package(const char* name, VisusShaderRef shader) {
+    VisusShaderPackage p;
+    p.name   = name;
+    p.shader = std::move(shader);
+    return p;
+}
+
+VisusPackageRef assign(const char* name) {
+    VisusPackageRef r;
+    r.package = name;
+    return r;
+}
+
+void test_shader_packages() {
+    VisusPackageCatalog packages;
+    VisusShaderPackage toon = package("toon", VisusShaderRef::builtin("toon"));
+    toon.params.set("rim_power", 2.0);
+    toon.params.set("tint", 1.0);
+    packages.add(std::move(toon));
+
+    VisusShaderPackage outline =
+        package("outline", VisusShaderRef::stages("sh/outline.vert.spv", "sh/outline.frag.spv"));
+    outline.params.set("width", 0.01);
+    outline.metadata.set(visus_keys::kShaderKeyOverride, 6);
+    packages.add(std::move(outline));
+
+    VisusDesc d = model_desc();
+    d.packages = {assign("toon"), assign("outline")};
+    // T_Face_bsc だけ outline を外し、 toon の rim_power を上書きする。
+    VisusPackageRef face_off = assign("outline");
+    face_off.enabled = false;
+    VisusPackageRef face_toon = assign("toon");
+    face_toon.params.set("rim_power", 9.0);
+    for (VisusPart& p : d.parts) {
+        if (p.part == "T_Face_bsc") p.packages = {face_off, face_toon};
+    }
+    // 未知パッケージのアサインは警告して飛ばす。
+    for (VisusPart& p : d.parts) {
+        if (p.part == "T_Hair_bsc") p.packages = {assign("nope")};
+    }
+
+    VisusCatalog cat;
+    cat.add(d);
+    FakeResolver rs;
+    VisusRuntime rt;
+    std::vector<std::string> w;
+    PT_ASSERT(rt.resolve(cat, "kuzuha", rs, &w, &packages), "resolve with a package catalog");
+
+    const VisusResolved* r = rt.get("kuzuha");
+    PT_ASSERT(r != nullptr, "resolved");
+    const VisusResolvedPart* cloak = r->find_part("T_Cloak_bsc");
+    PT_ASSERT(cloak != nullptr, "cloak resolved");
+    PT_ASSERT_OP(cloak->packages.size(), ==, size_t{2}, "visus level packages apply to every part");
+    PT_ASSERT(cloak->packages[0].package == "toon" && cloak->packages[1].package == "outline",
+              "assignment order preserved");
+    PT_ASSERT_OP(cloak->packages[0].shader, ==, ShaderHandle{42}, "builtin:toon resolved");
+    PT_ASSERT(cloak->packages[1].shader != INVALID_SHADER, "outline stages registered");
+    PT_ASSERT_OP(cloak->packages[0].params.get_number("rim_power").value_or(0.0), ==, 2.0,
+                 "package default params");
+    PT_ASSERT_OP(cloak->packages[1].shader_key, ==,
+                 ShaderKey::with_custom_shader(6, cloak->packages[1].shader),
+                 "package metadata key_override feeds the shader key");
+
+    const VisusResolvedPart* face = r->find_part("T_Face_bsc");
+    PT_ASSERT(face != nullptr, "face resolved");
+    PT_ASSERT_OP(face->packages.size(), ==, size_t{1}, "part level disabled the outline pass");
+    PT_ASSERT(face->packages[0].package == "toon", "remaining pass is toon");
+    PT_ASSERT_OP(face->packages[0].params.get_number("rim_power").value_or(0.0), ==, 9.0,
+                 "part level params override the package default");
+    PT_ASSERT_OP(face->packages[0].params.get_number("tint").value_or(0.0), ==, 1.0,
+                 "untouched defaults survive");
+    PT_ASSERT(has(w, "shader package not found"), "unknown package warned");
+
+    // base シェーダは従来通り part の typed shader のまま。
+    PT_ASSERT_OP(cloak->shader, ==, INVALID_SHADER, "base pass still builtin:pbr");
+}
+
+void test_shader_packages_need_a_catalog() {
+    VisusDesc d = model_desc();
+    d.packages = {assign("toon")};
+    VisusCatalog cat;
+    cat.add(d);
+    FakeResolver rs;
+    VisusRuntime rt;
+    std::vector<std::string> w;
+    PT_ASSERT(rt.resolve(cat, "kuzuha", rs, &w), "resolves without a package catalog");
+    PT_ASSERT(has(w, "no package catalog"), "missing package catalog warned");
+    const VisusResolved* r = rt.get("kuzuha");
+    PT_ASSERT(r && r->find_part("T_Cloak_bsc") && r->find_part("T_Cloak_bsc")->packages.empty(),
+              "no overlay passes without a catalog");
+}
+
+// シェーダが解決できないパッケージは重ね掛けパスを作らない。 積むと
+// instantiate 側 (register_packages) が base と同一の ObjectDescriptor を
+// 登録し、 同じ mesh が base pipeline で二重描画される。
+void test_shader_package_with_unresolved_shader_is_dropped() {
+    VisusPackageCatalog packages;
+    packages.add(package("broken", VisusShaderRef::builtin("nonexistent")));
+    packages.add(package("plain", VisusShaderRef::builtin()));   // 既定 = 意図的
+
+    VisusDesc d;
+    d.name     = "cube";
+    d.kind     = VisusKind::PRIMITIVE;
+    d.asset    = "cube.mesh";
+    d.packages = {assign("broken"), assign("plain")};
+    VisusCatalog cat;
+    cat.add(d);
+
+    FakeResolver rs;
+    VisusRuntime rt;
+    std::vector<std::string> w;
+    PT_ASSERT(rt.resolve(cat, "cube", rs, &w, &packages), "primitive resolves");
+    const VisusResolved* r = rt.get("cube");
+    PT_ASSERT(r != nullptr, "resolved");
+    PT_ASSERT_OP(r->packages.size(), ==, size_t{1},
+                 "unresolvable package shader drops the overlay pass");
+    PT_ASSERT(r->packages[0].package == "plain",
+              "an explicit default-builtin assignment is not a failure");
+    PT_ASSERT(has(w, "pass dropped"), "dropped overlay pass is warned");
+}
+
+void test_shader_packages_on_primitive() {
+    VisusPackageCatalog packages;
+    packages.add(package("toon", VisusShaderRef::builtin("toon")));
+
+    VisusDesc d;
+    d.name  = "cube";
+    d.kind  = VisusKind::PRIMITIVE;
+    d.asset = "cube.mesh";
+    d.packages = {assign("toon")};
+    VisusCatalog cat;
+    cat.add(d);
+
+    FakeResolver rs;
+    VisusRuntime rt;
+    std::vector<std::string> w;
+    PT_ASSERT(rt.resolve(cat, "cube", rs, &w, &packages), "primitive resolves");
+    const VisusResolved* r = rt.get("cube");
+    PT_ASSERT(r != nullptr, "resolved");
+    PT_ASSERT_OP(r->packages.size(), ==, size_t{1}, "non-model kinds carry the assignments");
+    PT_ASSERT_OP(r->packages[0].shader, ==, ShaderHandle{42}, "builtin:toon resolved");
 }
 
 // primitive は parts[] を持てないので、 material は visus metadata から解決する
@@ -407,5 +553,9 @@ int main() {
     test_visus_shader_ref_rejects_cached_non_custom();
     test_primitive_material_is_resolved();
     test_shared_subtree_is_visited_once_per_depth();
+    test_shader_packages();
+    test_shader_packages_need_a_catalog();
+    test_shader_package_with_unresolved_shader_is_dropped();
+    test_shader_packages_on_primitive();
     return report("unit_visus_runtime_test");
 }

@@ -35,8 +35,8 @@ JSON に process-local handle を永続化せず、資源ロードと寿命管�
 - `IVisusResolver` は `load_mesh / load_model / model_parts / register_shader_stages / builtin_shader / load_generic / load_material / bone_transform` の薄い virtual。`model_parts` は実 draw part 名 + `MeshHandle` を返し、Visus の exact / `"*"` 設定を実 geometry へ結び付ける。既定はすべて未対応 (INVALID / false / 空) で、error 引数がある capability は理由も返す。受け取るパスは `VisusCatalog::resolve_path` 済み。
 - `VisusRuntime::resolve` は children も再帰解決 (循環 / 深さ 8 は warnings)。 `visus:<name>` 参照は 1 段だけ辿り、 参照先 (kind=custom) も side-table に入れて共有する。 part の `shader.key_override` は visus のものに優先。
 - `instantiate_visus(scene, catalog, runtime, name, transform, bounds, out, warnings, resolver)` → `VisusInstance { name, transform, objects, children, generic_handle }`。model/primitive は有効な実 mesh だけを SceneRegistry へ登録し、rive/ui/particle/text は無効 mesh object を作らず generic handle をホストへ返す。`render.pool` は ObjectDescriptor に受け皿が無いので読まない。`visus_compose(local, parent)` (行優先 = local × parent) を公開。
-- `visus_migrate_{file,directory}` はライブラリ側 (CI で常にコンパイル)、 CLI `tools/visus_migrate/main.cpp` は薄いラッパ。 `visus_migrate` target は PICTOR_BUILD_TOOLS に依らず作る (Vulkan 非依存)。
-- Revisor 修正: migrate の実書込みは同一ディレクトリの staging へ完全書込み後に原子的置換し、失敗時は元 v1 を保持する。ディレクトリ走査時の symlink と 16 MiB 超の入力は拒否する。
+- `visus_migrate_{file,directory}` はライブラリ側 (常にコンパイル)、 CLI `tools/visus_migrate/main.cpp` は薄いラッパ。`visus_migrate` target は `PICTOR_BUILD_TOOLS` または `PICTOR_BUILD_TESTS` が有効な非 mobile/WebGL build で作り、library-only consumer に余計な executable を持ち込まない。
+- Revisor 修正: migrate の実書込みは同一ディレクトリの staging へ完全書込み後に原子的置換し、失敗時は元 v1 を保持する。directory scan / direct-file API の symlink と 16 MiB 超の入力は拒否する。
 - Revisor autofix (#725) が足したサロゲート テストは raw string 内 `\uD800` を MSVC が C3850 にするため通常リテラルへ書き換えた。
 
 ## 実装メモ (2026-08-21 / Revisor autofix #729)
