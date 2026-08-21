@@ -1,5 +1,6 @@
 #include "pictor/shader/shader_registry.h"
 
+#include <cstddef>
 #include <cstdio>
 #include <fstream>
 #include <utility>
@@ -11,6 +12,14 @@
 #endif
 
 namespace pictor {
+
+#ifdef PICTOR_HAS_VULKAN
+namespace {
+
+constexpr std::size_t kMaxShaderModuleBytes = std::size_t{64} << 20;
+
+} // namespace
+#endif
 
 ShaderRegistry::~ShaderRegistry() { shutdown(); }
 
@@ -35,19 +44,33 @@ const CustomShaderDef* ShaderRegistry::get(ShaderHandle handle) const {
 #ifdef PICTOR_HAS_VULKAN
 
 VkShaderModule ShaderRegistry::load_module_(const std::string& path) const {
+    if (path.find('\0') != std::string::npos) {
+        std::fprintf(stderr, "[shader] path contains NUL\n");
+        return VK_NULL_HANDLE;
+    }
     std::ifstream f(path, std::ios::ate | std::ios::binary);
     if (!f) {
         std::fprintf(stderr, "[shader] open failed: %s\n", path.c_str());
         return VK_NULL_HANDLE;
     }
-    const size_t sz = static_cast<size_t>(f.tellg());
-    std::vector<char> buf(sz);
+    const std::streamsize end = f.tellg();
+    if (end <= 0 || static_cast<std::uintmax_t>(end) > kMaxShaderModuleBytes ||
+        end % static_cast<std::streamsize>(sizeof(std::uint32_t)) != 0) {
+        std::fprintf(stderr, "[shader] invalid SPIR-V size: %s\n", path.c_str());
+        return VK_NULL_HANDLE;
+    }
+    const size_t sz = static_cast<size_t>(end);
+    std::vector<std::uint32_t> words(sz / sizeof(std::uint32_t));
     f.seekg(0);
-    f.read(buf.data(), static_cast<std::streamsize>(sz));
+    if (!f.read(reinterpret_cast<char*>(words.data()),
+                static_cast<std::streamsize>(sz))) {
+        std::fprintf(stderr, "[shader] read failed: %s\n", path.c_str());
+        return VK_NULL_HANDLE;
+    }
 
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = sz;
-    ci.pCode    = reinterpret_cast<const uint32_t*>(buf.data());
+    ci.pCode    = words.data();
     VkShaderModule m = VK_NULL_HANDLE;
     if (vkCreateShaderModule(device_, &ci, nullptr, &m) != VK_SUCCESS) {
         std::fprintf(stderr, "[shader] vkCreateShaderModule failed: %s\n",
@@ -71,6 +94,9 @@ bool ShaderRegistry::build_pipelines(VulkanContext& vk,
 
     vk_     = &vk;
     device_ = vk.device();
+    built_render_pass_ = render_pass;
+    built_subpass_     = subpass;
+    built_layout_      = pipeline_layout;
     pipelines_.assign(shaders_.size(), VK_NULL_HANDLE);
 
     // graphics pipeline 生成は共通ヘルパー `build_graphics_pipeline()` に
@@ -125,6 +151,40 @@ VkPipeline ShaderRegistry::pipeline(ShaderHandle handle) const {
 }
 
 #endif // PICTOR_HAS_VULKAN
+
+bool ShaderRegistry::rebuild_pipelines() {
+#ifdef PICTOR_HAS_VULKAN
+    if (!built_) return true;   // まだ build していない — リロード対象なし
+    if (!vk_ || device_ == VK_NULL_HANDLE) return true;   // 空 build (shaders_ 空) だった
+
+    VulkanContext&   vk          = *vk_;
+    VkRenderPass     render_pass = built_render_pass_;
+    uint32_t         subpass     = built_subpass_;
+    VkPipelineLayout layout      = built_layout_;
+
+    // Candidate pipelines are built while the current set remains live. A
+    // malformed or half-written SPIR-V file therefore cannot destroy the
+    // last-known-good render path.
+    std::vector<VkPipeline> old_pipelines = std::move(pipelines_);
+    built_ = false;
+    if (!build_pipelines(vk, render_pass, subpass, layout)) {
+        for (VkPipeline p : pipelines_) {
+            if (p != VK_NULL_HANDLE) vkDestroyPipeline(device_, p, nullptr);
+        }
+        pipelines_ = std::move(old_pipelines);
+        built_ = true;
+        return false;
+    }
+
+    // Only the successful candidate set is published. Wait before destroying
+    // pipelines that may still be referenced by submitted command buffers.
+    vkDeviceWaitIdle(device_);
+    for (VkPipeline p : old_pipelines) {
+        if (p != VK_NULL_HANDLE) vkDestroyPipeline(device_, p, nullptr);
+    }
+#endif
+    return true;
+}
 
 void ShaderRegistry::shutdown() {
 #ifdef PICTOR_HAS_VULKAN

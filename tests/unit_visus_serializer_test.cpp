@@ -124,15 +124,16 @@ void test_unknown_keys_preserved() {
 void test_invalid_parts_are_ignored() {
     const char* json = R"({
       "version": 2, "name": "x", "kind": "model",
-      "parts": [17, {"shader":"builtin:pbr"}, {"part":"body"}]
+      "parts": [17, {"shader":"builtin:pbr"}, {"part":"body"}, {"part":"body"}]
     })";
     VisusDesc d;
     std::vector<std::string> warnings;
     PT_ASSERT(from_visus_json(json, d, nullptr, &warnings), "permissive part parsing succeeds");
     PT_ASSERT_OP(d.parts.size(), ==, size_t{1}, "only valid named part retained");
     PT_ASSERT(d.parts[0].part == "body", "valid part retained");
-    PT_ASSERT(has_warning(warnings, "non-object") && has_warning(warnings, "without 'part'"),
-              "invalid parts are observable");
+    PT_ASSERT(has_warning(warnings, "non-object") && has_warning(warnings, "without 'part'") &&
+              has_warning(warnings, "duplicate"),
+               "invalid parts are observable");
 }
 
 void test_find_part_and_shader_ref() {

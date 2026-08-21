@@ -271,7 +271,19 @@ bool PictorRenderer::load_profile_from_file(const std::string& path,
         return false;
     }
     apply_profile(profile_manager_->current_profile());
+    profile_source_path_ = path;   // ホットリロード (reload_profile_from_source) 用
     return true;
+}
+
+bool PictorRenderer::reload_profile_from_source(std::string* error) {
+    if (profile_source_path_.empty()) {
+        if (error) *error = "no profile source path (load_profile_from_file not used)";
+        return false;
+    }
+    // `profile_source_path_` を直接渡すと load_profile_from_file 側の
+    // `profile_source_path_ = path` が自己代入になる。 コピーして別実体にする。
+    const std::string path = profile_source_path_;
+    return load_profile_from_file(path, error);
 }
 
 void PictorRenderer::reload_active_profile() {

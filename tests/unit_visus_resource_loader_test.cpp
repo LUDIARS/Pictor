@@ -41,6 +41,13 @@ int main() {
     PT_ASSERT(absolute.empty(), "absolute path is rejected when root is configured");
     PT_ASSERT(error.find("absolute path") != std::string::npos, "absolute-path error is explicit");
 
+    constexpr char nul_path_data[] =
+        "safe.bin\0../pictor_unit_visus_resource_outside.bin";
+    const std::string nul_path(nul_path_data, sizeof(nul_path_data) - 1);
+    const std::vector<uint8_t> nul = loader.fetch(nul_path, &error);
+    PT_ASSERT(nul.empty(), "embedded NUL path is rejected instead of opening a prefix");
+    PT_ASSERT(error.find("NUL") != std::string::npos, "NUL-path error is explicit");
+
     fs::remove_all(root, ec);
     fs::remove(outside, ec);
     return report("unit_visus_resource_loader_test");

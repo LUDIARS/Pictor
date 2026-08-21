@@ -32,6 +32,8 @@ set(PICTOR_TESTS
     unit_pipeline_registries_test
     unit_compiled_graph_wiring_test
     unit_parser_dos_test
+    unit_file_watch_test
+    unit_pipeline_hot_reload_test
     unit_gpu_ring_flight_test
     unit_gpu_timer_test
     unit_animation_stub_contract_test

@@ -12,6 +12,9 @@
     },
     {
       "pathPattern": "(^|/)include/pictor/pictor\\.h$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_file_watch_test\\.cpp$"
     }
   ]
 }

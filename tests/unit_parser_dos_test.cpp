@@ -118,6 +118,17 @@ void test_json_metadata_object_member_limit() {
     PT_ASSERT_OP(out.metadata.size(), ==, size_t{kMaxObjectMembers}, "all members kept");
 }
 
+void test_json_duplicate_object_key_rejected() {
+    VisusDesc out;
+    std::string err;
+    PT_ASSERT(!from_visus_json(
+                  "{\"version\":2,\"name\":\"first\",\"name\":\"second\"}",
+                  out, &err),
+              "duplicate object keys must not be interpreted ambiguously");
+    PT_ASSERT(err.find("duplicate") != std::string::npos,
+              "error names duplicate object key");
+}
+
 // V-5: FBX ASCII パーサ parse_node_ascii の無制限再帰。
 void test_fbx_ascii_deep_nesting() {
     // `A: { A: { ... } }` を深くネスト。
@@ -141,6 +152,7 @@ int main() {
     test_json_metadata_moderate_ok();
     test_json_metadata_value_count_limit();
     test_json_metadata_object_member_limit();
+    test_json_duplicate_object_key_rejected();
     test_fbx_ascii_deep_nesting();
     return report("unit_parser_dos_test");
 }

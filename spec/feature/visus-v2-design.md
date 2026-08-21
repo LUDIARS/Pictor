@@ -135,6 +135,7 @@ struct VisusDesc {
 
 - `VisusCatalog` (新、`visus_catalog.h`): `load_directory(dir)` で `*.visus.json` を name → VisusDesc に読み、`resolve_child(parent, ref)`（name または親 visus ファイル起点の相対パス）/ `resolve_path(desc, rel)` / 循環検出を提供する。**`VisusRegistry` (handle 連番) は廃止** — 同一性は name。
 - `VisusRuntime` (新、`visus_runtime.h`): name → 解決済み資源 (`ModelHandle` / `ShaderHandle` / 実 draw part 名 → `MeshHandle` + shaderKey / 子 instance) の side-table。JSON には出ない。ホストが `resolve(catalog, name, resolver)` で埋める。`IVisusResolver::model_parts(ModelHandle)` は fbx の実 draw part 名と描画用 mesh を列挙し、Visus の `parts[]` は exact / `"*"` のシェーダ設定としてその一覧へ適用する。
+- `VisusRuntime::invalidate(name)` は、解決済みの `name` があれば side-table 全体を破棄する。children と `visus:` shader は複数 root から共有され、runtime は逆依存グラフを保持しないため、部分無効化で古い handle を再利用しないことを優先する。
 - `instantiate_visus(scene, catalog, runtime, name, transform, bounds)` → `VisusInstance { std::vector<ObjectId> objects; std::vector<VisusInstance> children; uint32_t generic_handle; }`。kind=model は resolver が列挙した**実 draw part ごとに 1 ObjectDescriptor**を作り、`mesh` と `shaderKey` を設定する (`builtin:pbr` = 0、STAGES/VISUS = `ShaderKey::with_custom_shader`)。primitive は解決済み mesh がある場合だけ登録する。rive/ui/particle/text は無効 mesh の object を登録せず `generic_handle` をホストへ返し、custom は model part から参照する shader 定義として扱う。children は §2.4 の transform で再帰。
 
 ### 3.3 シリアライザ
