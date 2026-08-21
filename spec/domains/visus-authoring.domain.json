@@ -12,6 +12,12 @@
     },
     {
       "pathPattern": "(^|/)tests/unit_(?:visus_instantiator|visus_serializer|parser_dos)_test\\.cpp$"
+    },
+    {
+      "pathPattern": "(^|/)spec/feature/visus-v2-design\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)spec/tasks/[^/]*visus-v2[^/]*\\.md$"
     }
   ]
 }

@@ -21,7 +21,9 @@ KS の C++ 移植レビューで挙がった Pictor 側の不足:
 
 ## 2. 方針1 — カスタムシェーダを Visus で選択
 
-### 現状の seam
+> **v1 実装履歴（2026-08-20 に置換）**: 以下の Visus 型・JSON 名は v1 の記録である。現在の契約は [Visus v2 設計](visus-v2-design.md) に従い、`ResourceRef`、`VisusGeometryKind`、`VisusShaderStages`、解決済み handle、および `VisusDesc` の `shader_key_override` は使用しない。v2 では model の `parts[].shader`、または custom の `metadata["shader"]` がシェーダを表す。
+
+### v1 当時の seam
 `include/pictor/visus/visus.h` に既にカスタムシェーダ用の構造がある:
 - `VisusGeometryKind::CUSTOM = 7`（shader override 用）
 - `VisusDesc::asset`（CUSTOM 時は shader file を指す）/ `VisusDesc::shader`（`ShaderHandle`）/ `shader_key_override` / `VisusTextureSlot`
