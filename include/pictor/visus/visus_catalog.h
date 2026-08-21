@@ -2,6 +2,7 @@
 
 #include "pictor/visus/visus.h"
 
+#include <cstddef>
 #include <map>
 #include <string>
 #include <string_view>

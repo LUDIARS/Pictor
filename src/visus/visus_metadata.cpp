@@ -124,10 +124,8 @@ bool VisusValue::operator==(const VisusValue& other) const {
 // ---- VisusMetadata ---------------------------------------------------------
 
 const VisusValue* VisusMetadata::find(std::string_view key) const {
-    for (const Entry& e : entries_) {
-        if (e.first == key) return &e.second;
-    }
-    return nullptr;
+    const auto it = index_.find(key);
+    return it == index_.end() ? nullptr : &entries_[it->second].second;
 }
 
 std::optional<std::string> VisusMetadata::get_string(std::string_view key) const {
@@ -161,17 +159,27 @@ const VisusMetadata* VisusMetadata::get_object(std::string_view key) const {
 }
 
 void VisusMetadata::set(std::string key, VisusValue value) {
-    for (Entry& e : entries_) {
-        if (e.first == key) { e.second = std::move(value); return; }
+    const auto existing = index_.find(key);
+    if (existing != index_.end()) {
+        entries_[existing->second].second = std::move(value);
+        return;
     }
+    const size_t index = entries_.size();
     entries_.emplace_back(std::move(key), std::move(value));
+    index_.emplace(entries_.back().first, index);
 }
 
 bool VisusMetadata::erase(std::string_view key) {
-    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
-        if (it->first == key) { entries_.erase(it); return true; }
+    const auto found = index_.find(key);
+    if (found == index_.end()) return false;
+
+    const size_t erased_index = found->second;
+    index_.erase(found);
+    entries_.erase(entries_.begin() + static_cast<Entries::difference_type>(erased_index));
+    for (size_t i = erased_index; i < entries_.size(); ++i) {
+        index_.find(entries_[i].first)->second = i;
     }
-    return false;
+    return true;
 }
 
 bool VisusMetadata::operator==(const VisusMetadata& other) const {

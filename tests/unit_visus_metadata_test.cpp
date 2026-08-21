@@ -40,7 +40,12 @@ void test_ordered_metadata() {
     PT_ASSERT(m.get_number("zeta").value_or(0) == 1.0, "get_number");
     PT_ASSERT(m.get_bool("mid").value_or(false), "get_bool");
     PT_ASSERT(m.find("none") == nullptr, "missing key");
-    PT_ASSERT(m.erase("mid") && !m.has("mid"), "erase");
+    PT_ASSERT(m.erase("zeta") && !m.has("zeta"), "erase first entry");
+    PT_ASSERT(m.get_string("alpha").value_or("") == "b" &&
+              m.get_bool("mid").value_or(false),
+              "erase refreshes indexes for shifted entries");
+    m.clear();
+    PT_ASSERT(m.empty() && m.find("alpha") == nullptr, "clear resets entries and index");
 }
 
 void test_deep_copy() {

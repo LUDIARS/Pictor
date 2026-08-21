@@ -16,6 +16,8 @@ set(PICTOR_TESTS
     unit_visus_metadata_test
     unit_visus_serializer_test
     unit_visus_catalog_test
+    unit_visus_runtime_test
+    unit_visus_migrate_test
     unit_visus_resource_loader_test
     unit_visus_instantiator_test
     unit_shader_registry_test
