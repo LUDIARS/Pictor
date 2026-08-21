@@ -15,6 +15,9 @@
     },
     {
       "pathPattern": "(^|/)tests/unit_(?:attachment_def|compiled_graph_wiring|pipeline_profile_serializer|pipeline_registries|pipeline_tiers)_test\\.cpp$"
+    },
+    {
+      "pathPattern": "(^|/)spec/feature/rendering-extensibility-design\\.md$"
     }
   ]
 }
