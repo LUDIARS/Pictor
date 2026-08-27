@@ -407,12 +407,16 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         add_executable(pictor_ocean_demo demo/ocean/main.cpp)
         target_link_libraries(pictor_ocean_demo PRIVATE pictor)
 
-        # Shadow play (影絵) demo — 8 fixed spot/point lights, hard shadows, paper SSS
-        add_executable(pictor_shadow_play_demo demo/shadow_play/main.cpp)
-        target_link_libraries(pictor_shadow_play_demo PRIVATE pictor)
-        if(MSVC)
-            # /utf-8 does not propagate from the pictor lib to demo targets.
-            target_compile_options(pictor_shadow_play_demo PRIVATE /utf-8)
+        # Shadow play (影絵) demo — its runtime shaders must be compiled by glslc.
+        if(Vulkan_GLSLC_EXECUTABLE)
+            add_executable(pictor_shadow_play_demo demo/shadow_play/main.cpp)
+            target_link_libraries(pictor_shadow_play_demo PRIVATE pictor)
+            if(MSVC)
+                # /utf-8 does not propagate from the pictor lib to demo targets.
+                target_compile_options(pictor_shadow_play_demo PRIVATE /utf-8)
+            endif()
+        else()
+            message(STATUS "Pictor: shadow play demo disabled (glslc not found)")
         endif()
 
         # Text rendering demo
