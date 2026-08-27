@@ -138,8 +138,8 @@ void main() {
         float inten = scene.moon_color.w;
         vec3 moon_tint = sp_cutout_tint(sp_sheet_hit(shaded_pos, scene.moon_pos.xyz));
         accum += scene.moon_color.rgb * moon_tint * inten * scene.moon_dir.w * cos_in * transmit * shadow;
-        // 月光の多重散乱は控えめ (夜の底光り)
-        accum += scene.moon_color.rgb * inten * sss_strength * 0.25;
+        // 月光の多重散乱も、シートの穴を通って紙へ届いた範囲だけに生じる。
+        accum += scene.moon_color.rgb * moon_tint * inten * sss_strength * 0.25 * shadow;
     }
 
     if (is_water) {
