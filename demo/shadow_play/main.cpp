@@ -1,7 +1,7 @@
 /// Pictor Shadow Play Demo — 影絵 (切り絵 + セロファン + 紙の透過)
 ///
 /// 障子紙のスクリーンへ裏から 8 灯 (スポット 4 + ポイント 4、
-/// ディレクショナルなし) を当て、球と立方体の影絵をレンダリングする。
+/// ディレクショナルなし) と月光を当て、樹木と奏者の影絵をレンダリングする。
 ///
 /// 表現:
 ///   - ハードシャドウ: shadow map 1 サンプル step 比較 (PCF なし) で
@@ -10,14 +10,22 @@
 ///   - 紙の透過 (SSS 近似): 入射角依存の exp 減衰 + 多重散乱項で、
 ///     影の中も仄かに光る紙の空気感を出す。
 ///
+///   - 影響半径 (range): 各灯の減衰へ (1-(d/R)^4)^2 の窓を掛け、
+///     重なりの中心は保ったままプール外周の色の洗いを絞る。
+///   - 切り絵シート: 月とスクリーンの間 (8 灯より奥) に置いた黒紙レイヤ。
+///     カットアウト (月・縦スリット・葉の透かし) だけが月光を透過し、
+///     シートに遮られた月光は shadow map 経由で他の何にも影響しない。
+///   - 月光ゴッドレイ: 切り抜きを通った月光を観客側の前方体積で
+///     レイマーチし、加算合成の光芒として障子の上へ重ねる。
+///
 /// 実装ノート:
 ///   受光面がスクリーン平面 1 枚だけなので、ポイントライトも cube map を
 ///   使わずスクリーン中心向きの 1 フラスタム (広角 perspective) で全影を
-///   正確にカバーできる。8 灯 × 1 枚 = sampled depth 2D array 8 layer。
+///   正確にカバーできる。8 灯 + 月 × 1 枚 = sampled depth 2D array 9 layer。
 ///
 /// 操作:
 ///   - マウスドラッグ: 観客席側のオービットカメラ / スクロール: ズーム
-///   - B: 舞台裏ビュー (ライト配置確認、簡易 lit 描画)
+///   - B: 舞台裏ビュー (切り絵シート確認)
 ///
 /// Build target: pictor_shadow_play_demo
 
@@ -96,25 +104,6 @@ void mat4_translate(float* out, float x, float y, float z) {
     out[12] = x; out[13] = y; out[14] = z;
 }
 
-void mat4_rotate_y(float* out, float rad) {
-    mat4_identity(out);
-    float c = std::cos(rad), s = std::sin(rad);
-    out[0] = c;  out[8]  = s;
-    out[2] = -s; out[10] = c;
-}
-
-void mat4_rotate_x(float* out, float rad) {
-    mat4_identity(out);
-    float c = std::cos(rad), s = std::sin(rad);
-    out[5] = c;  out[9]  = -s;
-    out[6] = s;  out[10] = c;
-}
-
-void mat4_scale(float* out, float s) {
-    mat4_identity(out);
-    out[0] = out[5] = out[10] = s;
-}
-
 } // anonymous namespace
 
 // ============================================================
@@ -126,77 +115,6 @@ struct SpVertex {
     float normal[3];
     float uv[2];
 };
-
-/// 立方体 (面ごとの法線、24 頂点)
-static void generate_cube(std::vector<SpVertex>& vertices,
-                          std::vector<uint32_t>& indices) {
-    vertices.clear();
-    indices.clear();
-
-    static const float face_normals[6][3] = {
-        { 0,  0,  1}, { 0,  0, -1}, { 1,  0,  0},
-        {-1,  0,  0}, { 0,  1,  0}, { 0, -1,  0},
-    };
-    // 各面の 4 コーナー (CCW、法線側から見て)
-    static const float face_corners[6][4][3] = {
-        {{-.5f,-.5f, .5f},{ .5f,-.5f, .5f},{ .5f, .5f, .5f},{-.5f, .5f, .5f}},
-        {{ .5f,-.5f,-.5f},{-.5f,-.5f,-.5f},{-.5f, .5f,-.5f},{ .5f, .5f,-.5f}},
-        {{ .5f,-.5f, .5f},{ .5f,-.5f,-.5f},{ .5f, .5f,-.5f},{ .5f, .5f, .5f}},
-        {{-.5f,-.5f,-.5f},{-.5f,-.5f, .5f},{-.5f, .5f, .5f},{-.5f, .5f,-.5f}},
-        {{-.5f, .5f, .5f},{ .5f, .5f, .5f},{ .5f, .5f,-.5f},{-.5f, .5f,-.5f}},
-        {{-.5f,-.5f,-.5f},{ .5f,-.5f,-.5f},{ .5f,-.5f, .5f},{-.5f,-.5f, .5f}},
-    };
-    static const float corner_uv[4][2] = {{0,0},{1,0},{1,1},{0,1}};
-
-    for (int f = 0; f < 6; ++f) {
-        uint32_t base = static_cast<uint32_t>(vertices.size());
-        for (int c = 0; c < 4; ++c) {
-            SpVertex v;
-            memcpy(v.pos,    face_corners[f][c], sizeof(v.pos));
-            memcpy(v.normal, face_normals[f],    sizeof(v.normal));
-            memcpy(v.uv,     corner_uv[c],       sizeof(v.uv));
-            vertices.push_back(v);
-        }
-        indices.push_back(base + 0);
-        indices.push_back(base + 1);
-        indices.push_back(base + 2);
-        indices.push_back(base + 0);
-        indices.push_back(base + 2);
-        indices.push_back(base + 3);
-    }
-}
-
-/// UV 球 (半径 0.5)
-static void generate_uv_sphere(std::vector<SpVertex>& vertices,
-                               std::vector<uint32_t>& indices,
-                               uint32_t stacks, uint32_t slices) {
-    vertices.clear();
-    indices.clear();
-
-    for (uint32_t st = 0; st <= stacks; ++st) {
-        float phi = kPi * static_cast<float>(st) / static_cast<float>(stacks);
-        float y = std::cos(phi), r = std::sin(phi);
-        for (uint32_t sl = 0; sl <= slices; ++sl) {
-            float theta = 2.0f * kPi * static_cast<float>(sl) / static_cast<float>(slices);
-            float x = r * std::cos(theta), z = r * std::sin(theta);
-            SpVertex v;
-            v.pos[0] = x * 0.5f; v.pos[1] = y * 0.5f; v.pos[2] = z * 0.5f;
-            v.normal[0] = x; v.normal[1] = y; v.normal[2] = z;
-            v.uv[0] = static_cast<float>(sl) / static_cast<float>(slices);
-            v.uv[1] = static_cast<float>(st) / static_cast<float>(stacks);
-            vertices.push_back(v);
-        }
-    }
-    uint32_t stride = slices + 1;
-    for (uint32_t st = 0; st < stacks; ++st) {
-        for (uint32_t sl = 0; sl < slices; ++sl) {
-            uint32_t a = st * stride + sl;
-            uint32_t b = a + stride;
-            indices.push_back(a);     indices.push_back(b);     indices.push_back(a + 1);
-            indices.push_back(a + 1); indices.push_back(b);     indices.push_back(b + 1);
-        }
-    }
-}
 
 /// スクリーン (障子紙): XY 平面の矩形、法線 +Z (観客側)
 static void generate_screen_quad(std::vector<SpVertex>& vertices,
@@ -226,19 +144,43 @@ constexpr uint32_t kShadowRes  = 2048;
 constexpr float    kScreenW    = 8.0f;
 constexpr float    kScreenH    = 4.5f;
 
+// 月ライトは 8 灯とは別枠 (shadow atlas の最終 layer を使う)
+constexpr uint32_t kMoonLayer        = kLightCount;
+constexpr uint32_t kShadowLayerCount = kLightCount + 1;
+
+// 切り絵シート (カットアウトレイヤ): 月とスクリーンの間に立てた黒紙。
+// 月光はシートの切り抜きだけを透過し、シートが遮った光は shadow map 経由で
+// 他の何にも影響しない。8 灯 (z >= -8.5) より奥 (z = -9.5) に置くので、
+// 幾何的に月光だけがこのシートと交差する。
+constexpr float kSheetW = 9.0f;
+constexpr float kSheetH = 6.5f;   // sp_cutout.glsl の SP_SHEET_ASPECT と一致させる
+constexpr float kSheetY = 6.5f;   // 月光ビーム (上方からの急角度) の軸高さに合わせる
+constexpr float kSheetZ = -9.5f;
+
 struct SpLightData {
     float pos_type[4];      // xyz = 位置, w = 0:spot / 1:point
     float dir_cone[4];      // xyz = 照射方向 (spot), w = cos(outer cone)
     float color_params[4];  // rgb = セロファン色, w = 強度
+    float range_params[4];  // x = 影響半径 (0 = 無制限), yzw 予備
     float view_proj[16];    // shadow map 用 light VP
 };
 
+// shaders/sp_scene.glsl の SceneUBO と 1:1 (std140 手動ミラー)。
+// 全メンバが vec4 / mat4 境界なのでパディング差は生じない。
 struct SpSceneUBO {
     float view[16];
     float proj[16];
     float view_proj[16];
     float camera_pos[4];
-    float params[4];        // x = time, y = ambient, z = sss_strength, w = paper_sigma
+    float params[4];         // x = time, y = ambient, z = sss_strength, w = paper_sigma
+    float moon_pos[4];       // xyz = 月ライト位置, w = 有効フラグ
+    float moon_dir[4];       // xyz = 月の照射方向, w = 障子直接透過のスケール
+    float moon_color[4];     // rgb = 月光色, w = 強度
+    float godray_params[4];  // x = 密度, y = 消散係数, z = 前方体積奥行き, w = 紙透過率
+    float cam_right[4];      // xyz = カメラ右, w = tan(fovy/2) * aspect
+    float cam_up[4];         // xyz = カメラ上, w = tan(fovy/2)
+    float cam_fwd[4];        // xyz = カメラ前方, w 予備
+    float moon_view_proj[16];
     SpLightData lights[kLightCount];
 };
 
@@ -252,8 +194,31 @@ struct PushDepth {
     float light_view_proj[16];
 };
 
+/// ライト位置からスクリーン 4 隅を全て含む perspective fov を求める。
+/// ポイントライトと月ライトの shadow frustum 算出で共用する。
+static float fov_covering_screen(const float pos[3], float margin) {
+    float vx = -pos[0], vy = -pos[1], vz = -pos[2];
+    float vl = std::sqrt(vx*vx + vy*vy + vz*vz);
+    float max_cos = 1.0f;
+    const float corners[4][2] = {
+        {-kScreenW*0.5f, -kScreenH*0.5f}, {kScreenW*0.5f, -kScreenH*0.5f},
+        { kScreenW*0.5f,  kScreenH*0.5f}, {-kScreenW*0.5f, kScreenH*0.5f}};
+    for (const auto& c : corners) {
+        float cx = c[0] - pos[0], cy = c[1] - pos[1], cz = -pos[2];
+        float cl = std::sqrt(cx*cx + cy*cy + cz*cz);
+        float cosv = (vx*cx + vy*cy + vz*cz) / (vl * cl);
+        if (cosv < max_cos) max_cos = cosv;
+    }
+    max_cos = std::fmax(-1.0f, std::fmin(1.0f, max_cos));
+    float fov_rad = 2.0f * std::acos(max_cos) * margin;
+    if (fov_rad > 2.6f) fov_rad = 2.6f; // ~150° 上限
+    return fov_rad;
+}
+
 /// 固定 8 灯 (ライトは動かさない — 影絵はオブジェクト側が動く)。
 /// スポット 4 + ポイント 4。ディレクショナルなし。
+/// range = 影響半径: (1-(d/R)^4)^2 の窓でプール外周を絞る (0 = 無制限)。
+/// 重なりの中心は保ったまま、遠くまで届く色の洗いだけを限定する。
 static void setup_lights(SpLightData lights[kLightCount]) {
     struct Def {
         bool  point;
@@ -262,18 +227,19 @@ static void setup_lights(SpLightData lights[kLightCount]) {
         float cone_deg;   // spot のみ
         float color[3];
         float intensity;
+        float range;      // 影響半径 (0 = 無制限)
     };
     static const Def defs[kLightCount] = {
         // --- スポット (指向性、セロファンの円をくっきり落とす) ---
-        {false, {-3.5f,  1.8f, -6.5f}, {-1.2f,  0.4f, 0.0f}, 24.0f, {0.95f, 0.18f, 0.12f}, 2.2f},  // 茜
-        {false, { 3.2f,  2.2f, -7.0f}, { 1.4f, -0.3f, 0.0f}, 28.0f, {1.00f, 0.62f, 0.15f}, 2.0f},  // 琥珀
-        {false, { 0.0f, -2.6f, -6.0f}, { 0.0f,  0.6f, 0.0f}, 32.0f, {0.10f, 0.75f, 0.65f}, 1.8f},  // 青緑
-        {false, {-2.8f, -1.5f, -7.5f}, { 0.8f,  0.2f, 0.0f}, 22.0f, {0.80f, 0.20f, 0.75f}, 2.0f},  // 紅紫
-        // --- ポイント (全周囲、広い色の洗い) ---
-        {true,  {-4.5f,  0.5f, -4.5f}, {0, 0, 0}, 0.0f, {0.15f, 0.30f, 0.90f},  0.7f},             // 藍
-        {true,  { 4.5f, -0.5f, -5.0f}, {0, 0, 0}, 0.0f, {1.00f, 0.55f, 0.65f},  0.65f},             // 桜
-        {true,  { 1.5f,  2.8f, -4.0f}, {0, 0, 0}, 0.0f, {0.45f, 0.85f, 0.25f},  0.6f},             // 若草
-        {true,  { 0.0f,  0.0f, -8.5f}, {0, 0, 0}, 0.0f, {1.00f, 0.90f, 0.75f},  1.8f},             // 暖白 (主影)
+        {false, {-3.5f,  1.8f, -6.5f}, {-1.2f,  0.4f, 0.0f}, 15.0f, {0.95f, 0.18f, 0.12f}, 1.25f, 10.0f}, // 茜
+        {false, { 3.2f,  2.2f, -7.0f}, { 1.4f, -0.3f, 0.0f}, 17.0f, {1.00f, 0.62f, 0.15f}, 1.15f, 10.0f}, // 琥珀
+        {false, { 0.0f, -2.6f, -6.0f}, { 0.0f,  0.6f, 0.0f}, 19.0f, {0.10f, 0.75f, 0.65f}, 1.05f, 9.5f},  // 青緑
+        {false, {-2.8f, -1.5f, -7.5f}, { 0.8f,  0.2f, 0.0f}, 14.0f, {0.80f, 0.20f, 0.75f}, 1.15f, 10.0f}, // 紅紫
+        // --- ポイント (全周囲の色の洗い — range でプールを局所化) ---
+        {true,  {-4.5f,  0.5f, -4.5f}, {0, 0, 0}, 0.0f, {0.15f, 0.30f, 0.90f},  0.4f,  6.5f},             // 藍
+        {true,  { 4.5f, -0.5f, -5.0f}, {0, 0, 0}, 0.0f, {1.00f, 0.55f, 0.65f},  0.35f, 6.5f},             // 桜
+        {true,  { 1.5f,  2.8f, -4.0f}, {0, 0, 0}, 0.0f, {0.45f, 0.85f, 0.25f},  0.32f, 6.0f},             // 若草
+        {true,  { 0.0f,  0.0f, -8.5f}, {0, 0, 0}, 0.0f, {1.00f, 0.82f, 0.60f},  0.4f, 11.0f},             // 暖白 (主影)
     };
 
     const float up[3] = {0.0f, 1.0f, 0.0f};
@@ -294,6 +260,9 @@ static void setup_lights(SpLightData lights[kLightCount]) {
         l.color_params[0] = d.color[0]; l.color_params[1] = d.color[1];
         l.color_params[2] = d.color[2]; l.color_params[3] = d.intensity;
 
+        l.range_params[0] = d.range;
+        l.range_params[1] = 0.0f; l.range_params[2] = 0.0f; l.range_params[3] = 0.0f;
+
         // Shadow frustum:
         //   spot  — コーンを覆う perspective。
         //   point — 受光面がスクリーン平面のみなので、スクリーン中心向きの
@@ -303,20 +272,7 @@ static void setup_lights(SpLightData lights[kLightCount]) {
         float fov_rad;
         if (d.point) {
             target[0] = 0.0f; target[1] = 0.0f; target[2] = 0.0f;
-            float vx = -d.pos[0], vy = -d.pos[1], vz = -d.pos[2];
-            float vl = std::sqrt(vx*vx + vy*vy + vz*vz);
-            float max_cos = 1.0f;
-            const float corners[4][2] = {
-                {-kScreenW*0.5f, -kScreenH*0.5f}, {kScreenW*0.5f, -kScreenH*0.5f},
-                { kScreenW*0.5f,  kScreenH*0.5f}, {-kScreenW*0.5f, kScreenH*0.5f}};
-            for (const auto& c : corners) {
-                float cx = c[0] - d.pos[0], cy = c[1] - d.pos[1], cz = -d.pos[2];
-                float cl = std::sqrt(cx*cx + cy*cy + cz*cz);
-                float cosv = (vx*cx + vy*cy + vz*cz) / (vl * cl);
-                if (cosv < max_cos) max_cos = cosv;
-            }
-            fov_rad = 2.0f * std::acos(max_cos) * 1.15f;
-            if (fov_rad > 2.6f) fov_rad = 2.6f; // ~150° 上限
+            fov_rad = fov_covering_screen(d.pos, 1.15f);
         } else {
             target[0] = d.aim[0]; target[1] = d.aim[1]; target[2] = d.aim[2];
             fov_rad = 2.0f * d.cone_deg * kPi / 180.0f * 1.2f;
@@ -327,6 +283,41 @@ static void setup_lights(SpLightData lights[kLightCount]) {
         mat4_perspective(light_proj, fov_rad, 1.0f, 0.5f, 40.0f);
         mat4_multiply(l.view_proj, light_proj, light_view);
     }
+}
+
+/// 月ライト + ゴッドレイのパラメータ。
+/// 月は 8 灯より遥か奥・上方に置き、切り絵シート越しに急角度で
+/// スクリーンへ差し込む。シート (z = kSheetZ) は 8 灯 (z >= -8.5) より
+/// 奥にあるので、幾何的に月光だけがシートと交差する = シートが遮った
+/// 月光は shadow map 経由で「他の何にも影響しない」。
+static void setup_moon(SpSceneUBO& scene) {
+    const float pos[3]    = {0.0f, 9.0f, -13.0f};
+    const float target[3] = {0.0f, 0.0f, 0.0f}; // fov_covering_screen と同じ軸
+    const float up[3]     = {0.0f, 1.0f, 0.0f};
+
+    scene.moon_pos[0] = pos[0]; scene.moon_pos[1] = pos[1];
+    scene.moon_pos[2] = pos[2]; scene.moon_pos[3] = 1.0f; // 有効
+
+    float dir[3] = {target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]};
+    float dl = std::sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+    scene.moon_dir[0] = dir[0] / dl; scene.moon_dir[1] = dir[1] / dl;
+    scene.moon_dir[2] = dir[2] / dl; scene.moon_dir[3] = 0.42f;
+
+    // 蒼白い月光
+    scene.moon_color[0] = 0.70f; scene.moon_color[1] = 0.84f;
+    scene.moon_color[2] = 1.00f; scene.moon_color[3] = 1.7f;
+
+    // ゴッドレイ: x = 密度, y = 消散係数, z = 前方体積の奥行き, w = 紙透過率
+    scene.godray_params[0] = 0.20f;
+    scene.godray_params[1] = 0.85f;
+    scene.godray_params[2] = 3.0f;
+    scene.godray_params[3] = 0.32f;
+
+    const float fov_rad = fov_covering_screen(pos, 1.25f);
+    float moon_view[16], moon_proj[16];
+    mat4_look_at(moon_view, pos, target, up);
+    mat4_perspective(moon_proj, fov_rad, 1.0f, 0.5f, 40.0f);
+    mat4_multiply(scene.moon_view_proj, moon_proj, moon_view);
 }
 
 // ============================================================
@@ -367,9 +358,12 @@ public:
             if (p) vkDestroyPipeline(device_, p, nullptr);
             p = VK_NULL_HANDLE;
         };
-        destroy_pipe(depth_pipeline_);
+        destroy_pipe(depth_cut_pipeline_);
+        destroy_pipe(depth_trunk_pipeline_);
+        destroy_pipe(depth_figure_pipeline_);
         destroy_pipe(screen_pipeline_);
-        destroy_pipe(lit_pipeline_);
+        destroy_pipe(sheet_pipeline_);
+        destroy_pipe(godray_pipeline_);
         if (depth_pipeline_layout_)  vkDestroyPipelineLayout(device_, depth_pipeline_layout_, nullptr);
         if (main_pipeline_layout_)   vkDestroyPipelineLayout(device_, main_pipeline_layout_, nullptr);
         if (desc_pool_)       vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
@@ -427,13 +421,18 @@ public:
     }
 
     /// 1 フレームぶんのコマンド記録。
-    /// shadow pass ×8 (球+立方体) → main pass (観客ビュー: 障子スクリーン /
-    /// 舞台裏ビュー: オブジェクト簡易 lit)。
+    /// shadow pass ×9 (木とチェロ奏者 / 月 layer: +切り絵シート) →
+    /// main pass (観客ビュー: 障子スクリーン + 月光ゴッドレイ /
+    /// 舞台裏ビュー: 切り絵シート + オブジェクト簡易 lit)。
     void render(VkCommandBuffer cmd, uint32_t image_index, VkExtent2D extent,
                 const SpSceneUBO& scene, bool backstage,
-                const float sphere_model[16], const float cube_model[16]) {
-        // ---- Shadow passes (8 layer) ----
-        for (uint32_t i = 0; i < kLightCount; ++i) {
+                const float trunk_model[16], const float figure_model[16]) {
+        // 切り絵シートのモデル行列 (固定配置)
+        float sheet_model[16];
+        mat4_translate(sheet_model, 0.0f, kSheetY, kSheetZ);
+
+        // ---- Shadow passes (8 灯 + 月 = 9 layer) ----
+        for (uint32_t i = 0; i < kShadowLayerCount; ++i) {
             VkClearValue clear{};
             clear.depthStencil = {1.0f, 0};
 
@@ -446,25 +445,42 @@ public:
             rp_info.pClearValues    = &clear;
 
             vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline_);
-
             VkViewport vp{0, 0, (float)kShadowRes, (float)kShadowRes, 0.0f, 1.0f};
             VkRect2D sc{{0, 0}, {kShadowRes, kShadowRes}};
             vkCmdSetViewport(cmd, 0, 1, &vp);
             vkCmdSetScissor(cmd, 0, 1, &sc);
 
             PushDepth push{};
-            memcpy(push.light_view_proj, scene.lights[i].view_proj, sizeof(push.light_view_proj));
+            const float* light_vp = (i == kMoonLayer)
+                                        ? scene.moon_view_proj
+                                        : scene.lights[i].view_proj;
+            memcpy(push.light_view_proj, light_vp, sizeof(push.light_view_proj));
 
-            memcpy(push.model, sphere_model, sizeof(push.model));
+            if (i != kMoonLayer) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_trunk_pipeline_);
+                memcpy(push.model, trunk_model, sizeof(push.model));
+                vkCmdPushConstants(cmd, depth_pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(PushDepth), &push);
+                draw_mesh(cmd, kMeshTrunk);
+            }
+            // 月光は演出上、幹の手前を流れる (参考画像のレイヤリング)。
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_figure_pipeline_);
+            memcpy(push.model, figure_model, sizeof(push.model));
             vkCmdPushConstants(cmd, depth_pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(PushDepth), &push);
-            draw_mesh(cmd, kMeshSphere);
+            draw_mesh(cmd, kMeshFigure);
 
-            memcpy(push.model, cube_model, sizeof(push.model));
-            vkCmdPushConstants(cmd, depth_pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
-                               0, sizeof(PushDepth), &push);
-            draw_mesh(cmd, kMeshCube);
+            // 月 layer のみ: 切り絵シートをカットアウト付き depth へ焼く。
+            // シートは 8 灯より奥にあるため他 layer へ描く必要がない。
+            if (i == kMoonLayer) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  depth_cut_pipeline_);
+                memcpy(push.model, sheet_model, sizeof(push.model));
+                vkCmdPushConstants(cmd, depth_pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(PushDepth), &push);
+                draw_mesh(cmd, kMeshSheet);
+            }
 
             vkCmdEndRenderPass(cmd);
         }
@@ -492,22 +508,23 @@ public:
                                 main_pipeline_layout_, 0, 1, &desc_set_, 0, nullptr);
 
         if (backstage) {
-            // 舞台裏ビュー: オブジェクトをセロファン光の簡易 lit で確認
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lit_pipeline_);
+            // 舞台裏ビュー: 切り絵シート → オブジェクトの順で描く。
+            // main render pass には depth attachment が無いので、最奥の
+            // シートを先に描く painter's order で前後関係を作る。
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sheet_pipeline_);
+            {
+                PushObject push{};
+                memcpy(push.model, sheet_model, sizeof(push.model));
+                push.tint[0] = 1.0f; push.tint[1] = 1.0f;
+                push.tint[2] = 1.0f; push.tint[3] = 1.0f;
+                vkCmdPushConstants(cmd, main_pipeline_layout_,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(PushObject), &push);
+                draw_mesh(cmd, kMeshSheet);
+            }
 
-            PushObject push{};
-            memcpy(push.model, sphere_model, sizeof(push.model));
-            push.tint[0] = 0.85f; push.tint[1] = 0.85f; push.tint[2] = 0.85f; push.tint[3] = 1.0f;
-            vkCmdPushConstants(cmd, main_pipeline_layout_,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(PushObject), &push);
-            draw_mesh(cmd, kMeshSphere);
-
-            memcpy(push.model, cube_model, sizeof(push.model));
-            vkCmdPushConstants(cmd, main_pipeline_layout_,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(PushObject), &push);
-            draw_mesh(cmd, kMeshCube);
+            // 型は depth-only のアルファテストで影を作る。舞台裏では切り絵
+            // シートの確認を優先し、型の簡易 lit 表示は行わない。
         } else {
             // 観客ビュー: 障子スクリーン 1 枚に全てが映る
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screen_pipeline_);
@@ -519,13 +536,21 @@ public:
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(PushObject), &push);
             draw_mesh(cmd, kMeshScreen);
+
+            // 月光ゴッドレイ: スクリーンの上へ加算合成のフルスクリーン
+            // レイマーチを重ねる (頂点バッファなしの 1 三角形)
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, godray_pipeline_);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
         }
 
         vkCmdEndRenderPass(cmd);
     }
 
 private:
-    enum MeshIndex { kMeshSphere = 0, kMeshCube = 1, kMeshScreen = 2, kMeshCount = 3 };
+    enum MeshIndex {
+        kMeshTrunk = 0, kMeshFigure = 1, kMeshScreen = 2, kMeshSheet = 3,
+        kMeshCount = 4,
+    };
 
     void draw_mesh(VkCommandBuffer cmd, int mesh) {
         VkDeviceSize offset = 0;
@@ -625,7 +650,7 @@ private:
         return mod;
     }
 
-    // ---- Shadow map resources (sampled depth × 8 layer) ----
+    // ---- Shadow map resources (sampled depth × 9 layer = 8 灯 + 月) ----
 
     VkFormat find_shadow_format() const {
         constexpr VkFormatFeatureFlags required =
@@ -655,7 +680,7 @@ private:
         img_info.format        = shadow_format_;
         img_info.extent        = {kShadowRes, kShadowRes, 1};
         img_info.mipLevels     = 1;
-        img_info.arrayLayers   = kLightCount;
+        img_info.arrayLayers   = kShadowLayerCount;
         img_info.samples       = VK_SAMPLE_COUNT_1_BIT;
         img_info.tiling        = VK_IMAGE_TILING_OPTIMAL;
         img_info.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
@@ -690,13 +715,13 @@ private:
         view_info.subresourceRange.baseMipLevel   = 0;
         view_info.subresourceRange.levelCount     = 1;
         view_info.subresourceRange.baseArrayLayer = 0;
-        view_info.subresourceRange.layerCount     = kLightCount;
+        view_info.subresourceRange.layerCount     = kShadowLayerCount;
         if (vkCreateImageView(device_, &view_info, nullptr, &shadow_array_view_) != VK_SUCCESS)
             return false;
 
         // framebuffer 用 per-layer view
-        shadow_layer_views_.resize(kLightCount);
-        for (uint32_t i = 0; i < kLightCount; ++i) {
+        shadow_layer_views_.resize(kShadowLayerCount);
+        for (uint32_t i = 0; i < kShadowLayerCount; ++i) {
             view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
             view_info.subresourceRange.baseArrayLayer = i;
             view_info.subresourceRange.layerCount     = 1;
@@ -764,8 +789,8 @@ private:
     }
 
     bool create_shadow_framebuffers() {
-        shadow_framebuffers_.resize(kLightCount);
-        for (uint32_t i = 0; i < kLightCount; ++i) {
+        shadow_framebuffers_.resize(kShadowLayerCount);
+        for (uint32_t i = 0; i < kShadowLayerCount; ++i) {
             VkFramebufferCreateInfo info{};
             info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             info.renderPass      = shadow_render_pass_;
@@ -806,23 +831,31 @@ private:
 
     bool create_pipelines(const char* shader_dir) {
         std::string base = std::string(shader_dir) + "/";
-        VkShaderModule depth_vert  = load_shader((base + "sp_depth.vert.spv").c_str());
-        VkShaderModule depth_frag  = load_shader((base + "sp_depth.frag.spv").c_str());
-        VkShaderModule screen_vert = load_shader((base + "sp_screen.vert.spv").c_str());
-        VkShaderModule screen_frag = load_shader((base + "sp_screen.frag.spv").c_str());
-        VkShaderModule lit_vert    = load_shader((base + "sp_lit.vert.spv").c_str());
-        VkShaderModule lit_frag    = load_shader((base + "sp_lit.frag.spv").c_str());
+        VkShaderModule depth_cut_vert = load_shader((base + "sp_depth_cut.vert.spv").c_str());
+        VkShaderModule depth_cut_frag = load_shader((base + "sp_depth_cut.frag.spv").c_str());
+        VkShaderModule depth_trunk_frag = load_shader((base + "sp_depth_trunk.frag.spv").c_str());
+        VkShaderModule depth_figure_frag = load_shader((base + "sp_depth_figure.frag.spv").c_str());
+        VkShaderModule screen_vert    = load_shader((base + "sp_screen.vert.spv").c_str());
+        VkShaderModule screen_frag    = load_shader((base + "sp_screen.frag.spv").c_str());
+        VkShaderModule sheet_vert     = load_shader((base + "sp_sheet.vert.spv").c_str());
+        VkShaderModule sheet_frag     = load_shader((base + "sp_sheet.frag.spv").c_str());
+        VkShaderModule godray_vert    = load_shader((base + "sp_godray.vert.spv").c_str());
+        VkShaderModule godray_frag    = load_shader((base + "sp_godray.frag.spv").c_str());
 
         auto cleanup_modules = [&]() {
             auto d = [this](VkShaderModule m) {
                 if (m) vkDestroyShaderModule(device_, m, nullptr);
             };
-            d(depth_vert); d(depth_frag); d(screen_vert);
-            d(screen_frag); d(lit_vert); d(lit_frag);
+            d(depth_cut_vert); d(depth_cut_frag);
+            d(depth_trunk_frag); d(depth_figure_frag);
+            d(screen_vert); d(screen_frag);
+            d(sheet_vert); d(sheet_frag); d(godray_vert); d(godray_frag);
         };
 
-        if (!depth_vert || !depth_frag || !screen_vert ||
-            !screen_frag || !lit_vert || !lit_frag) {
+        if (!depth_cut_vert || !depth_cut_frag ||
+            !depth_trunk_frag || !depth_figure_frag ||
+            !screen_vert || !screen_frag ||
+            !sheet_vert || !sheet_frag || !godray_vert || !godray_frag) {
             fprintf(stderr, "ShadowPlayRenderer: failed to load shaders from %s\n", shader_dir);
             cleanup_modules();
             return false;
@@ -934,18 +967,19 @@ private:
 
         bool ok = true;
 
-        // --- Depth (shadow) pipeline ---
-        {
+        // --- Depth-cut (切り絵シート) pipeline ---
+        // depth pipeline との違い: カットアウト discard のため uv を渡す
+        // frag を使うことと、月がシートの裏面を見るので両面描画にすること。
+        if (ok) {
             VkPipelineShaderStageCreateInfo stages[2] = {
-                make_stage(VK_SHADER_STAGE_VERTEX_BIT,   depth_vert),
-                make_stage(VK_SHADER_STAGE_FRAGMENT_BIT, depth_frag),
+                make_stage(VK_SHADER_STAGE_VERTEX_BIT,   depth_cut_vert),
+                make_stage(VK_SHADER_STAGE_FRAGMENT_BIT, depth_cut_frag),
             };
 
-            // 静的 depth bias で自己遮蔽 (acne) を抑える
             VkPipelineRasterizationStateCreateInfo rs{};
             rs.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             rs.polygonMode             = VK_POLYGON_MODE_FILL;
-            rs.cullMode                = VK_CULL_MODE_BACK_BIT;
+            rs.cullMode                = VK_CULL_MODE_NONE;
             rs.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             rs.lineWidth               = 1.0f;
             rs.depthBiasEnable         = VK_TRUE;
@@ -964,8 +998,40 @@ private:
             pipe_info.renderPass          = shadow_render_pass_;
 
             ok = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
-                                           &pipe_info, nullptr, &depth_pipeline_) == VK_SUCCESS;
+                                           &pipe_info, nullptr, &depth_cut_pipeline_) == VK_SUCCESS;
         }
+
+        // --- Silhouette depth pipelines ---
+        // 木と奏者は同じ UV 対応 quad を使い、fragment 側の SDF だけを
+        // 分ける。カットアウトと同じ bias / 両面設定で全 shadow layer に焼く。
+        auto create_silhouette_pipeline = [&](VkShaderModule frag, VkPipeline* pipeline) {
+            VkPipelineShaderStageCreateInfo stages[2] = {
+                make_stage(VK_SHADER_STAGE_VERTEX_BIT, depth_cut_vert),
+                make_stage(VK_SHADER_STAGE_FRAGMENT_BIT, frag),
+            };
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode = VK_CULL_MODE_NONE;
+            rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth = 1.0f;
+            rs.depthBiasEnable = VK_TRUE;
+            rs.depthBiasConstantFactor = 1.25f;
+            rs.depthBiasSlopeFactor = 1.75f;
+            VkPipelineColorBlendStateCreateInfo cb_none{};
+            cb_none.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb_none.attachmentCount = 0;
+            pipe_info.stageCount = 2;
+            pipe_info.pStages = stages;
+            pipe_info.pRasterizationState = &rs;
+            pipe_info.pColorBlendState = &cb_none;
+            pipe_info.layout = depth_pipeline_layout_;
+            pipe_info.renderPass = shadow_render_pass_;
+            return vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+                                              &pipe_info, nullptr, pipeline) == VK_SUCCESS;
+        };
+        if (ok) ok = create_silhouette_pipeline(depth_trunk_frag, &depth_trunk_pipeline_);
+        if (ok) ok = create_silhouette_pipeline(depth_figure_frag, &depth_figure_pipeline_);
 
         // --- Screen (障子) pipeline ---
         if (ok) {
@@ -997,17 +1063,19 @@ private:
                                            &pipe_info, nullptr, &screen_pipeline_) == VK_SUCCESS;
         }
 
-        // --- Lit (舞台裏ビュー) pipeline ---
+        // --- Sheet (舞台裏の切り絵シート可視化) pipeline ---
+        // カットアウトを discard するため両面描画。ds は main pass 用に
+        // 無効化済み (このパスに depth attachment は無い)。
         if (ok) {
             VkPipelineShaderStageCreateInfo stages[2] = {
-                make_stage(VK_SHADER_STAGE_VERTEX_BIT,   lit_vert),
-                make_stage(VK_SHADER_STAGE_FRAGMENT_BIT, lit_frag),
+                make_stage(VK_SHADER_STAGE_VERTEX_BIT,   sheet_vert),
+                make_stage(VK_SHADER_STAGE_FRAGMENT_BIT, sheet_frag),
             };
 
             VkPipelineRasterizationStateCreateInfo rs{};
             rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             rs.polygonMode = VK_POLYGON_MODE_FILL;
-            rs.cullMode    = VK_CULL_MODE_BACK_BIT;
+            rs.cullMode    = VK_CULL_MODE_NONE;
             rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             rs.lineWidth   = 1.0f;
 
@@ -1019,7 +1087,56 @@ private:
             pipe_info.renderPass          = vk_ctx_->default_render_pass();
 
             ok = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
-                                           &pipe_info, nullptr, &lit_pipeline_) == VK_SUCCESS;
+                                           &pipe_info, nullptr, &sheet_pipeline_) == VK_SUCCESS;
+        }
+
+        // --- Godray (月光レイマーチ) pipeline ---
+        // 頂点バッファなしのフルスクリーン三角形を、障子スクリーンの上へ
+        // 加算合成 (ONE/ONE) で重ねる。
+        if (ok) {
+            VkPipelineShaderStageCreateInfo stages[2] = {
+                make_stage(VK_SHADER_STAGE_VERTEX_BIT,   godray_vert),
+                make_stage(VK_SHADER_STAGE_FRAGMENT_BIT, godray_frag),
+            };
+
+            VkPipelineVertexInputStateCreateInfo vi_empty{};
+            vi_empty.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_NONE;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineColorBlendAttachmentState blend_add{};
+            blend_add.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            blend_add.blendEnable         = VK_TRUE;
+            blend_add.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            blend_add.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            blend_add.colorBlendOp        = VK_BLEND_OP_ADD;
+            blend_add.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            blend_add.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            blend_add.alphaBlendOp        = VK_BLEND_OP_ADD;
+
+            VkPipelineColorBlendStateCreateInfo cb_add{};
+            cb_add.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb_add.attachmentCount = 1;
+            cb_add.pAttachments    = &blend_add;
+
+            pipe_info.stageCount          = 2;
+            pipe_info.pStages             = stages;
+            pipe_info.pVertexInputState   = &vi_empty;
+            pipe_info.pRasterizationState = &rs;
+            pipe_info.pColorBlendState    = &cb_add;
+            pipe_info.layout              = main_pipeline_layout_;
+            pipe_info.renderPass          = vk_ctx_->default_render_pass();
+
+            ok = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+                                           &pipe_info, nullptr, &godray_pipeline_) == VK_SUCCESS;
+
+            pipe_info.pVertexInputState = &vi; // 後続のために共有 state へ戻す
         }
 
         cleanup_modules();
@@ -1064,14 +1181,18 @@ private:
         std::vector<SpVertex> verts;
         std::vector<uint32_t> idxs;
 
-        generate_uv_sphere(verts, idxs, 32, 48);
-        if (!create_mesh_buffers(kMeshSphere, verts, idxs)) return false;
+        generate_screen_quad(verts, idxs, 5.0f, 4.5f);
+        if (!create_mesh_buffers(kMeshTrunk, verts, idxs)) return false;
 
-        generate_cube(verts, idxs);
-        if (!create_mesh_buffers(kMeshCube, verts, idxs)) return false;
+        generate_screen_quad(verts, idxs, 1.1f, 1.5f);
+        if (!create_mesh_buffers(kMeshFigure, verts, idxs)) return false;
 
         generate_screen_quad(verts, idxs, kScreenW, kScreenH);
         if (!create_mesh_buffers(kMeshScreen, verts, idxs)) return false;
+
+        // 切り絵シート (カットアウトは shader 側の手続き判定)
+        generate_screen_quad(verts, idxs, kSheetW, kSheetH);
+        if (!create_mesh_buffers(kMeshSheet, verts, idxs)) return false;
 
         return true;
     }
@@ -1131,7 +1252,7 @@ private:
     VulkanContext* vk_ctx_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
 
-    // Shadow map (sampled depth × 8 layer)
+    // Shadow map (sampled depth × 9 layer = 8 灯 + 月)
     VkFormat       shadow_format_ = VK_FORMAT_UNDEFINED;
     VkImage        shadow_image_  = VK_NULL_HANDLE;
     VkDeviceMemory shadow_memory_ = VK_NULL_HANDLE;
@@ -1144,9 +1265,12 @@ private:
     // Pipelines
     VkPipelineLayout depth_pipeline_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout main_pipeline_layout_  = VK_NULL_HANDLE;
-    VkPipeline depth_pipeline_  = VK_NULL_HANDLE;
-    VkPipeline screen_pipeline_ = VK_NULL_HANDLE;
-    VkPipeline lit_pipeline_    = VK_NULL_HANDLE;
+    VkPipeline depth_cut_pipeline_ = VK_NULL_HANDLE; // 切り絵シート (カットアウト discard)
+    VkPipeline depth_trunk_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline depth_figure_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline screen_pipeline_    = VK_NULL_HANDLE;
+    VkPipeline sheet_pipeline_     = VK_NULL_HANDLE; // 舞台裏のシート可視化
+    VkPipeline godray_pipeline_    = VK_NULL_HANDLE; // 月光ゴッドレイ (加算合成)
     VkDescriptorSetLayout desc_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool desc_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_ = VK_NULL_HANDLE;
@@ -1167,8 +1291,8 @@ static FrameResult render_frame(VulkanContext& vk_ctx,
                                 ShadowPlayRenderer& renderer,
                                 const SpSceneUBO& scene,
                                 bool backstage,
-                                const float sphere_model[16],
-                                const float cube_model[16]) {
+                                const float trunk_model[16],
+                                const float figure_model[16]) {
     const uint32_t image_index = vk_ctx.acquire_next_image();
     if (image_index == UINT32_MAX) return FrameResult::Skipped;
 
@@ -1191,7 +1315,7 @@ static FrameResult render_frame(VulkanContext& vk_ctx,
     }
 
     renderer.render(cmd, image_index, vk_ctx.swapchain_extent(),
-                    scene, backstage, sphere_model, cube_model);
+                    scene, backstage, trunk_model, figure_model);
 
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
         fprintf(stderr, "Failed to end command buffer\n");
@@ -1284,8 +1408,9 @@ int main() {
     // ---- 4. Scene (固定 8 灯) ----
     SpSceneUBO scene{};
     setup_lights(scene.lights);
-    scene.params[1] = 0.02f;  // ambient
-    scene.params[2] = 0.035f; // sss_strength (多重散乱)
+    setup_moon(scene);        // 月ライト + 切り絵シート越しのゴッドレイ
+    scene.params[1] = 0.008f; // ambient
+    scene.params[2] = 0.022f; // sss_strength (多重散乱)
     scene.params[3] = 0.35f;  // paper_sigma (紙の光学的厚み)
 
     // ---- 5. Orbit Camera (観客席側に制限) ----
@@ -1329,8 +1454,12 @@ int main() {
 
     printf("\nShadow play setup:\n");
     printf("  - Screen (shoji): %.1f x %.1f at z=0\n", kScreenW, kScreenH);
-    printf("  - Casters: sphere + cube (slowly animating)\n");
+    printf("  - Casters: cutout tree + cello player (static silhouettes)\n");
     printf("  - 8 fixed lights: 4 spot + 4 point (no directional)\n");
+    printf("  - Light range windows: per-light influence radius\n");
+    printf("  - Moon + kirie sheet: %.1f x %.1f at z=%.1f (cutout layer)\n",
+           kSheetW, kSheetH, kSheetZ);
+    printf("  - Moon god rays through cutouts (additive ray-march)\n");
     printf("  - Hard shadows: 1-sample step compare, no PCF\n");
     printf("  - Cellophane gels + paper transmission (SSS approx)\n");
     printf("  - Mouse drag: orbit (audience side), Scroll: zoom\n");
@@ -1356,40 +1485,30 @@ int main() {
         auto now = std::chrono::high_resolution_clock::now();
         float elapsed = std::chrono::duration<float>(now - start).count();
 
-        // ---- オブジェクトのモデル行列 (ライトは固定、動くのは型のほう) ----
-        // 球: ゆっくり上下 + 左右に揺れる
-        float sphere_model[16];
-        {
-            float trans[16], scale[16];
-            mat4_translate(trans,
-                           -1.2f + 0.25f * std::sin(elapsed * 0.31f),
-                            0.35f + 0.30f * std::sin(elapsed * 0.53f),
-                           -1.1f);
-            mat4_scale(scale, 1.7f); // 直径 1.7
-            mat4_multiply(sphere_model, trans, scale);
-        }
-        // 立方体: ゆっくり回転 (影のエッジが変化する)
-        float cube_model[16];
-        {
-            float trans[16], rot_y[16], rot_x[16], scale[16], tmp[16];
-            mat4_translate(trans, 1.35f, -0.35f, -1.3f);
-            mat4_rotate_y(rot_y, elapsed * 0.4f);
-            mat4_rotate_x(rot_x, 0.6f + 0.2f * std::sin(elapsed * 0.23f));
-            mat4_scale(scale, 1.3f);
-            mat4_multiply(tmp, rot_x, scale);
-            mat4_multiply(tmp, rot_y, tmp);
-            mat4_multiply(cube_model, trans, tmp);
-        }
+        // ---- 固定の切り絵型モデル行列 ----
+        float trunk_model[16];
+        float figure_model[16];
+        mat4_translate(trunk_model, 0.0f, -0.05f, -1.05f);
+        // 影の shoji 到達域が y [-1.35, -0.35] (水際の上) に収まる高さ。
+        // 月 (0,9,-13) からの射影倍率 ~1.06 で見積もる。
+        mat4_translate(figure_model, 0.20f, -0.40f, -0.70f);
 
         // ---- カメラ ----
         float yaw = orbit_cam.yaw + (backstage ? kPi : 0.0f);
         float cos_pitch = std::cos(orbit_cam.pitch);
-        float eye[3] = {
-            orbit_cam.radius * cos_pitch * std::sin(yaw),
-            orbit_cam.radius * std::sin(orbit_cam.pitch),
-            orbit_cam.radius * cos_pitch * std::cos(yaw),
+        float center[3] = {
+            0.0f,
+            backstage ? kSheetY : 0.0f,
+            backstage ? kSheetZ : 0.0f,
         };
-        float center[3] = {0.0f, 0.0f, backstage ? -2.0f : 0.0f};
+        // シート全体が既定の縦 FOV に収まる距離を舞台裏ビューでは確保する。
+        float camera_radius = backstage ? std::fmax(orbit_cam.radius, 11.5f)
+                                        : orbit_cam.radius;
+        float eye[3] = {
+            center[0] + camera_radius * cos_pitch * std::sin(yaw),
+            center[1] + camera_radius * std::sin(orbit_cam.pitch),
+            center[2] + camera_radius * cos_pitch * std::cos(yaw),
+        };
         float up[3] = {0.0f, 1.0f, 0.0f};
 
 #ifdef PICTOR_HAS_VULKAN
@@ -1397,19 +1516,36 @@ int main() {
         screen_h = vk_ctx.swapchain_extent().height;
 #endif
         if (screen_h == 0) continue;
+        constexpr float kFovY = 0.6f;
         float aspect = static_cast<float>(screen_w) / static_cast<float>(screen_h);
         mat4_look_at(scene.view, eye, center, up);
-        mat4_perspective(scene.proj, 0.6f, aspect, 0.1f, 100.0f);
+        mat4_perspective(scene.proj, kFovY, aspect, 0.1f, 100.0f);
         mat4_multiply(scene.view_proj, scene.proj, scene.view);
         scene.camera_pos[0] = eye[0];
         scene.camera_pos[1] = eye[1];
         scene.camera_pos[2] = eye[2];
         scene.params[0] = elapsed;
 
+        // ゴッドレイのレイ再構成用カメラ基底 (view 行列の行 = 右/上/前方)。
+        // view の第 3 行は -forward なので符号を戻す。
+        const float tan_half = std::tan(kFovY * 0.5f);
+        scene.cam_right[0] = scene.view[0];
+        scene.cam_right[1] = scene.view[4];
+        scene.cam_right[2] = scene.view[8];
+        scene.cam_right[3] = tan_half * aspect;
+        scene.cam_up[0] = scene.view[1];
+        scene.cam_up[1] = scene.view[5];
+        scene.cam_up[2] = scene.view[9];
+        scene.cam_up[3] = tan_half;
+        scene.cam_fwd[0] = -scene.view[2];
+        scene.cam_fwd[1] = -scene.view[6];
+        scene.cam_fwd[2] = -scene.view[10];
+        scene.cam_fwd[3] = 0.0f;
+
         // ---- 描画 ----
 #ifdef PICTOR_HAS_VULKAN
         const FrameResult frame_result = render_frame(
-            vk_ctx, sp_renderer, scene, backstage, sphere_model, cube_model);
+            vk_ctx, sp_renderer, scene, backstage, trunk_model, figure_model);
         if (frame_result == FrameResult::Skipped) continue;
         if (frame_result == FrameResult::Failed) break;
 #endif

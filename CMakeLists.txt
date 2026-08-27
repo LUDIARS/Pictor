@@ -607,6 +607,14 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_screen.frag
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_lit.vert
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_lit.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_cut.vert
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_cut.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_trunk.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_figure.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_sheet.vert
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_sheet.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_godray.vert
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_godray.frag
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.vert
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.frag
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.vert
@@ -679,6 +687,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_scene.glsl
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_moments.glsl
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_lobes.glsl
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_scene.glsl
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_cutout.glsl
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_shapes.glsl
     )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
