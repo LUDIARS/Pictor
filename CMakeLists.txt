@@ -407,6 +407,14 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         add_executable(pictor_ocean_demo demo/ocean/main.cpp)
         target_link_libraries(pictor_ocean_demo PRIVATE pictor)
 
+        # Shadow play (影絵) demo — 8 fixed spot/point lights, hard shadows, paper SSS
+        add_executable(pictor_shadow_play_demo demo/shadow_play/main.cpp)
+        target_link_libraries(pictor_shadow_play_demo PRIVATE pictor)
+        if(MSVC)
+            # /utf-8 does not propagate from the pictor lib to demo targets.
+            target_compile_options(pictor_shadow_play_demo PRIVATE /utf-8)
+        endif()
+
         # Text rendering demo
         add_executable(pictor_text_demo demo/text/main.cpp)
         target_link_libraries(pictor_text_demo PRIVATE pictor)
@@ -593,6 +601,12 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tese
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.frag
         ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean_wireframe.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth.vert
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_screen.vert
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_screen.frag
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_lit.vert
+        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_lit.frag
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.vert
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.frag
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.vert
@@ -691,6 +705,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_ocean_demo)
         add_dependencies(pictor_ocean_demo pictor_shaders)
+    endif()
+    if(TARGET pictor_shadow_play_demo)
+        add_dependencies(pictor_shadow_play_demo pictor_shaders)
     endif()
     if(TARGET pictor_text_demo)
         add_dependencies(pictor_text_demo pictor_shaders)
