@@ -691,6 +691,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_scene.glsl
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_moments.glsl
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_lobes.glsl
+    )
+    set(PICTOR_SHADOW_PLAY_GLSL_INCLUDES
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_scene.glsl
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_cutout.glsl
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_shapes.glsl
@@ -699,11 +701,15 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
         get_filename_component(SHADER_NAME ${SHADER} NAME)
         set(SPIRV_OUT ${CMAKE_BINARY_DIR}/shaders/${SHADER_NAME}.spv)
+        set(SHADER_DEPENDS ${SHADER} ${PICTOR_GLSL_INCLUDES})
+        if(SHADER MATCHES "/demo/shadow_play/shaders/")
+            list(APPEND SHADER_DEPENDS ${PICTOR_SHADOW_PLAY_GLSL_INCLUDES})
+        endif()
         add_custom_command(
             OUTPUT ${SPIRV_OUT}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders
             COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SPIRV_OUT}
-            DEPENDS ${SHADER} ${PICTOR_GLSL_INCLUDES}
+            DEPENDS ${SHADER_DEPENDS}
             COMMENT "Compiling ${SHADER_NAME} -> SPIR-V"
         )
         list(APPEND PICTOR_SPIRV_FILES ${SPIRV_OUT})
