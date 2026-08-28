@@ -409,8 +409,16 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
 
         # Shadow play (影絵) demo — its runtime shaders must be compiled by glslc.
         if(Vulkan_GLSLC_EXECUTABLE)
-            add_executable(pictor_shadow_play_demo demo/shadow_play/main.cpp)
+            add_executable(pictor_shadow_play_demo
+                demo/shadow_play/main.cpp
+                demo/shadow_play/sp_kirie_backdrop.cpp
+                third_party/stb/stb_image_impl.cpp
+            )
             target_link_libraries(pictor_shadow_play_demo PRIVATE pictor)
+            target_include_directories(pictor_shadow_play_demo PRIVATE third_party/stb)
+            # The demo loads two fixed 1024px assets; reject unexpectedly huge
+            # replacement images before stb_image allocates their decoded data.
+            target_compile_definitions(pictor_shadow_play_demo PRIVATE STBI_MAX_DIMENSIONS=8192)
             if(MSVC)
                 # /utf-8 does not propagate from the pictor lib to demo targets.
                 target_compile_options(pictor_shadow_play_demo PRIVATE /utf-8)

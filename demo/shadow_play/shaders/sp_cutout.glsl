@@ -59,21 +59,45 @@ vec2 sp_sheet_hit(vec3 world_pos, vec3 moon_pos) {
                 (s.y - SP_SHEET_Y + SP_SHEET_H * 0.5) / SP_SHEET_H);
 }
 
+/// 月の丸穴の中心と半径 (y-up シート判定座標、アスペクト補正後の空間)。
+/// sp_screen.frag / sp_godray.frag の鷹シルエット合成も同じ円を参照する。
+/// 中心は「障子スクリーン上で左 1/4 (x≈-2.0)、全体が見える高さ (y≈1.2)」に
+/// 月の円盤が射影される位置から逆算した値。
+const vec2  SP_MOON_CENTER = vec2(0.44, 0.56);
+const float SP_MOON_RADIUS = 0.026;
+
+/// 月の丸穴に収めた鷹の切り絵 (Figmentum-kirie サンプル) の透過率。
+/// 穴の外は 1 (素通し)。穴ローカル (-1..1) へ正規化し、鷹テクスチャを
+/// 横=全幅、縦=画像アスペクト (1024x768) 維持でマッピングする。
+/// 切り絵の紙は月光をほぼ遮り、わずかな暖色の透けだけを残す。
+/// @implements SPEC-SHADOW-KIRIE-BACKDROP
+vec3 sp_hawk_filter(vec2 sheet_p, sampler2D hawk_tex) {
+    vec2 local = (sheet_p - SP_MOON_CENTER)
+               * vec2(SP_SHEET_ASPECT, 1.0) / SP_MOON_RADIUS;
+    if (dot(local, local) >= 1.0) return vec3(1.0);
+    // 係数 1.25 = 画像の全幅が円盤直径の 1/1.25 ≈ 75% に縮まり、
+    // 翼の先まで丸穴の内側へ収まる。縦は画像アスペクトを保つ。
+    vec2 huv = vec2(0.5 + local.x * 0.5 * 1.25,
+                    0.5 - local.y * 0.5 * 1.25 * (1024.0 / 768.0));
+    vec4 hawk = texture(hawk_tex, clamp(huv, 0.0, 1.0));
+    return mix(vec3(1.0), hawk.rgb * 0.05, hawk.a);
+}
+
 /// 月の丸穴。
 bool sp_cut_moon_disc(vec2 p) {
     // 上端に明確な満月を置く。小さ過ぎる穴はスクリーンで点光源に見えるため、
     // 月として読める直径を確保する。
-    vec2 d = (p - vec2(0.50, 0.605)) * vec2(SP_SHEET_ASPECT, 1.0);
-    return length(d) < 0.026;
+    vec2 d = (p - SP_MOON_CENTER) * vec2(SP_SHEET_ASPECT, 1.0);
+    return length(d) < SP_MOON_RADIUS;
 }
 
 /// 月から扇形に開く主光芒。ホール (shadow map) は硬い輪郭のまま、
 /// 見た目の柔らかさ・内部の光線ムラは sp_cutout_tint 側で作る。
 /// 平行なスリット束は「白い板」に見えたため、月を頂点とする放射に変更。
-const vec2  SP_BEAM_APEX   = vec2(0.50, 0.605); // = 月の中心
-const float SP_BEAM_TILT   = 0.045;  // 真下からの傾き (人物側へ)
-const float SP_BEAM_SPREAD = 0.235;  // 片側の開き角 (rad)
-const float SP_BEAM_TOP    = 0.575;
+const vec2  SP_BEAM_APEX   = SP_MOON_CENTER; // = 月の中心
+const float SP_BEAM_TILT   = 0.70;   // 真下からの傾き (左の月から人物側へ)
+const float SP_BEAM_SPREAD = 0.26;   // 片側の開き角 (rad)
+const float SP_BEAM_TOP    = 0.530;  // 月の下端 (0.56 - 0.026) のすぐ下
 const float SP_BEAM_BOTTOM = 0.335;
 
 /// 月中心からの放射角。0 = 真下。
