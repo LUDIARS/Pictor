@@ -33,6 +33,8 @@
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 
+#include "sp_kirie_backdrop.h"
+
 #include <GLFW/glfw3.h>
 #include <cstddef>
 #include <cstdint>
@@ -343,6 +345,7 @@ public:
             !create_descriptor_layout() ||
             !create_pipelines(shader_dir) ||
             !create_buffers() ||
+            !backdrop_.initialize(vk_ctx, find_kirie_asset_dir().c_str()) ||
             !create_descriptor_sets()) {
             shutdown();
             return false;
@@ -351,8 +354,30 @@ public:
         return true;
     }
 
+    /// 切り絵バックドロップ PNG の置き場所を実行ディレクトリから解決する。
+    /// shader_dir と同様に、build ディレクトリ直下 / 構成別サブディレクトリ /
+    /// リポジトリルートのいずれから起動しても見つかるようにする。
+    static std::string find_kirie_asset_dir() {
+        const char* candidates[] = {
+            "../demo/shadow_play/assets",
+            "../../demo/shadow_play/assets",
+            "demo/shadow_play/assets",
+            "assets",
+        };
+        for (const char* dir : candidates) {
+            std::string probe = std::string(dir) + "/kirie_town.png";
+            if (FILE* f = fopen(probe.c_str(), "rb")) {
+                fclose(f);
+                return dir;
+            }
+        }
+        return candidates[0]; // 見つからない場合は backdrop 側がフォールバック
+    }
+
     void shutdown() {
         if (device_) vkDeviceWaitIdle(device_);
+
+        backdrop_.shutdown();
 
         auto destroy_pipe = [this](VkPipeline& p) {
             if (p) vkDestroyPipeline(device_, p, nullptr);
@@ -808,19 +833,22 @@ private:
     // ---- Descriptors ----
 
     bool create_descriptor_layout() {
-        VkDescriptorSetLayoutBinding bindings[2] = {};
+        // binding 0: scene UBO / 1: shadow atlas / 2: 街の切り絵 / 3: 鷹の切り絵
+        VkDescriptorSetLayoutBinding bindings[4] = {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-        bindings[1].binding         = 1;
-        bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[1].descriptorCount = 1;
-        bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        for (uint32_t i = 1; i <= 3; ++i) {
+            bindings[i].binding         = i;
+            bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
 
         VkDescriptorSetLayoutCreateInfo layout_info{};
         layout_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_info.bindingCount = 2;
+        layout_info.bindingCount = 4;
         layout_info.pBindings    = bindings;
 
         return vkCreateDescriptorSetLayout(device_, &layout_info, nullptr,
@@ -1202,7 +1230,7 @@ private:
         pool_sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         pool_sizes[0].descriptorCount = 1;
         pool_sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        pool_sizes[1].descriptorCount = 1;
+        pool_sizes[1].descriptorCount = 3; // shadow atlas + 切り絵 2 枚
 
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1229,21 +1257,34 @@ private:
         img_info.imageView   = shadow_array_view_;
         img_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet writes[2] = {};
+        VkDescriptorImageInfo town_info{};
+        town_info.sampler     = backdrop_.sampler_handle();
+        town_info.imageView   = backdrop_.town_view();
+        town_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorImageInfo hawk_info{};
+        hawk_info.sampler     = backdrop_.sampler_handle();
+        hawk_info.imageView   = backdrop_.hawk_view();
+        hawk_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet writes[4] = {};
         writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet          = desc_set_;
         writes[0].dstBinding      = 0;
         writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[0].descriptorCount = 1;
         writes[0].pBufferInfo     = &ubo_info;
-        writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet          = desc_set_;
-        writes[1].dstBinding      = 1;
-        writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].descriptorCount = 1;
-        writes[1].pImageInfo      = &img_info;
+        const VkDescriptorImageInfo* image_infos[3] = {&img_info, &town_info, &hawk_info};
+        for (uint32_t i = 1; i <= 3; ++i) {
+            writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet          = desc_set_;
+            writes[i].dstBinding      = i;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].descriptorCount = 1;
+            writes[i].pImageInfo      = image_infos[i - 1];
+        }
 
-        vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+        vkUpdateDescriptorSets(device_, 4, writes, 0, nullptr);
         return true;
     }
 
@@ -1251,6 +1292,9 @@ private:
 
     VulkanContext* vk_ctx_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
+
+    // 切り絵バックドロップ (街 + 鷹)
+    sp_demo::SpKirieBackdrop backdrop_;
 
     // Shadow map (sampled depth × 9 layer = 8 灯 + 月)
     VkFormat       shadow_format_ = VK_FORMAT_UNDEFINED;

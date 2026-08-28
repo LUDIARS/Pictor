@@ -26,6 +26,8 @@ layout(location = 2) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 
 layout(set = 0, binding = 1) uniform sampler2DArray shadow_atlas;
+layout(set = 0, binding = 2) uniform sampler2D kirie_town; // 街並みの切り絵 (背景)
+layout(set = 0, binding = 3) uniform sampler2D kirie_hawk; // 鷹の切り絵 (月の中)
 
 layout(push_constant) uniform Push {
     mat4 model;
@@ -75,6 +77,36 @@ void main() {
 
     float fiber = paper_fiber(in_uv);
     vec3 paper_base = vec3(1.0, 0.97, 0.90) * pc.tint.rgb * fiber;
+
+    // ---- 月の丸穴のシート座標 ----
+    // 鷹のシルエット合成と、月円盤の中で街バックドロップを抑える判定に使う。
+    vec2 sheet_p = vec2(0.0);
+    float in_moon = 0.0;
+    if (scene.moon_pos.w > 0.5) {
+        sheet_p = sp_sheet_hit(shaded_pos, scene.moon_pos.xyz);
+        vec2 moon_local = (sheet_p - SP_MOON_CENTER)
+                        * vec2(SP_SHEET_ASPECT, 1.0) / SP_MOON_RADIUS;
+        in_moon = 1.0 - smoothstep(0.90, 1.0, length(moon_local));
+    }
+
+    // ---- 切り絵バックドロップ: 街並み (Figmentum-kirie サンプル) ----
+    // スクリーン uv は v=1 が下端。水面境界 v は
+    // v_water = 0.5 - SP_WATERLINE / kScreenH = 0.5 + 1.35 / 4.5 = 0.8。
+    // 水面には水上の絵柄を鏡映した uv で映し、ライティングの反転と揃える。
+    const float SP_V_WATER = 0.8;
+    vec2 bg_uv = in_uv;
+    if (is_water) bg_uv.y = 2.0 * SP_V_WATER - bg_uv.y;
+    bg_uv.y = clamp(bg_uv.y / SP_V_WATER, 0.0, 1.0);
+    vec4 town_sample = texture(kirie_town, bg_uv);
+    vec3 town = town_sample.rgb;
+    // 夜風加工: 彩度を落として月夜の青へ寄せ、暗部を締める
+    float town_luma = dot(town, vec3(0.299, 0.587, 0.114));
+    town = mix(vec3(town_luma), town, 0.40);
+    town *= vec3(0.52, 0.62, 0.92);
+    town = pow(town, vec3(1.35));
+    // 月円盤の中は街を抑え、満月の抜けと鷹のシルエットを立てる
+    float town_mix = town_sample.a * 0.82 * (1.0 - in_moon);
+    paper_base *= mix(vec3(1.0), town * 1.7, town_mix);
 
     float ambient      = scene.params.y;
     float sss_strength = scene.params.z;
@@ -136,7 +168,11 @@ void main() {
             shadow = 0.0;
 
         float inten = scene.moon_color.w;
-        vec3 moon_tint = sp_cutout_tint(sp_sheet_hit(shaded_pos, scene.moon_pos.xyz));
+        vec3 moon_tint = sp_cutout_tint(sheet_p);
+
+        // 鷹の切り絵: 月の丸穴に収めたシルエットが月光を遮る。
+        // 水面反射側も同じ sheet 座標判定を通るので、月と一緒に水面へ映る。
+        moon_tint *= sp_hawk_filter(sheet_p, kirie_hawk);
         accum += scene.moon_color.rgb * moon_tint * inten * scene.moon_dir.w * cos_in * transmit * shadow;
         // 月光の多重散乱も、シートの穴を通って紙へ届いた範囲だけに生じる。
         accum += scene.moon_color.rgb * moon_tint * inten * sss_strength * 0.25 * shadow;

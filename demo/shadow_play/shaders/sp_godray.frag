@@ -17,6 +17,7 @@
 #include "sp_cutout.glsl"
 
 layout(set = 0, binding = 1) uniform sampler2DArray shadow_atlas;
+layout(set = 0, binding = 3) uniform sampler2D kirie_hawk; // 鷹の切り絵 (月の中)
 
 layout(location = 0) in vec2 in_ndc;
 
@@ -91,8 +92,10 @@ void main() {
                     (1.0 - smoothstep(0.0, kScreenFeather, edge.y));
         if (box <= 0.0) continue;
 
-        // 紙から離れるほど散逸 (前方への減衰)
-        accum += sp_cutout_tint(sp_sheet_hit(p, scene.moon_pos.xyz)) *
+        // 紙から離れるほど散逸 (前方への減衰)。鷹の切り絵は月の丸穴の
+        // 光芒にも影を落とす (障子側の遮蔽と同じ sheet 座標判定)。
+        vec2 sheet_p = sp_sheet_hit(p, scene.moon_pos.xyz);
+        accum += sp_cutout_tint(sheet_p) * sp_hawk_filter(sheet_p, kirie_hawk) *
                  (box * exp(-extinction * p.z));
     }
 
