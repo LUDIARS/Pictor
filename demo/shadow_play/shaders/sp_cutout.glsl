@@ -75,10 +75,10 @@ vec3 sp_hawk_filter(vec2 sheet_p, sampler2D hawk_tex) {
     vec2 local = (sheet_p - SP_MOON_CENTER)
                * vec2(SP_SHEET_ASPECT, 1.0) / SP_MOON_RADIUS;
     if (dot(local, local) >= 1.0) return vec3(1.0);
-    // 係数 1.25 = 画像の全幅が円盤直径の 1/1.25 ≈ 75% に縮まり、
-    // 翼の先まで丸穴の内側へ収まる。縦は画像アスペクトを保つ。
-    vec2 huv = vec2(0.5 + local.x * 0.5 * 1.25,
-                    0.5 - local.y * 0.5 * 1.25 * (1024.0 / 768.0));
+    // 係数 1.6 = 画像の全幅が円盤直径の 1/1.6 ≈ 63% に縮まり、
+    // 鷹が月の中で少し余白を持って浮かぶ。縦は画像アスペクトを保つ。
+    vec2 huv = vec2(0.5 + local.x * 0.5 * 1.6,
+                    0.5 - local.y * 0.5 * 1.6 * (1024.0 / 768.0));
     vec4 hawk = texture(hawk_tex, clamp(huv, 0.0, 1.0));
     return mix(vec3(1.0), hawk.rgb * 0.05, hawk.a);
 }
@@ -95,8 +95,8 @@ bool sp_cut_moon_disc(vec2 p) {
 /// 見た目の柔らかさ・内部の光線ムラは sp_cutout_tint 側で作る。
 /// 平行なスリット束は「白い板」に見えたため、月を頂点とする放射に変更。
 const vec2  SP_BEAM_APEX   = SP_MOON_CENTER; // = 月の中心
-const float SP_BEAM_TILT   = 0.70;   // 真下からの傾き (左の月から人物側へ)
-const float SP_BEAM_SPREAD = 0.26;   // 片側の開き角 (rad)
+const float SP_BEAM_TILT   = 0.81;   // 真下からの傾き (左の月から奏者の真上へ)
+const float SP_BEAM_SPREAD = 0.30;   // 片側の開き角 (rad) — 奏者を光芒で包む
 const float SP_BEAM_TOP    = 0.530;  // 月の下端 (0.56 - 0.026) のすぐ下
 const float SP_BEAM_BOTTOM = 0.335;
 

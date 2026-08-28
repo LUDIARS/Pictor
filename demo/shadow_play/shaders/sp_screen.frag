@@ -67,10 +67,19 @@ void main() {
     bool is_water = in_world_pos.y < SP_WATERLINE;
     vec3 shaded_pos = in_world_pos;
     if (is_water) {
-        float wave = 0.10 * (value_noise(vec2(in_world_pos.x * 2.7,
-                                               scene.params.x * 0.5)) - 0.5)
-                   + 0.04 * sin(in_world_pos.x * 9.0 + scene.params.x * 0.8);
-        shaded_pos.y = 2.0 * SP_WATERLINE - in_world_pos.y + wave;
+        // 水面反射: 水面帯 (0.9 世界単位) を拡大鏡映し、月と鷹 (y≈1.2±0.6)
+        // まで水面に映す。SP_WATER_MAG は帯の下端が月の上端 (~2.07) に
+        // 届く倍率。
+        const float SP_WATER_MAG = 3.8;
+        float depth_into = SP_WATERLINE - in_world_pos.y; // 0 (水際) .. 0.9 (下端)
+        shaded_pos.y = SP_WATERLINE + depth_into * SP_WATER_MAG;
+        // さざ波の歪みで反射をぼかす。水際から深いほど強く揺らす。
+        vec2 ripple = vec2(
+            value_noise(vec2(in_world_pos.x * 3.1,
+                             in_world_pos.y * 7.0 + scene.params.x * 0.6)) - 0.5,
+            value_noise(vec2(in_world_pos.x * 2.4 + 11.7,
+                             in_world_pos.y * 6.0 - scene.params.x * 0.5)) - 0.5);
+        shaded_pos.xy += ripple * (0.15 + 0.65 * depth_into);
     }
     // 紙の裏面 (-Z 側) から光が入る。表面法線は +Z。
     vec3 back_normal = -normalize(in_normal);
@@ -90,12 +99,11 @@ void main() {
     }
 
     // ---- 切り絵バックドロップ: 街並み (Figmentum-kirie サンプル) ----
-    // スクリーン uv は v=1 が下端。水面境界 v は
+    // shaded_pos (水面では拡大鏡映 + さざ波済み) から uv を引き直すことで、
+    // 街の映り込みもライティングの反射・ぼかしと自動的に揃う。
     // v_water = 0.5 - SP_WATERLINE / kScreenH = 0.5 + 1.35 / 4.5 = 0.8。
-    // 水面には水上の絵柄を鏡映した uv で映し、ライティングの反転と揃える。
     const float SP_V_WATER = 0.8;
-    vec2 bg_uv = in_uv;
-    if (is_water) bg_uv.y = 2.0 * SP_V_WATER - bg_uv.y;
+    vec2 bg_uv = vec2((shaded_pos.x + 4.0) / 8.0, 0.5 - shaded_pos.y / 4.5);
     bg_uv.y = clamp(bg_uv.y / SP_V_WATER, 0.0, 1.0);
     vec4 town_sample = texture(kirie_town, bg_uv);
     vec3 town = town_sample.rgb;
