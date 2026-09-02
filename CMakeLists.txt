@@ -388,6 +388,12 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
     if(Vulkan_FOUND AND glfw3_FOUND)
         add_executable(pictor_fbx_viewer
             demo/fbx_viewer/main.cpp
+            demo/fbx_viewer/fur_shell_pass.cpp
+            demo/fbx_viewer/frame_capture.cpp
+            demo/fbx_viewer/nawa_binding.cpp
+            demo/fbx_viewer/rope_pass.cpp
+            demo/fbx_viewer/eye_locator.cpp
+            demo/fbx_viewer/tear_pass.cpp
             third_party/stb/stb_image_impl.cpp
         )
         target_include_directories(pictor_fbx_viewer PRIVATE third_party/stb)
@@ -670,6 +676,12 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/fur_shell.vert
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/fur_shell.frag
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/rope.vert
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/rope.frag
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/tear.vert
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/tear.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
         ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_hit.comp
@@ -705,6 +717,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_cutout.glsl
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_shapes.glsl
     )
+    set(PICTOR_FBX_VIEWER_GLSL_INCLUDES
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/fur_shell_common.glsl
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/nawa_binding_common.glsl
+    )
     set(PICTOR_SPIRV_FILES)
     foreach(SHADER ${PICTOR_SHADER_SOURCES})
         get_filename_component(SHADER_NAME ${SHADER} NAME)
@@ -712,6 +728,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         set(SHADER_DEPENDS ${SHADER} ${PICTOR_GLSL_INCLUDES})
         if(SHADER MATCHES "/demo/shadow_play/shaders/")
             list(APPEND SHADER_DEPENDS ${PICTOR_SHADOW_PLAY_GLSL_INCLUDES})
+        endif()
+        if(SHADER MATCHES "/demo/fbx_viewer/shaders/")
+            list(APPEND SHADER_DEPENDS ${PICTOR_FBX_VIEWER_GLSL_INCLUDES})
         endif()
         add_custom_command(
             OUTPUT ${SPIRV_OUT}

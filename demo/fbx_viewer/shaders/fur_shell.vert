@@ -1,24 +1,12 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-#include "nawa_binding_common.glsl"
 
-// ============================================================
-// Skinned + textured vertex shader for the FBX Viewer.
-//
-// Layout (64 bytes):
-//   location 0: vec3  position
-//   location 1: vec3  normal
-//   location 2: vec2  uv
-//   location 3: uvec4 joint_indices
-//   location 4: vec4  joint_weights
-//
-// Set 0:
-//   binding 0: SceneUBO   — view, proj, light, camera
-//   binding 1: instances  — per-instance model matrix + color
-//   binding 2: bones      — skinning matrices
-// Set 1:
-//   binding 0: base color sampler2D (re-bound per submesh)
-// ============================================================
+// Shell-fur vertex shader: same skinning as model.vert, then extrudes the
+// skinned vertex along its skinned normal by (shell index / shell count).
+// Vertex layout / set 0 bindings are identical to model.vert.
+
+#include "fur_shell_common.glsl"
+#include "nawa_binding_common.glsl"
 
 layout(location = 0) in vec3  inPosition;
 layout(location = 1) in vec3  inNormal;
@@ -29,15 +17,15 @@ layout(location = 4) in vec4  inWeights;
 layout(set = 0, binding = 0) uniform SceneUBO {
     mat4 view;
     mat4 proj;
-    vec4 lightDir;    // xyz = direction toward light, w = intensity
-    vec4 lightColor;  // rgb + ambient
+    vec4 lightDir;
+    vec4 lightColor;
     vec4 cameraPos;
 };
 
 struct InstanceData {
     mat4  model;
     vec4  baseColor;
-    uvec4 skinInfo;   // x = bone_offset, y = bone_count
+    uvec4 skinInfo;
 };
 layout(std430, set = 0, binding = 1) readonly buffer InstanceBuffer {
     InstanceData instances[];
@@ -51,7 +39,8 @@ layout(location = 0) out vec3 fragWorldPos;
 layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec2 fragUV;
 layout(location = 3) out flat uint fragInstanceID;
-layout(location = 4) out float fragBindGroove;
+layout(location = 4) out float fragShellRatio;
+layout(location = 5) out float fragBindGroove;
 
 void main() {
     InstanceData inst = instances[gl_InstanceIndex];
@@ -69,18 +58,24 @@ void main() {
         skinMat = mat4(1.0);
     }
 
-    vec4 skinnedPos    = skinMat * vec4(inPosition, 1.0);
-    vec3 skinnedNormal = mat3(skinMat) * inNormal;
+    vec3 skinnedPos    = (skinMat * vec4(inPosition, 1.0)).xyz;
+    vec3 skinnedNormal = normalize(mat3(skinMat) * inNormal);
 
-    vec4 worldPos = inst.model * skinnedPos;
+    float shellRatio = furShellRatio();
     vec3 normalWS = normalize(mat3(inst.model) * skinnedNormal);
-    // Rope binding: sink under the rope, bulge beside it (identity when untied).
-    NawaBindSample bind = nawaSampleField(worldPos.xyz);
+    // Rope binding: sample at the undisplaced surface so every shell agrees,
+    // crush the nap under the rope, then apply the body dent/bulge.
+    vec3 surfaceWS = (inst.model * vec4(skinnedPos, 1.0)).xyz;
+    NawaBindSample bind = nawaSampleField(surfaceWS);
+    vec3 displaced = furShellDisplace(skinnedPos, skinnedNormal, shellRatio * nawaNapCrush(bind));
+
+    vec4 worldPos = inst.model * vec4(displaced, 1.0);
     worldPos.xyz += nawaOffsetWS(normalWS, bind);
     fragWorldPos   = worldPos.xyz;
     fragNormal     = normalWS;
     fragBindGroove = bind.groove;
     fragUV         = inUV;
     fragInstanceID = uint(gl_InstanceIndex);
+    fragShellRatio = shellRatio;
     gl_Position    = proj * view * worldPos;
 }

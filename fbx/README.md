@@ -26,7 +26,34 @@ distributed as a separate zip archive.
 Alternatively, pass a custom path to the viewer:
 
 ```
-pictor_fbx_viewer <path/to/model_dir> [shader_dir]
+pictor_fbx_viewer <path/to/model_dir> [shader_dir] [options]
+```
+
+Options: `--fur` (shell fur on), `--shells N`, `--fur-length X`,
+`--fur-density X`, `--no-bones`, `--capture out.bmp [--capture-frame N] [--stay]`,
+`--bind [obi|guruguru|kikkou|tasuki]` (rope binding: SDF capsule dent + fur crush),
+`--tightness X`, `--bind-anim`, `--no-rope`,
+`--no-rope-tail` (no loose end trailing to the camera), `--tears` (toon tears; eyes are
+found as the two largest dark blobs in the albedo).
+
+## Texture fallback
+
+When a material's FBX texture path cannot be resolved (typical for
+exports that embed an absolute path from the artist's machine), the
+viewer uses `texture/default.*` if present. Drop the character's albedo
+there when the FBX references are unusable.
+
+## Shell fur test rig
+
+For private or otherwise non-redistributable test art, create a local
+`fbx/plush/` rig with `model.fbx`, `texture/default.png`, and optional clips
+under `animation/`. These files remain uncommitted under the same ignore rules
+as the default test set.
+
+```
+pictor_fbx_viewer fbx/plush shaders --fur --no-bones
+pictor_fbx_viewer fbx/plush shaders --fur --no-bones --bind --tears # 3 waist loops (obi), crying
+pictor_fbx_viewer fbx/plush shaders --fur --no-bones --bind kikkou  # diamond lattice
 ```
 
 ## License

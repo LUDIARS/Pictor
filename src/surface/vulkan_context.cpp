@@ -30,7 +30,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 VulkanContext::VulkanContext() = default;
 
 VulkanContext::~VulkanContext() {
-    if (initialized_) shutdown();
+    shutdown();
 }
 
 bool VulkanContext::initialize(ISurfaceProvider* provider,
@@ -39,34 +39,38 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     if (!provider) return false;
     provider_ = provider;
 
+    auto fail = [this]() {
+        shutdown();
+        return false;
+    };
+
     create_default_rp_on_init_ = cfg.create_default_render_pass;
+    swapchain_transfer_src_requested_ = cfg.enable_swapchain_transfer_src;
     frames_in_flight_          = std::max<uint32_t>(1, cfg.frames_in_flight);
 
-    if (!create_instance(cfg))              return false;
-    if (!create_surface())                  return false;
-    if (!pick_physical_device())            return false;
-    if (!create_logical_device())           return false;
-    if (!create_swapchain())                return false;
-    if (!create_image_views())              return false;
+    if (!create_instance(cfg))              return fail();
+    if (!create_surface())                  return fail();
+    if (!pick_physical_device())            return fail();
+    if (!create_logical_device())           return fail();
+    if (!create_swapchain())                return fail();
+    if (!create_image_views())              return fail();
     // Phase 4 step 4: host が profile-driven (RenderPassRegistry +
     // FramebufferRegistry) で自前 RP/FB を作るなら、 ここをスキップする。
     // default_render_pass() / framebuffers() は VK_NULL_HANDLE / 空 vector を
     // 返すので、 旧 easy-mode consumer はリンク時に NULL チェック必要。
     if (create_default_rp_on_init_) {
-        if (!create_render_pass())              return false;
-        if (!create_framebuffers())             return false;
+        if (!create_render_pass())              return fail();
+        if (!create_framebuffers())             return fail();
     }
-    if (!create_command_pool())             return false;
+    if (!create_command_pool())             return fail();
     // per-image リソース (command buffer / render-finished セマフォ /
     // images-in-flight 追跡) は swapchain image 数に追従する。 初期化でも
     // 再生成でも同じ経路で揃える。
-    if (!rebuild_per_image_resources())     return false;
+    if (!rebuild_per_image_resources())     return fail();
     if (!create_sync_objects()) {
-        // ここまでに per-image リソースを作り終えているが initialized_ は
-        // false のままなので ~VulkanContext() は shutdown() を呼ばない。
-        // pool が握った command buffer / セマフォを明示的に返しておく。
-        discard_swapchain_resources();
-        return false;
+        // Partial initialization is owned by shutdown(), including the
+        // per-image pool created immediately above.
+        return fail();
     }
 
     initialized_ = true;
@@ -74,14 +78,14 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
 }
 
 void VulkanContext::shutdown() {
-    if (!initialized_) return;
-
-    vkDeviceWaitIdle(device_);
+    if (device_) vkDeviceWaitIdle(device_);
 
     // per-image リソース (command buffer / render-finished セマフォ /
     // images-in-flight 追跡)。 command pool より先に畳む。
-    VulkanPerImageBackend backend(device_, command_pool_);
-    per_image_.destroy(backend);
+    if (device_) {
+        VulkanPerImageBackend backend(device_, command_pool_);
+        per_image_.destroy(backend);
+    }
 
     // flight 単位の同期オブジェクト。
     for (VkSemaphore s : image_available_sems_) if (s) vkDestroySemaphore(device_, s, nullptr);
@@ -91,19 +95,28 @@ void VulkanContext::shutdown() {
 
     // Command pool (frees any remaining command buffers implicitly)
     if (command_pool_) vkDestroyCommandPool(device_, command_pool_, nullptr);
+    command_pool_ = VK_NULL_HANDLE;
 
-    cleanup_swapchain();
+    if (device_) cleanup_swapchain();
 
-    if (device_)  vkDestroyDevice(device_, nullptr);
+    if (device_) vkDestroyDevice(device_, nullptr);
+    device_ = VK_NULL_HANDLE;
+    graphics_queue_ = VK_NULL_HANDLE;
+    present_queue_ = VK_NULL_HANDLE;
+    physical_device_ = VK_NULL_HANDLE;
     if (surface_) vkDestroySurfaceKHR(instance_, surface_, nullptr);
+    surface_ = VK_NULL_HANDLE;
 
     if (debug_messenger_) {
         auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
             vkGetInstanceProcAddr(instance_, "vkDestroyDebugUtilsMessengerEXT"));
         if (func) func(instance_, debug_messenger_, nullptr);
     }
+    debug_messenger_ = VK_NULL_HANDLE;
 
     if (instance_) vkDestroyInstance(instance_, nullptr);
+    instance_ = VK_NULL_HANDLE;
+    provider_ = nullptr;
 
     initialized_ = false;
 }
@@ -697,6 +710,13 @@ bool VulkanContext::create_swapchain() {
     sc_info.imageExtent      = swapchain_extent_;
     sc_info.imageArrayLayers = 1;
     sc_info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (swapchain_transfer_src_requested_) {
+        if ((caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
+            fprintf(stderr, "[Pictor] Surface does not support swapchain transfer-source usage\n");
+            return false;
+        }
+        sc_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    }
     sc_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     sc_info.preTransform     = caps.currentTransform;
     sc_info.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -860,9 +880,8 @@ bool VulkanContext::create_sync_objects() {
         if (vkCreateSemaphore(device_, &sem_info, nullptr, &image_available_sems_[i]) != VK_SUCCESS ||
             vkCreateFence(device_, &fence_info, nullptr, &in_flight_fences_[i]) != VK_SUCCESS) {
             fprintf(stderr, "[Pictor] Failed to create per-flight sync objects\n");
-            // 途中まで作れたぶんを畳む。 initialize() の失敗経路では
-            // initialized_ が false のままなので shutdown() は走らず、 ここで
-            // 返さないと flight 単位のセマフォ / fence が漏れる。
+            // 畳めるところまでローカルに畳む。 initialize() also calls
+            // shutdown() so every earlier Vulkan owner is released.
             for (VkSemaphore s : image_available_sems_) if (s) vkDestroySemaphore(device_, s, nullptr);
             for (VkFence     f : in_flight_fences_)     if (f) vkDestroyFence(device_, f, nullptr);
             image_available_sems_.clear();
