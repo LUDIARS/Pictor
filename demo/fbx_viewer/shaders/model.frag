@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "nawa_binding_common.glsl"
 
 // Lambert-diffuse fragment shader with a diffuse texture.
 // Re-bound set 1 per submesh, while set 0 scene data is shared.
@@ -7,6 +9,7 @@ layout(location = 0) in vec3 fragWorldPos;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec2 fragUV;
 layout(location = 3) in flat uint fragInstanceID;
+layout(location = 4) in float fragBindGroove;
 
 layout(set = 0, binding = 0) uniform SceneUBO {
     mat4 view;
@@ -44,5 +47,5 @@ void main() {
     vec3 ambient = albedo * lightColor.a;
     vec3 diffuse = albedo * lightColor.rgb * wrap * lightDir.w;
 
-    outColor = vec4(ambient + diffuse, tex.a * inst.baseColor.a);
+    outColor = vec4((ambient + diffuse) * nawaSeamShade(fragBindGroove), tex.a * inst.baseColor.a);
 }

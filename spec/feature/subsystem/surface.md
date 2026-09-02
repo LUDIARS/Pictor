@@ -42,6 +42,8 @@ create_logical_device  ← 任意 feature を probe して有効化
                           rasterization_order_attachment_access) も probe
                           VK_KHR_swapchain 常時有効
 create_swapchain       ← format=B8G8R8A8_SRGB 優先、present=FIFO(vsync)/IMMEDIATE/MAILBOX
+                          config.enable_swapchain_transfer_src=true の場合のみ
+                          TRANSFER_SRC を要求 (非対応 surface は初期化失敗)
 create_image_views
 create_render_pass     ← config.create_default_render_pass=true のとき (color-only, finalLayout=PRESENT_SRC)
 create_framebuffers    ← 同上
@@ -79,6 +81,8 @@ swapchain image 数は再生成で変わりうる (present mode / surface capabi
 acquire/present の out-of-date で自動発火、手動でも呼べる。
 
 **`create_default_render_pass=false`**: ホストが profile 駆動の `RenderPassRegistry` / `FramebufferRegistry` で pass/FB を管理する場合 (PrivateGame Phase 4 等)、既定 RP/FB をスキップできる。
+
+**`enable_swapchain_transfer_src=true`**: キャプチャ等の readback を行うホストだけが指定する。対応しない surface では swapchain 作成前に明示的に失敗し、通常の consumer の usage flags は変えない。
 
 **拡張フラグ**: `has_fragment_shader_interlock()` / `has_rasterization_order_attachment_access()` を Rive レンダラの coverage モード選択 (pixel-interlock > ROV > atomic) に渡す。
 

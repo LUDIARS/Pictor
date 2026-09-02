@@ -31,6 +31,10 @@ struct VulkanContextConfig {
     /// 返すので、 これらに依存するコンポーネントは同居できない。
     bool        create_default_render_pass = true;
 
+    /// Request transfer-source usage for swapchain images (for readback or
+    /// capture). Initialization fails when the surface does not support it.
+    bool        enable_swapchain_transfer_src = false;
+
     /// CPU が GPU に先行できる同時フレーム数 (frames-in-flight、 Q-3)。
     /// 1 = 完全直列 (旧挙動、 acquire ごとに前フレームの GPU 完了を待つ)。
     /// 2 以上で CPU 側の記録と GPU 実行を重ねられる。 fence / image-available
@@ -83,6 +87,8 @@ public:
     VkFormat         swapchain_format()const { return swapchain_format_; }
     VkExtent2D       swapchain_extent()const { return swapchain_extent_; }
     const std::vector<VkImageView>& swapchain_image_views() const { return swapchain_image_views_; }
+    /// swapchain image 本体 (読み戻し / キャプチャ用)。 index は image_views と対応。
+    const std::vector<VkImage>&     swapchain_images()      const { return swapchain_images_; }
     VkRenderPass     default_render_pass() const { return render_pass_; }
     const std::vector<VkFramebuffer>& framebuffers() const { return framebuffers_; }
     VkCommandPool    command_pool() const { return command_pool_; }
@@ -186,6 +192,7 @@ private:
     /// `create_default_render_pass=false` で起動した host は recreate でも
     /// default RP を作らない方が一貫する。
     bool                     create_default_rp_on_init_ = true;
+    bool                     swapchain_transfer_src_requested_ = false;
 
     VkCommandPool            command_pool_       = VK_NULL_HANDLE;
 

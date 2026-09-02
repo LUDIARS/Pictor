@@ -16,6 +16,9 @@
 //   SPACE / N : cycle to next animation clip
 //   P         : previous animation clip
 //   R         : restart current clip
+//   F         : toggle shell fur (demo/fbx_viewer/shaders/fur_shell.{vert,frag})
+//   [ ] - = 9 0 , . O : fur tuning (see FBXViewer::on_fur_key)
+//   T / Y / I / K : rope binding toggle / pattern / tightness (nawa_binding.h)
 //
 // Usage:
 //   pictor_fbx_viewer [path]  [shader_dir]
@@ -30,16 +33,28 @@
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/surface/vulkan_context.h"
 
+#include "frame_capture.h"
+#include "eye_locator.h"
+#include "fur_shell_pass.h"
+#include "nawa_binding.h"
+#include "rope_pass.h"
+#include "tear_pass.h"
+#include "textured_skinned_vertex.h"
+#include "vk_buffer_util.h"
+
 #include "stb_image.h"
 
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -52,6 +67,7 @@ int main() {
 #else
 
 using namespace pictor;
+using namespace pictor_fbx_viewer;
 namespace fs = std::filesystem;
 
 // ============================================================
@@ -161,27 +177,8 @@ struct ScopedTimer {
 #define PROF_CONCAT(a, b)  PROF_CONCAT_(a, b)
 #define PROF_SCOPE(name)   ScopedTimer PROF_CONCAT(_st_, __LINE__)(name)
 
-// ============================================================
-// Textured, skinned vertex (demo-local layout).
-// Must match demo/fbx_viewer/shaders/model.vert.
-// ============================================================
-
-struct TexturedSkinnedVertex {
-    float    position[3];
-    float    normal[3];
-    float    uv[2];
-    uint32_t joint_indices[4];
-    float    joint_weights[4];
-};
-static_assert(sizeof(TexturedSkinnedVertex) == 64,
-              "TexturedSkinnedVertex must be 64 bytes to match model.vert");
-
-constexpr uint32_t TSV_OFFSET_POSITION = 0;
-constexpr uint32_t TSV_OFFSET_NORMAL   = 12;
-constexpr uint32_t TSV_OFFSET_UV       = 24;
-constexpr uint32_t TSV_OFFSET_JOINTS   = 32;
-constexpr uint32_t TSV_OFFSET_WEIGHTS  = 48;
-constexpr uint32_t TSV_STRIDE          = 64;
+// TexturedSkinnedVertex + TSV_* offsets live in textured_skinned_vertex.h
+// (shared with fur_shell_pass.cpp).
 
 // ============================================================
 // PackedMesh — every renderable geometry in the scene is packed
@@ -746,54 +743,7 @@ constexpr uint32_t kMaxBones = 256;
 // Vulkan helpers
 // ============================================================
 
-static uint32_t find_memory_type(VkPhysicalDevice pd, uint32_t type_filter, VkMemoryPropertyFlags props) {
-    VkPhysicalDeviceMemoryProperties mem_props;
-    vkGetPhysicalDeviceMemoryProperties(pd, &mem_props);
-    for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
-        if ((type_filter & (1u << i)) && (mem_props.memoryTypes[i].propertyFlags & props) == props) return i;
-    }
-    return UINT32_MAX;
-}
-
-static bool create_buffer(VkDevice device, VkPhysicalDevice pd,
-                          VkDeviceSize size, VkBufferUsageFlags usage,
-                          VkMemoryPropertyFlags props,
-                          VkBuffer& buf, VkDeviceMemory& mem) {
-    VkBufferCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size  = size;
-    info.usage = usage;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(device, &info, nullptr, &buf) != VK_SUCCESS) return false;
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(device, buf, &req);
-    VkMemoryAllocateInfo alloc{};
-    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    alloc.allocationSize  = req.size;
-    alloc.memoryTypeIndex = find_memory_type(pd, req.memoryTypeBits, props);
-    if (alloc.memoryTypeIndex == UINT32_MAX) return false;
-    if (vkAllocateMemory(device, &alloc, nullptr, &mem) != VK_SUCCESS) return false;
-    vkBindBufferMemory(device, buf, mem, 0);
-    return true;
-}
-
-static VkShaderModule load_shader_spv(VkDevice device, const std::string& path) {
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) { std::fprintf(stderr, "Failed to open shader: %s\n", path.c_str()); return VK_NULL_HANDLE; }
-    std::fseek(f, 0, SEEK_END);
-    long len = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-    std::vector<char> code(static_cast<size_t>(len));
-    std::fread(code.data(), 1, code.size(), f);
-    std::fclose(f);
-    VkShaderModuleCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.codeSize = code.size();
-    info.pCode = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule mod = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(device, &info, nullptr, &mod) != VK_SUCCESS) return VK_NULL_HANDLE;
-    return mod;
-}
+// find_memory_type / create_buffer / load_shader_spv: see vk_buffer_util.h
 
 // ============================================================
 // GPUTexture — image + memory + view + sampler bundle.
@@ -966,6 +916,59 @@ static std::string find_texture_file(const fs::path& texture_dir, const std::str
 } // namespace
 
 // ============================================================
+// Viewer options (CLI)
+// ============================================================
+
+struct ViewerOptions {
+    bool           fur_enabled     = false;
+    FurShellParams fur;
+    bool           fur_length_set  = false;   // --fur-length given (else radius-relative default)
+    std::string    capture_path;              // --capture <file.bmp>
+    uint32_t       capture_frame   = 90;      // --capture-frame N
+    bool           exit_after_capture = true; // --stay keeps the window open
+    bool           show_bones      = true;    // --no-bones hides the skeleton overlay
+    bool           bind_enabled    = false;   // --bind [pattern]
+    BindingPatternKind bind_pattern = BindingPatternKind::Obi;
+    float          bind_tightness  = 1.0f;    // --tightness X (0..1)
+    bool           bind_wrap_anim  = false;   // --bind-anim: rope wraps + tightens over time
+    bool           show_rope       = true;    // --no-rope: deformation only (debug the dent)
+    bool           rope_tail       = true;    // --no-rope-tail: no loose end toward the camera
+    bool           tears           = false;   // --tears: toon tears from the detected eyes
+};
+
+namespace {
+
+/// @implements SPEC-FBX-VIEWER-FUR-EFFECTS
+bool parse_uint_option(const char* text, uint32_t min_value, uint32_t max_value,
+                       uint32_t& out) {
+    if (!text || *text == '\0' || *text == '-') return false;
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long value = std::strtoul(text, &end, 10);
+    if (errno == ERANGE || !end || *end != '\0' || value < min_value || value > max_value) {
+        return false;
+    }
+    out = static_cast<uint32_t>(value);
+    return true;
+}
+
+/// @implements SPEC-FBX-VIEWER-FUR-EFFECTS
+bool parse_float_option(const char* text, float min_value, float max_value, float& out) {
+    if (!text || *text == '\0') return false;
+    errno = 0;
+    char* end = nullptr;
+    const float value = std::strtof(text, &end);
+    if (errno == ERANGE || !end || *end != '\0' || !std::isfinite(value) ||
+        value < min_value || value > max_value) {
+        return false;
+    }
+    out = value;
+    return true;
+}
+
+} // namespace
+
+// ============================================================
 // FBXViewer
 // ============================================================
 
@@ -975,17 +978,47 @@ public:
                     SkeletonDescriptor skeleton,
                     std::vector<AnimationClipDescriptor> clips,
                     const fs::path& model_dir,
-                    const std::string& shader_dir) {
+                    const std::string& shader_dir,
+                    const ViewerOptions& options) {
         mesh_       = std::move(mesh);
         skeleton_   = std::move(skeleton);
         clips_      = std::move(clips);
         model_dir_  = model_dir;
         shader_dir_ = shader_dir;
+        options_    = options;
+        fur_enabled_ = options.fur_enabled;
+        bind_enabled_ = options.bind_enabled;
+        bind_pattern_ = options.bind_pattern;
+        bind_tightness_ = options.bind_tightness;
+        show_rope_ = options.show_rope;
+        rope_tail_ = options.rope_tail;
+        tears_enabled_ = options.tears;
+        fur_ = options.fur;
+        if (!options.fur_length_set) {
+            // Reference plush is short-pile minky: the nap is a fuzzy skin,
+            // not visible strands, so keep the extrusion under 0.5% of the
+            // bounding radius (the FBX may be in cm, hence radius-relative).
+            fur_.length  = mesh_.radius * 0.0045f;
+            fur_.bend[1] = -mesh_.radius * 0.001f;
+        }
+        show_bones_ = options.show_bones;
+        if (!options.capture_path.empty()) {
+            capture_.request(options.capture_path, options.capture_frame);
+        }
 
         GlfwWindowConfig wc; wc.width = 1280; wc.height = 720; wc.title = "Pictor FBX Viewer";
         if (!provider_.create(wc)) { std::fprintf(stderr, "GLFW window create failed\n"); return false; }
-        VulkanContextConfig vcfg; vcfg.app_name = "pictor_fbx_viewer";
+        VulkanContextConfig vcfg;
+        vcfg.app_name = "pictor_fbx_viewer";
+        // This demo updates one shared set of host-visible resources. Keep it
+        // serial rather than allowing a later flight to overwrite GPU input.
+        vcfg.frames_in_flight = 1;
+        vcfg.enable_swapchain_transfer_src = !options.capture_path.empty();
         if (!vk_.initialize(&provider_, vcfg)) { std::fprintf(stderr, "Vulkan init failed\n"); return false; }
+        if (!options.capture_path.empty() && !FrameCapture::supports_format(vk_.swapchain_format())) {
+            std::fprintf(stderr, "Capture requires an RGBA8 or BGRA8 swapchain format\n");
+            return false;
+        }
 
         // Keyboard callback needs access to this.
         glfwSetWindowUserPointer(provider_.glfw_window(), this);
@@ -997,6 +1030,11 @@ public:
         if (!create_descriptor_layouts())    return false;
         if (!create_pipeline())              return false;
         if (!create_bone_pipeline())         return false;
+        // Optional effects must not make the legacy viewer depend on their
+        // shaders. Keyboard toggles create these pipelines lazily.
+        if (fur_enabled_ && !create_fur_pass()) return false;
+        if (bind_enabled_ && show_rope_ && !create_rope_pass()) return false;
+        if (tears_enabled_ && !create_tear_pass()) return false;
         if (!create_buffers())               return false;
         if (!load_textures())                return false;
         if (!create_descriptor_sets())       return false;
@@ -1018,6 +1056,289 @@ public:
             }
         }
         std::printf("Skinning: ON (press B to toggle bind-pose).\n");
+        std::printf("Fur shells: %s (press F to toggle).\n", fur_enabled_ ? "ON" : "OFF");
+        fur_.print();
+
+        if (!setup_binding()) return false;
+        std::printf("Rope binding: %s (press T to toggle, Y pattern, I/K tightness).\n",
+                    bind_enabled_ ? "ON" : "OFF");
+        std::printf("Tears: %s (%zu eye anchor%s, press J to toggle).\n",
+                    tears_enabled_ ? "ON" : "OFF", eye_anchors_.size(), eye_anchors_.size() == 1 ? "" : "s");
+        return true;
+    }
+
+    // ─── toon tears ──────────────────────────────────────────
+    bool create_tear_pass() {
+        if (tear_pass_.valid()) return true;
+        TearPass::CreateInfo ci;
+        ci.device          = vk_.device();
+        ci.physical_device = vk_.physical_device();
+        ci.render_pass     = render_pass_;
+        ci.scene_layout    = scene_set_layout_;
+        ci.shader_dir      = shader_dir_;
+        if (!tear_pass_.create(ci)) {
+            std::fprintf(stderr, "Tear pipeline unavailable (missing tear.*.spv?)\n");
+            return false;
+        }
+        return true;
+    }
+
+    /// Current-pose position/normal of a packed vertex (CPU skinning with
+    /// the same matrices the shader uses; identity when skinning is off).
+    void skinned_vertex(uint32_t index, float3& pos_out, float3& normal_out) const {
+        const TexturedSkinnedVertex& v = mesh_.vertices[index];
+        pos_out    = {v.position[0], v.position[1], v.position[2]};
+        normal_out = {v.normal[0], v.normal[1], v.normal[2]};
+        if (!skinning_enabled_ || inst_ == INVALID_ANIMATION_STATE) return;
+        const float4x4* sk = anim_.get_skinning_matrices(inst_);
+        const uint32_t bone_count = anim_.get_bone_count(inst_);
+        if (!sk) return;
+        float w_sum = v.joint_weights[0] + v.joint_weights[1] + v.joint_weights[2] + v.joint_weights[3];
+        if (w_sum < 1e-4f) return;
+        float3 p{0, 0, 0}, n{0, 0, 0};
+        for (int j = 0; j < 4; ++j) {
+            const float w = v.joint_weights[j];
+            if (w <= 0.0f || v.joint_indices[j] >= bone_count) continue;
+            const float4x4& m = sk[v.joint_indices[j]];
+            // Row-vector convention: p' = p * M (translation in m.m[3][*]).
+            p.x += w * (pos_out.x * m.m[0][0] + pos_out.y * m.m[1][0] + pos_out.z * m.m[2][0] + m.m[3][0]);
+            p.y += w * (pos_out.x * m.m[0][1] + pos_out.y * m.m[1][1] + pos_out.z * m.m[2][1] + m.m[3][1]);
+            p.z += w * (pos_out.x * m.m[0][2] + pos_out.y * m.m[1][2] + pos_out.z * m.m[2][2] + m.m[3][2]);
+            n.x += w * (normal_out.x * m.m[0][0] + normal_out.y * m.m[1][0] + normal_out.z * m.m[2][0]);
+            n.y += w * (normal_out.x * m.m[0][1] + normal_out.y * m.m[1][1] + normal_out.z * m.m[2][1]);
+            n.z += w * (normal_out.x * m.m[0][2] + normal_out.y * m.m[1][2] + normal_out.z * m.m[2][2]);
+        }
+        pos_out = p;
+        float l = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        normal_out = l > 1e-6f ? float3{n.x / l, n.y / l, n.z / l} : normal_out;
+    }
+
+    /// Project a point onto the bind-pose body surface using the binding
+    /// frame's raycast radius (drops hug the belly instead of entering it).
+    bool project_to_body(const float3& p, float3& on_surface, float3& normal) const {
+        if (!bind_surface_radius_) return false;
+        const float3 a = bind_frame_.start, b = bind_frame_.end;
+        const float3 axis{b.x - a.x, b.y - a.y, b.z - a.z};
+        const float len2 = axis.x * axis.x + axis.y * axis.y + axis.z * axis.z;
+        if (len2 < 1e-6f) return false;
+        const float3 rel{p.x - a.x, p.y - a.y, p.z - a.z};
+        const float t = (rel.x * axis.x + rel.y * axis.y + rel.z * axis.z) / len2;
+        if (t < -0.15f || t > 1.15f) return false;
+        const float3 axis_pt{a.x + axis.x * t, a.y + axis.y * t, a.z + axis.z * t};
+        float3 radial{p.x - axis_pt.x, p.y - axis_pt.y, p.z - axis_pt.z};
+        // Remove the axial component so the direction is purely radial.
+        const float along = (radial.x * axis.x + radial.y * axis.y + radial.z * axis.z) / len2;
+        radial = {radial.x - axis.x * along, radial.y - axis.y * along, radial.z - axis.z * along};
+        const float rl = std::sqrt(radial.x * radial.x + radial.y * radial.y + radial.z * radial.z);
+        if (rl < 1e-4f) return false;
+        radial = {radial.x / rl, radial.y / rl, radial.z / rl};
+        // theta relative to the frame's theta-zero direction (z axis by construction).
+        const float theta = std::atan2(radial.x, radial.z);
+        const float radius = bind_surface_radius_(std::max(0.0f, std::min(1.0f, t)), theta);
+        on_surface = {axis_pt.x + radial.x * radius, axis_pt.y + radial.y * radius, axis_pt.z + radial.z * radius};
+        normal = radial;
+        return true;
+    }
+
+    void update_tears(float elapsed) {
+        if (!tear_pass_.valid()) return;
+        if (!tears_enabled_ || eye_anchors_.empty()) { tear_pass_.update(elapsed, {}, camera_pos_, nullptr, tear_params_); return; }
+        std::vector<TearEmitter> emitters;
+        for (const EyeAnchor& a : eye_anchors_) {
+            TearEmitter e;
+            skinned_vertex(a.vertex_index, e.position, e.normal);
+            emitters.push_back(e);
+        }
+        // Outward = away from the other eye (the fan sprays from the outer corner).
+        for (size_t i = 0; i < emitters.size(); ++i) {
+            float3 o{0, 0, 0};
+            for (size_t j = 0; j < emitters.size(); ++j) {
+                if (j == i) continue;
+                o = {o.x + emitters[i].position.x - emitters[j].position.x,
+                     o.y + emitters[i].position.y - emitters[j].position.y,
+                     o.z + emitters[i].position.z - emitters[j].position.z};
+            }
+            if (o.x * o.x + o.y * o.y + o.z * o.z < 1e-8f) {
+                // Single eye: spray toward camera-right.
+                const float3 v{camera_pos_.x - emitters[i].position.x, 0.0f, camera_pos_.z - emitters[i].position.z};
+                o = {v.z, 0.0f, -v.x};
+            }
+            emitters[i].outward = o;
+        }
+        tear_params_.drop_size    = mesh_.radius * 0.036f;
+        tear_params_.line_start   = mesh_.radius * 0.01f;    // first drop touching the eye corner
+        tear_params_.line_length  = mesh_.radius * 0.24f;    // wider gaps between the three drops
+        // Lift well clear of the fur and the paws that protrude beside the face.
+        tear_params_.surface_lift = fur_.length + mesh_.radius * 0.04f;
+        tear_pass_.update(elapsed, emitters, camera_pos_,
+                          [this](const float3& p, float3& s, float3& n) { return project_to_body(p, s, n); },
+                          tear_params_);
+    }
+
+    /// Loose end of the rope: leaves the middle loop at the point facing
+    /// the camera and trails toward the viewer with a little sag.
+    void update_rope_tail() {
+        if (!rope_pass_.valid()) return;
+        std::vector<float3> tail;
+        if (bind_enabled_ && show_rope_ && rope_tail_ && !bind_chain_.strands.empty()) {
+            const auto& strand = bind_chain_.strands[bind_chain_.strands.size() / 2];
+            const float3 c{0.5f * (bind_frame_.start.x + bind_frame_.end.x),
+                           0.5f * (bind_frame_.start.y + bind_frame_.end.y),
+                           0.5f * (bind_frame_.start.z + bind_frame_.end.z)};
+            const float3 to_cam{camera_pos_.x - c.x, 0.0f, camera_pos_.z - c.z};
+            float best = -2.0f; float3 start = strand.front();
+            for (const float3& p : strand) {
+                const float3 r{p.x - c.x, 0.0f, p.z - c.z};
+                const float rl = std::sqrt(r.x * r.x + r.z * r.z), cl = std::sqrt(to_cam.x * to_cam.x + to_cam.z * to_cam.z);
+                if (rl < 1e-4f || cl < 1e-4f) continue;
+                const float d = (r.x * to_cam.x + r.z * to_cam.z) / (rl * cl);
+                if (d > best) { best = d; start = p; }
+            }
+            float3 dir{camera_pos_.x - start.x, camera_pos_.y - start.y, camera_pos_.z - start.z};
+            const float dist = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+            if (dist > 1e-3f) {
+                dir = {dir.x / dist, dir.y / dist, dir.z / dist};
+                const float length = std::min(dist * 0.55f, mesh_.radius * 2.6f);
+                const float sag = length * 0.22f;
+                const int n = 18;
+                for (int i = 0; i <= n; ++i) {
+                    const float s = static_cast<float>(i) / n;
+                    // Start slightly inside the loop so the joint is hidden.
+                    const float along = -bind_profile_.rope_radius * 0.8f + length * s;
+                    tail.push_back({start.x + dir.x * along,
+                                    start.y + dir.y * along - sag * s * s,
+                                    start.z + dir.z * along});
+                }
+            }
+        }
+        rope_pass_.update_tail(tail, bind_profile_.rope_radius);
+    }
+
+    // ─── rope binding ────────────────────────────────────────
+    //
+    // The bind frame is estimated from the bind-pose vertex cloud; the
+    // deformation profile is expressed in metres and converted to model
+    // units by treating the reference plush as roughly 0.5 m tall.
+    bool setup_binding() {
+        std::vector<float3> positions;
+        positions.reserve(mesh_.vertices.size());
+        for (const auto& v : mesh_.vertices)
+            positions.push_back({v.position[0], v.position[1], v.position[2]});
+        bind_frame_ = estimate_binding_frame(positions.data(), positions.size(), 0.20f, 0.70f);
+        // The frame is only the axis; the rope hugs the real body surface.
+        bind_surface_radius_ = make_mesh_surface_radius(positions.data(), positions.size(),
+                                                        mesh_.indices.data(), mesh_.indices.size(),
+                                                        bind_frame_);
+        float y_min = positions[0].y, y_max = positions[0].y;
+        for (const float3& p : positions) { y_min = std::min(y_min, p.y); y_max = std::max(y_max, p.y); }
+        const float metres_to_units = std::max(y_max - y_min, 1e-3f) / 0.5f;
+        bind_base_profile_ = BindingBodyProfile::scaled_plush(metres_to_units);
+        if (!rebuild_binding_chain()) return false;
+        std::printf("[bind] frame y=%.2f..%.2f radius=%.2f..%.2f rope_r=%.3f sink=%.3f groove=%.3f\n",
+                    bind_frame_.start.y, bind_frame_.end.y,
+                    bind_frame_.radius_start, bind_frame_.radius_end,
+                    bind_profile_.rope_radius, bind_profile_.sink_depth, bind_profile_.groove_width);
+        return true;
+    }
+
+    bool rebuild_binding_chain() {
+        BindingBodyProfile replacement_profile = bind_base_profile_.pinched_for(bind_pattern_);
+        BindingPatternSpec spec = BindingPatternSpec::create_default(bind_pattern_)
+                                      .limit_turns_for(bind_frame_, replacement_profile);
+        NawaCapsuleChain replacement_chain = build_capsule_chain(
+            spec, bind_frame_, replacement_profile, bind_surface_radius_);
+        const uint32_t replacement_visible =
+            static_cast<uint32_t>(replacement_chain.segments.size());
+        if (rope_pass_.valid()) {
+            if (!rope_pass_.build_geometry(replacement_chain, replacement_profile.rope_radius,
+                                           replacement_visible)) {
+                std::fprintf(stderr, "[bind] failed to build rope geometry\n");
+                return false;
+            }
+        }
+        bind_profile_ = replacement_profile;
+        bind_chain_ = std::move(replacement_chain);
+        bind_visible_segments_ = replacement_visible;
+        std::printf("[bind] pattern=%s turns=%.1f segments=%zu tightness=%.2f\n",
+                    binding_pattern_name(bind_pattern_), spec.turns, bind_chain_.segments.size(), bind_tightness_);
+        return true;
+    }
+
+    /// Wrap, then tighten with a short ease-in.
+    void update_binding(float elapsed) {
+        float tightness = bind_tightness_;
+        uint32_t visible = static_cast<uint32_t>(bind_chain_.segments.size());
+        if (options_.bind_wrap_anim) {
+            const float wrap_s = 0.9f, tighten_s = 0.35f;
+            float wrap = std::min(1.0f, elapsed / wrap_s);
+            float te = std::max(0.0f, elapsed - wrap_s);
+            float t  = std::min(1.0f, te / tighten_s);
+            tightness = bind_tightness_ * (t * t * (3.0f - 2.0f * t));
+            visible = static_cast<uint32_t>(std::ceil(bind_chain_.segments.size() * wrap));
+            if (visible != bind_visible_segments_) {
+                bind_visible_segments_ = visible;
+                if (rope_pass_.valid()) {
+                    if (!rope_pass_.build_geometry(bind_chain_, bind_profile_.rope_radius, visible)) {
+                        std::fprintf(stderr, "[bind] failed to update rope wrap geometry\n");
+                    }
+                }
+            }
+        }
+        NawaBindUBO ubo = bind_enabled_
+            ? compose_bind_ubo(bind_chain_, bind_profile_, tightness, visible)
+            : NawaBindUBO{};
+        void* p = nullptr;
+        if (vkMapMemory(vk_.device(), bind_mem_, 0, sizeof(NawaBindUBO), 0, &p) != VK_SUCCESS) {
+            std::fprintf(stderr, "[bind] failed to map uniform buffer\n");
+            return;
+        }
+        std::memcpy(p, &ubo, sizeof(NawaBindUBO));
+        vkUnmapMemory(vk_.device(), bind_mem_);
+    }
+
+    bool on_bind_key(int key) {
+        switch (key) {
+            case GLFW_KEY_T:
+                if (!bind_enabled_ && show_rope_ && !rope_pass_.valid()) {
+                    if (!create_rope_pass()) return true;
+                    if (!rope_pass_.build_geometry(bind_chain_, bind_profile_.rope_radius,
+                                                   bind_visible_segments_)) {
+                        std::fprintf(stderr, "[bind] failed to build rope geometry\n");
+                        return true;
+                    }
+                }
+                bind_enabled_ = !bind_enabled_;
+                std::printf("Rope binding: %s\n", bind_enabled_ ? "ON" : "OFF");
+                return true;
+            case GLFW_KEY_Y: {
+                const BindingPatternKind previous_pattern = bind_pattern_;
+                bind_pattern_ = static_cast<BindingPatternKind>(
+                    (static_cast<uint32_t>(bind_pattern_) + 1) % 4);
+                if (!rebuild_binding_chain()) bind_pattern_ = previous_pattern;
+                return true;
+            }
+            case GLFW_KEY_H:
+                if (!show_rope_ && bind_enabled_ && !rope_pass_.valid()) {
+                    if (!create_rope_pass()) return true;
+                    if (!rope_pass_.build_geometry(bind_chain_, bind_profile_.rope_radius,
+                                                   bind_visible_segments_)) {
+                        std::fprintf(stderr, "[bind] failed to build rope geometry\n");
+                        return true;
+                    }
+                }
+                show_rope_ = !show_rope_;
+                std::printf("Rope geometry: %s\n", show_rope_ ? "ON" : "OFF");
+                return true;
+            case GLFW_KEY_J:
+                if (!tears_enabled_ && !tear_pass_.valid() && !create_tear_pass()) return true;
+                tears_enabled_ = !tears_enabled_;
+                std::printf("Tears: %s\n", tears_enabled_ ? "ON" : "OFF");
+                return true;
+            case GLFW_KEY_I: bind_tightness_ = std::max(0.0f, bind_tightness_ - 0.1f); break;
+            case GLFW_KEY_K: bind_tightness_ = std::min(1.0f, bind_tightness_ + 0.1f); break;
+            default: return false;
+        }
+        std::printf("[bind] tightness=%.2f\n", bind_tightness_);
         return true;
     }
 
@@ -1036,9 +1357,20 @@ public:
             uint32_t img_idx = vk_.acquire_next_image();
             if (img_idx == UINT32_MAX) { handle_resize(); continue; }
             update_uniforms(elapsed);
+            update_binding(elapsed);
+            update_rope_tail();
+            update_tears(elapsed);
             update_debug_bones();
             record_and_submit(img_idx);
             vk_.present(img_idx);
+            if (capture_pending_) {
+                capture_pending_ = false;
+                capture_.finish(vk_.device(), vk_.graphics_queue(), vk_.swapchain_format());
+                if (options_.exit_after_capture) {
+                    glfwSetWindowShouldClose(provider_.glfw_window(), GLFW_TRUE);
+                }
+            }
+            ++frame_index_;
         }
         vkDeviceWaitIdle(vk_.device());
     }
@@ -1064,6 +1396,11 @@ public:
         textures_.clear();
         destroy_texture(d, fallback_texture_);
 
+        fur_pass_.destroy();
+        rope_pass_.destroy();
+        tear_pass_.destroy();
+        safe_buf(bind_buffer_, bind_mem_);
+        capture_.destroy(d);
         if (pipeline_)              vkDestroyPipeline(d, pipeline_, nullptr);
         if (pipeline_layout_)       vkDestroyPipelineLayout(d, pipeline_layout_, nullptr);
         if (debug_pipeline_)        vkDestroyPipeline(d, debug_pipeline_, nullptr);
@@ -1104,6 +1441,8 @@ private:
             std::printf("Mesh: %s\n", show_mesh_ ? "ON" : "OFF");
             return;
         }
+        if (on_fur_key(key)) return;
+        if (on_bind_key(key)) return;
         if (clip_handles_.empty()) return;
         size_t n = clip_handles_.size();
         size_t prev = clip_index_;
@@ -1119,6 +1458,43 @@ private:
                     clip_index_ + 1, n,
                     clips_[clip_index_].name.c_str(),
                     (prev == clip_index_ && key == GLFW_KEY_R) ? " (restart)" : "");
+    }
+
+    /// Fur shell tuning keys. Returns true when the key was consumed.
+    ///   F        toggle shells
+    ///   [ / ]    shell count -/+
+    ///   - / =    fur length x0.8 / x1.25
+    ///   9 / 0    strand density x0.8 / x1.25
+    ///   , / .    tip thickness -/+ 0.02
+    ///   O        root occlusion cycle (0 -> 0.2 -> 0.42 -> 0.7)
+    bool on_fur_key(int key) {
+        switch (key) {
+            case GLFW_KEY_F:
+                if (!fur_enabled_ && !fur_pass_.valid() && !create_fur_pass()) return true;
+                fur_enabled_ = !fur_enabled_;
+                std::printf("Fur shells: %s\n", fur_enabled_ ? "ON" : "OFF");
+                return true;
+            case GLFW_KEY_LEFT_BRACKET:
+                if (fur_.shell_count > 1) --fur_.shell_count;
+                break;
+            case GLFW_KEY_RIGHT_BRACKET:
+                if (fur_.shell_count < 32) ++fur_.shell_count;
+                break;
+            case GLFW_KEY_MINUS:  fur_.length *= 0.8f;  break;
+            case GLFW_KEY_EQUAL:  fur_.length *= 1.25f; break;
+            case GLFW_KEY_9:      fur_.density = std::max(8.0f, fur_.density * 0.8f);    break;
+            case GLFW_KEY_0:      fur_.density = std::min(256.0f, fur_.density * 1.25f); break;
+            case GLFW_KEY_COMMA:  fur_.tip_thickness = std::max(0.01f, fur_.tip_thickness - 0.02f); break;
+            case GLFW_KEY_PERIOD: fur_.tip_thickness = std::min(0.5f,  fur_.tip_thickness + 0.02f); break;
+            case GLFW_KEY_O:
+                fur_.root_occlusion = fur_.root_occlusion < 0.1f ? 0.2f
+                                    : fur_.root_occlusion < 0.3f ? 0.42f
+                                    : fur_.root_occlusion < 0.5f ? 0.7f : 0.0f;
+                break;
+            default: return false;
+        }
+        fur_.print();
+        return true;
     }
 
     // ─── depth buffer ───────────────────────────────────────
@@ -1236,17 +1612,19 @@ private:
 
     bool create_descriptor_layouts() {
         VkDevice d = vk_.device();
-        // Set 0: UBO + instance SSBO + bone SSBO
-        VkDescriptorSetLayoutBinding s0[3]{};
+        // Set 0: UBO + instance SSBO + bone SSBO + rope-binding UBO
+        VkDescriptorSetLayoutBinding s0[4]{};
         s0[0].binding = 0; s0[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; s0[0].descriptorCount = 1;
         s0[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         s0[1].binding = 1; s0[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; s0[1].descriptorCount = 1;
         s0[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         s0[2].binding = 2; s0[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; s0[2].descriptorCount = 1;
         s0[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        s0[3].binding = 3; s0[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; s0[3].descriptorCount = 1;
+        s0[3].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        info.bindingCount = 3; info.pBindings = s0;
+        info.bindingCount = 4; info.pBindings = s0;
         if (vkCreateDescriptorSetLayout(d, &info, nullptr, &scene_set_layout_) != VK_SUCCESS) return false;
 
         // Set 1: combined image sampler (diffuse)
@@ -1442,6 +1820,36 @@ private:
         return r == VK_SUCCESS;
     }
 
+    bool create_fur_pass() {
+        if (fur_pass_.valid()) return true;
+        FurShellPass::CreateInfo ci;
+        ci.device       = vk_.device();
+        ci.render_pass  = render_pass_;
+        ci.scene_layout = scene_set_layout_;
+        ci.tex_layout   = tex_set_layout_;
+        ci.shader_dir   = shader_dir_;
+        if (!fur_pass_.create(ci)) {
+            std::fprintf(stderr, "Fur shell pipeline unavailable (missing fur_shell.*.spv?)\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool create_rope_pass() {
+        if (rope_pass_.valid()) return true;
+        RopePass::CreateInfo ci;
+        ci.device          = vk_.device();
+        ci.physical_device = vk_.physical_device();
+        ci.render_pass     = render_pass_;
+        ci.scene_layout    = scene_set_layout_;
+        ci.shader_dir      = shader_dir_;
+        if (!rope_pass_.create(ci)) {
+            std::fprintf(stderr, "Rope pipeline unavailable (missing rope.*.spv?)\n");
+            return false;
+        }
+        return true;
+    }
+
     bool create_buffers() {
         VkDevice d = vk_.device();
         VkPhysicalDevice pd = vk_.physical_device();
@@ -1471,6 +1879,8 @@ private:
                            instance_buffer_, instance_mem_)) return false;
         if (!create_buffer(d, pd, sizeof(float) * 16 * kMaxBones, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hv,
                            bone_buffer_, bone_mem_)) return false;
+        if (!create_buffer(d, pd, sizeof(NawaBindUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hv,
+                           bind_buffer_, bind_mem_)) return false;
         return true;
     }
 
@@ -1492,12 +1902,22 @@ private:
         int loaded = 0, missing = 0;
 
         for (const SubMesh& sm : mesh_.submeshes) {
-            const std::string& base = sm.texture_basename;
+            // Materials whose FBX texture path is unusable (e.g. an absolute
+            // path from the artist's machine) fall back to texture/default.*
+            // when the model directory provides one.
+            std::string base = sm.texture_basename;
+            std::string resolved = base.empty() ? std::string() : find_texture_file(tex_dir, base);
+            if (resolved.empty()) {
+                std::string fallback = find_texture_file(tex_dir, "default");
+                if (!fallback.empty()) {
+                    std::printf("  [default] %s -> default texture\n",
+                                base.empty() ? "(no material texture)" : base.c_str());
+                    base = "default";
+                    resolved = fallback;
+                }
+            }
             if (base.empty()) { submesh_tex_keys_.push_back(""); continue; }
 
-            if (textures_.count(base)) { submesh_tex_keys_.push_back(base); continue; }
-
-            std::string resolved = find_texture_file(tex_dir, base);
             if (resolved.empty()) {
                 std::printf("  [miss] %s\n", base.c_str());
                 ++missing;
@@ -1507,6 +1927,34 @@ private:
 
             int w, h, nch;
             stbi_uc* pixels = stbi_load(resolved.c_str(), &w, &h, &nch, STBI_rgb_alpha);
+            // Score every textured submesh, including those sharing a cached
+            // fallback texture. The face is the submesh whose UVs most closely
+            // cover both detected eye blobs; iteration order is not stable.
+            if (pixels) {
+                std::vector<EyeAnchor> candidate = locate_eyes(
+                    pixels, w, h, mesh_.vertices, mesh_.indices,
+                    sm.index_start, sm.index_count);
+                auto score = [](const std::vector<EyeAnchor>& anchors) {
+                    float total = 0.0f;
+                    for (const EyeAnchor& anchor : anchors) total += anchor.uv_distance_sq;
+                    return total;
+                };
+                const float candidate_score = score(candidate);
+                const float selected_score = score(eye_anchors_);
+                const bool deterministic_tie = !candidate.empty() && !eye_anchors_.empty() &&
+                    std::fabs(candidate_score - selected_score) <= 1e-8f &&
+                    candidate.front().vertex_index < eye_anchors_.front().vertex_index;
+                if (candidate.size() > eye_anchors_.size() ||
+                    (candidate.size() == eye_anchors_.size() && !candidate.empty() &&
+                     (candidate_score < selected_score - 1e-8f || deterministic_tie))) {
+                    eye_anchors_ = std::move(candidate);
+                }
+            }
+            if (textures_.count(base)) {
+                if (pixels) stbi_image_free(pixels);
+                submesh_tex_keys_.push_back(base);
+                continue;
+            }
             if (!pixels) {
                 std::printf("  [fail] %s (%s)\n", base.c_str(), stbi_failure_reason());
                 ++missing;
@@ -1537,7 +1985,7 @@ private:
         const uint32_t sub_count = static_cast<uint32_t>(mesh_.submeshes.size());
 
         VkDescriptorPoolSize sz[3]{};
-        sz[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; sz[0].descriptorCount = 1;
+        sz[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; sz[0].descriptorCount = 2;
         sz[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; sz[1].descriptorCount = 2;
         sz[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; sz[2].descriptorCount = sub_count;
         VkDescriptorPoolCreateInfo dp{};
@@ -1556,13 +2004,15 @@ private:
         VkDescriptorBufferInfo ubo_info{ubo_buffer_, 0, sizeof(SceneUBO)};
         VkDescriptorBufferInfo inst_info{instance_buffer_, 0, VK_WHOLE_SIZE};
         VkDescriptorBufferInfo bone_info{bone_buffer_, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet w[3]{};
+        VkDescriptorBufferInfo bind_info{bind_buffer_, 0, sizeof(NawaBindUBO)};
+        VkWriteDescriptorSet w[4]{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].dstSet = scene_set_; w[0].dstBinding = 0;
         w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].descriptorCount = 1; w[0].pBufferInfo = &ubo_info;
         w[1] = w[0]; w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[1].pBufferInfo = &inst_info;
         w[2] = w[0]; w[2].dstBinding = 2; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[2].pBufferInfo = &bone_info;
-        vkUpdateDescriptorSets(d, 3, w, 0, nullptr);
+        w[3] = w[0]; w[3].dstBinding = 3; w[3].pBufferInfo = &bind_info;
+        vkUpdateDescriptorSets(d, 4, w, 0, nullptr);
 
         // Texture sets (set 1, one per submesh)
         submesh_tex_sets_.resize(sub_count, VK_NULL_HANDLE);
@@ -1615,6 +2065,7 @@ private:
         ubo.light_dir[0] /= l; ubo.light_dir[1] /= l; ubo.light_dir[2] /= l;
         ubo.light_color[0] = 1.0f; ubo.light_color[1] = 0.97f; ubo.light_color[2] = 0.93f; ubo.light_color[3] = 0.3f;
         ubo.camera_pos[0] = eye[0]; ubo.camera_pos[1] = eye[1]; ubo.camera_pos[2] = eye[2]; ubo.camera_pos[3] = 1.0f;
+        camera_pos_ = {eye[0], eye[1], eye[2]};
         void* p = nullptr;
         vkMapMemory(d, ubo_mem_, 0, sizeof(SceneUBO), 0, &p);
         std::memcpy(p, &ubo, sizeof(SceneUBO));
@@ -1789,7 +2240,20 @@ private:
                                         1, 1, &submesh_tex_sets_[i], 0, nullptr);
                 vkCmdDrawIndexed(cmd, sm.index_count, 1, sm.index_start, 0, 0);
             }
+
+            if (fur_enabled_ && fur_pass_.valid()) {
+                std::vector<FurShellSubmeshDraw> draws;
+                draws.reserve(mesh_.submeshes.size());
+                for (size_t i = 0; i < mesh_.submeshes.size(); ++i) {
+                    const SubMesh& sm = mesh_.submeshes[i];
+                    draws.push_back({sm.index_start, sm.index_count, submesh_tex_sets_[i]});
+                }
+                fur_pass_.record(cmd, scene_set_, draws, fur_);
+            }
         }
+
+        if (bind_enabled_ && show_rope_) rope_pass_.record(cmd, scene_set_);
+        if (tears_enabled_) tear_pass_.record(cmd, scene_set_);
 
         if (show_bones_ && debug_vertex_count_ > 0 && debug_vb_ != VK_NULL_HANDLE) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_pipeline_);
@@ -1801,6 +2265,16 @@ private:
         }
 
         vkCmdEndRenderPass(cmd);
+
+        if (capture_.should_capture(frame_index_)) {
+            const auto& images = vk_.swapchain_images();
+            if (img_idx < images.size() &&
+                capture_.record(cmd, vk_.device(), vk_.physical_device(), images[img_idx], ext,
+                                vk_.swapchain_format())) {
+                capture_pending_ = true;
+            }
+        }
+
         vkEndCommandBuffer(cmd);
 
         VkSemaphore wait_sem = vk_.image_available_semaphore();
@@ -1876,6 +2350,33 @@ private:
     uint32_t         debug_vertex_count_     = 0;
     bool             show_bones_             = true;
     bool             show_mesh_              = true;
+
+    // -- Fur shells / capture --
+    ViewerOptions    options_;
+    FurShellPass     fur_pass_;
+    FurShellParams   fur_;
+    bool             fur_enabled_            = false;
+    RopePass           rope_pass_;
+    BindingFrame       bind_frame_;
+    BindingBodyProfile bind_base_profile_;   // plush preset in model units
+    BindingBodyProfile bind_profile_;        // per-pattern adjusted (Obi pinches wider)
+    BindingPatternKind bind_pattern_ = BindingPatternKind::Obi;
+    NawaCapsuleChain   bind_chain_;
+    SurfaceRadiusFn    bind_surface_radius_;
+    uint32_t           bind_visible_segments_ = 0;
+    float              bind_tightness_ = 1.0f;
+    bool               bind_enabled_   = false;
+    bool               show_rope_      = true;
+    bool               rope_tail_      = true;
+    float3             camera_pos_{};
+    TearPass           tear_pass_;
+    TearPass::Params   tear_params_;
+    std::vector<EyeAnchor> eye_anchors_;
+    bool               tears_enabled_  = false;
+    VkBuffer           bind_buffer_ = VK_NULL_HANDLE; VkDeviceMemory bind_mem_ = VK_NULL_HANDLE;
+    FrameCapture     capture_;
+    bool             capture_pending_        = false;
+    uint32_t         frame_index_            = 0;
 };
 
 // ============================================================
@@ -1889,8 +2390,80 @@ int main(int argc, char** argv) {
 
     // Argument parsing: [path] [shader_dir]. `path` can be a directory
     // (we load model.fbx + animation/*.fbx from it) or a single .fbx file.
-    fs::path input_path = (argc >= 2) ? fs::path(argv[1]) : fs::path("fbx/model1");
-    std::string shader_dir = (argc >= 3) ? argv[2] : "shaders";
+    // Positional: [path] [shader_dir]. Options (anywhere):
+    //   --fur                 start with fur shells on
+    //   --shells N            shell count (1..32)
+    //   --fur-length X        outermost shell extrusion in model units
+    //   --fur-density X       strands per UV unit
+    //   --capture FILE.bmp    write a frame capture, then exit
+    //   --capture-frame N     frame index to capture (default 90)
+    //   --stay                keep running after the capture
+    //   --no-bones            start with the bone overlay hidden
+    //   --bind [pattern]      rope binding on (obi | guruguru | kikkou | tasuki, default obi = 3 waist loops)
+    //   --tightness X         binding tightness 0..1 (default 1)
+    //   --bind-anim           animate wrap + tighten from t=0
+    //   --no-rope             hide the rope tube (deformation only)
+    //   --no-rope-tail        no loose rope end trailing toward the camera
+    //   --tears               toon tears from the eyes found in the albedo
+    std::vector<std::string> positional;
+    ViewerOptions options;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        auto next = [&](const char* what) -> const char* {
+            if (i + 1 >= argc) { std::fprintf(stderr, "%s needs a value\n", what); std::exit(2); }
+            return argv[++i];
+        };
+        if      (a == "--fur")           options.fur_enabled = true;
+        else if (a == "--shells") {
+            if (!parse_uint_option(next("--shells"), 1, 32, options.fur.shell_count)) {
+                std::fprintf(stderr, "--shells must be an integer from 1 to 32\n"); return 2;
+            }
+            options.fur_enabled = true;
+        }
+        else if (a == "--fur-length") {
+            if (!parse_float_option(next("--fur-length"), std::numeric_limits<float>::min(),
+                                    std::numeric_limits<float>::max(), options.fur.length)) {
+                std::fprintf(stderr, "--fur-length must be a positive finite number\n"); return 2;
+            }
+            options.fur_length_set = true; options.fur_enabled = true;
+        }
+        else if (a == "--fur-density") {
+            if (!parse_float_option(next("--fur-density"), 1.0f, 1024.0f, options.fur.density)) {
+                std::fprintf(stderr, "--fur-density must be from 1 to 1024\n"); return 2;
+            }
+            options.fur_enabled = true;
+        }
+        else if (a == "--capture")       options.capture_path = next("--capture");
+        else if (a == "--capture-frame") {
+            if (!parse_uint_option(next("--capture-frame"), 0, UINT32_MAX, options.capture_frame)) {
+                std::fprintf(stderr, "--capture-frame must be a non-negative integer\n"); return 2;
+            }
+        }
+        else if (a == "--stay")          options.exit_after_capture = false;
+        else if (a == "--no-bones")      options.show_bones = false;
+        else if (a == "--bind") {
+            options.bind_enabled = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                if (!parse_binding_pattern(argv[++i], options.bind_pattern)) {
+                    std::fprintf(stderr, "--bind pattern must be obi|guruguru|kikkou|tasuki\n"); return 2;
+                }
+            }
+        }
+        else if (a == "--tightness") {
+            if (!parse_float_option(next("--tightness"), 0.0f, 1.0f, options.bind_tightness)) {
+                std::fprintf(stderr, "--tightness must be from 0 to 1\n"); return 2;
+            }
+            options.bind_enabled = true;
+        }
+        else if (a == "--bind-anim")     { options.bind_wrap_anim = true; options.bind_enabled = true; }
+        else if (a == "--no-rope")       options.show_rope = false;
+        else if (a == "--no-rope-tail")  options.rope_tail = false;
+        else if (a == "--tears")         options.tears = true;
+        else if (!a.empty() && a[0] == '-') { std::fprintf(stderr, "Unknown option: %s\n", a.c_str()); return 2; }
+        else positional.push_back(a);
+    }
+    fs::path input_path = (positional.size() >= 1) ? fs::path(positional[0]) : fs::path("fbx/model1");
+    std::string shader_dir = (positional.size() >= 2) ? positional[1] : "shaders";
 
     fs::path model_dir;
     fs::path model_file;
@@ -2083,6 +2656,10 @@ int main(int argc, char** argv) {
     std::printf("Keys:\n");
     std::printf("  SPACE / N : next clip     P : prev clip     R : restart clip\n");
     std::printf("  B : bind-pose toggle      L : bone overlay  M : mesh toggle\n");
+    std::printf("  F : fur shells            [ ] shells -/+   - = length   9 0 density\n");
+    std::printf("  , . tip thickness         O : root occlusion cycle\n");
+    std::printf("  T : rope binding          Y : pattern cycle  I/K : tightness -/+  H : rope tube\n");
+    std::printf("  J : toon tears\n");
     std::printf("  Bone colors — grey = bind pose, green = current pose,\n");
     std::printf("                red/green/blue axes at world origin (1m each).\n");
 
@@ -2090,7 +2667,7 @@ int main(int argc, char** argv) {
 
     FBXViewer viewer;
     if (!viewer.initialize(std::move(mesh), std::move(skeleton), std::move(clips),
-                           model_dir, shader_dir)) {
+                           model_dir, shader_dir, options)) {
         std::fprintf(stderr, "Viewer init failed.\n");
         return 1;
     }
