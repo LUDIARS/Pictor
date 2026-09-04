@@ -94,6 +94,7 @@ void main() {
 
         // 紙から離れるほど散逸 (前方への減衰)。鷹の切り絵は月の丸穴の
         // 光芒にも影を落とす (障子側の遮蔽と同じ sheet 座標判定)。
+        // @implements SPEC-SHADOW-KIRIE-BACKDROP
         vec2 sheet_p = sp_sheet_hit(p, scene.moon_pos.xyz);
         accum += sp_cutout_tint(sheet_p) * sp_hawk_filter(sheet_p, kirie_hawk) *
                  (box * exp(-extinction * p.z));

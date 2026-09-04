@@ -101,6 +101,7 @@ void main() {
     // ---- 切り絵バックドロップ: 街並み (Figmentum-kirie サンプル) ----
     // shaded_pos (水面では拡大鏡映 + さざ波済み) から uv を引き直すことで、
     // 街の映り込みもライティングの反射・ぼかしと自動的に揃う。
+    // @implements SPEC-SHADOW-KIRIE-BACKDROP
     // v_water = 0.5 - SP_WATERLINE / kScreenH = 0.5 + 1.35 / 4.5 = 0.8。
     const float SP_V_WATER = 0.8;
     vec2 bg_uv = vec2((shaded_pos.x + 4.0) / 8.0, 0.5 - shaded_pos.y / 4.5);
