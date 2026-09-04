@@ -13,7 +13,13 @@ compile_commands.json
 Art/
 .revisor-version
 # Anatomia のローカル状態。ドメイン定義の正本は spec/domains/ に置く。
-.anatomia/
+# 追跡するのは layers.json だけで、 これは解析キャッシュではなくリポジトリが持つ層
+# (プログラムドメイン) の宣言。 追跡しないと Revisor のゲートから層が見えず、
+# 変更 anchor が全部「未分類」になる。
+# なお `.anatomia/` とディレクトリごと除外する形には戻さないこと — git は除外ディレクトリ内の
+# ファイルを `!` で再包含できないので、 layers.json をコミットできなくなる。
+.anatomia/*
+!.anatomia/layers.json
 
 # SHaRC demo scan/scene assets — fetched locally via
 # tools/download_sharc_demo_assets.py, never committed.
