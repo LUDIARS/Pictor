@@ -3,6 +3,7 @@
   "description": "実行時プロファイリング。 GPU/CPU 計測の収集、 内省 API、 フレーム時間のベースライン。",
   "presetRules": [],
   "templateRules": [],
+  "specRefs": ["spec/feature/kuzuha-raymarch.md"],
   "membership": [
     {
       "pathPattern": "(^|/)src/profiler/[^/]+$"

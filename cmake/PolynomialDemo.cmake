@@ -1,0 +1,31 @@
+# Optional upper-application entry point; no upper library is linked into Pictor.
+if(NOT WIN32 OR PICTOR_ENABLE_RIVE OR PICTOR_ENABLE_HW_COUNTERS)
+    message(FATAL_ERROR "PolynomialDemo SDK currently supports Windows desktop without Rive/PCM")
+endif()
+add_library(pictor_polynomial_demo STATIC ${_fbx_viewer_sources})
+target_link_libraries(pictor_polynomial_demo PUBLIC pictor)
+target_include_directories(pictor_polynomial_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+target_compile_definitions(pictor_polynomial_demo PRIVATE PICTOR_KUZUHA_DEMO=1 PICTOR_POLYNOMIAL_DEMO_LIBRARY=1)
+target_compile_features(pictor_polynomial_demo PUBLIC cxx_std_20)
+if(MSVC)
+    target_compile_options(pictor_polynomial_demo PRIVATE /utf-8 /EHsc)
+endif()
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+get_target_property(_polynomial_glfw_imported glfw IMPORTED)
+if(_polynomial_glfw_imported)
+    set(POLYNOMIAL_SYSTEM_GLFW ON)
+else()
+    set(POLYNOMIAL_SYSTEM_GLFW OFF)
+    install(TARGETS glfw EXPORT PictorDemoTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(DIRECTORY ${glfw_SOURCE_DIR}/include/GLFW DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
+install(TARGETS pictor pictor_polynomial_demo EXPORT PictorDemoTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY include/pictor DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(EXPORT PictorDemoTargets NAMESPACE Pictor:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PictorDemo)
+configure_package_config_file(${CMAKE_CURRENT_LIST_DIR}/PictorDemoConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/PictorDemoConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PictorDemo)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/PictorDemoConfig.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PictorDemo)

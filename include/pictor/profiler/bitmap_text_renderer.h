@@ -25,7 +25,9 @@ public:
     BitmapTextRenderer(const BitmapTextRenderer&) = delete;
     BitmapTextRenderer& operator=(const BitmapTextRenderer&) = delete;
 
-    bool initialize(VulkanContext& vk_ctx, const char* shader_dir);
+    /// @implements SPEC-PC-KUZUHA-RAYMARCH
+    bool initialize(VulkanContext& vk_ctx, const char* shader_dir,
+                    VkRenderPass render_pass = VK_NULL_HANDLE);
     void shutdown();
 
     /// Start a new text batch. Must be called inside an active render pass.
@@ -60,6 +62,7 @@ private:
 
     VulkanContext* vk_ctx_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
+    VkRenderPass render_pass_ = VK_NULL_HANDLE; // Borrowed from the caller/context.
 
     // Font texture
     VkImage font_image_ = VK_NULL_HANDLE;

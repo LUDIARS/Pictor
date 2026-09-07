@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+find_dependency(Vulkan)
+find_dependency(Threads)
+if(@POLYNOMIAL_SYSTEM_GLFW@)
+    find_dependency(glfw3)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/PictorDemoTargets.cmake")
+check_required_components(PictorDemo)

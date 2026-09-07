@@ -1,0 +1,15 @@
+{
+  "name": "kuzuha-reconstruction",
+  "description": "PN polynomial raymarch, dynamic interpolation/LOD, HUD and raster comparison.",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {"pathPattern": "(^|/)demo/kuzuha/"},
+    {"pathPattern": "(^|/)include/pictor/demo/polynomial_motion\\.h$"},
+    {"pathPattern": "(^|/)cmake/(PolynomialDemo|PictorDemoConfig)\\.cmake(\\.in)?$"},
+    {"pathPattern": "(^|/)demo/fbx_viewer/(main\\.cpp|packed_mesh\\.h|shaders/reconstruction\\.frag)$"},
+    {"pathPattern": "(^|/)tools/package_kuzuha_demo\\.ps1$"}
+  ],
+  "cardTemplate": "Explain cubic PN interpolation, conservative distance bounds, explicit unresolved rays, dynamic controls and GPU resource ownership.",
+  "specRefs": ["spec/feature/kuzuha-reconstruction.md", "spec/feature/kuzuha-raymarch.md", "spec/feature/polynomial-motion.md", "spec/setup/kuzuha-reconstruction.md"]
+}

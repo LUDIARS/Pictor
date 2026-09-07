@@ -16,22 +16,26 @@ BitmapTextRenderer::~BitmapTextRenderer() {
     if (initialized_) shutdown();
 }
 
-bool BitmapTextRenderer::initialize(VulkanContext& vk_ctx, const char* shader_dir) {
+/// @implements SPEC-PC-KUZUHA-RAYMARCH
+bool BitmapTextRenderer::initialize(VulkanContext& vk_ctx, const char* shader_dir, VkRenderPass render_pass) {
+    if (device_) return false;
     vk_ctx_ = &vk_ctx;
     device_ = vk_ctx.device();
-
-    if (!create_font_texture())       return false;
-    if (!create_vertex_buffer())      return false;
-    if (!create_descriptor_sets())    return false;
-    if (!create_pipeline(shader_dir)) return false;
+    render_pass_ = render_pass ? render_pass : vk_ctx.default_render_pass();
+    vertices_.reserve(MAX_VERTICES);
+    if (!create_font_texture() || !create_vertex_buffer() ||
+        !create_descriptor_sets() || !create_pipeline(shader_dir)) {
+        shutdown();return false;
+    }
 
     initialized_ = true;
     printf("[BitmapTextRenderer] Initialized\n");
     return true;
 }
 
+/// @implements SPEC-PC-KUZUHA-RAYMARCH
 void BitmapTextRenderer::shutdown() {
-    if (!initialized_) return;
+    if (!device_) return;
     vkDeviceWaitIdle(device_);
 
     if (pipeline_)        vkDestroyPipeline(device_, pipeline_, nullptr);
@@ -47,6 +51,11 @@ void BitmapTextRenderer::shutdown() {
     if (vertex_buffer_) vkDestroyBuffer(device_, vertex_buffer_, nullptr);
     if (vertex_memory_) vkFreeMemory(device_, vertex_memory_, nullptr);
 
+    pipeline_=VK_NULL_HANDLE;pipeline_layout_=VK_NULL_HANDLE;
+    desc_pool_=VK_NULL_HANDLE;desc_set_layout_=VK_NULL_HANDLE;desc_set_=VK_NULL_HANDLE;
+    font_sampler_=VK_NULL_HANDLE;font_view_=VK_NULL_HANDLE;font_image_=VK_NULL_HANDLE;
+    font_image_memory_=VK_NULL_HANDLE;vertex_buffer_=VK_NULL_HANDLE;vertex_memory_=VK_NULL_HANDLE;
+    device_=VK_NULL_HANDLE;render_pass_=VK_NULL_HANDLE;vk_ctx_=nullptr;
     initialized_ = false;
 }
 
@@ -297,13 +306,18 @@ VkShaderModule BitmapTextRenderer::load_shader(const char* path) {
     return mod;
 }
 
+/// @implements SPEC-PC-KUZUHA-RAYMARCH
 bool BitmapTextRenderer::create_pipeline(const char* shader_dir) {
     std::string vert_path = std::string(shader_dir) + "/text_overlay.vert.spv";
     std::string frag_path = std::string(shader_dir) + "/text_overlay.frag.spv";
 
     VkShaderModule vert = load_shader(vert_path.c_str());
     VkShaderModule frag = load_shader(frag_path.c_str());
-    if (!vert || !frag) return false;
+    if (!vert || !frag) {
+        if (vert) vkDestroyShaderModule(device_, vert, nullptr);
+        if (frag) vkDestroyShaderModule(device_, frag, nullptr);
+        return false;
+    }
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -413,7 +427,7 @@ bool BitmapTextRenderer::create_pipeline(const char* shader_dir) {
     pi.pColorBlendState    = &blend;
     pi.pDynamicState       = &dyn;
     pi.layout              = pipeline_layout_;
-    pi.renderPass          = vk_ctx_->default_render_pass();
+    pi.renderPass          = render_pass_;
     pi.subpass             = 0;
 
     VkResult result = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pi, nullptr, &pipeline_);

@@ -41,6 +41,11 @@
 #include "tear_pass.h"
 #include "textured_skinned_vertex.h"
 #include "vk_buffer_util.h"
+#include "packed_mesh.h"
+#include "../kuzuha/reconstruction.h"
+#include "../kuzuha/motion_bridge.h"
+#include "../kuzuha/frame_recording.h"
+#include "../kuzuha/debug_hud.h"
 
 #include "stb_image.h"
 
@@ -185,22 +190,6 @@ struct ScopedTimer {
 // into a single vertex+index buffer; each submesh carries a direct
 // FBX material id (or 0 if untextured) so texture lookup is trivial.
 // ============================================================
-
-struct SubMesh {
-    uint32_t    index_start = 0;
-    uint32_t    index_count = 0;
-    FBXObjectId material_id = 0;   // 0 = no material (transient; cleared after resolve)
-    std::string texture_basename;  // resolved diffuse texture filename, "" = fallback
-    std::string debug_name;        // geometry or model name, for logging
-};
-
-struct PackedMesh {
-    std::vector<TexturedSkinnedVertex> vertices;
-    std::vector<uint32_t>              indices;
-    std::vector<SubMesh>               submeshes;
-    float3                             center{};
-    float                              radius = 1.0f;
-};
 
 /// Find the FBX Model that owns `geometry_id` (via OO parent).
 FBXObjectId find_parent_model(const FBXScene& scene, FBXObjectId geometry_id) {
@@ -366,7 +355,9 @@ static void pack_one_geometry(const FBXScene& scene,
     // ── Append vertices ──────────────────────────────────────
     const uint32_t vertex_base = static_cast<uint32_t>(out.vertices.size());
     out.vertices.resize(vertex_base + vcount);
+    out.topology.resize(vertex_base + vcount);
     for (size_t i = 0; i < vcount; ++i) {
+        out.topology[vertex_base+i] = {gid, static_cast<uint32_t>(tri->original_vertex[i])};
         TexturedSkinnedVertex& v = out.vertices[vertex_base + i];
         v.position[0] = tri->positions[i].x;
         v.position[1] = tri->positions[i].y;
@@ -920,6 +911,9 @@ static std::string find_texture_file(const fs::path& texture_dir, const std::str
 // ============================================================
 
 struct ViewerOptions {
+    pictor_kuzuha::Options reconstruction;
+    pictor::demo::PolynomialMotion* polynomial_motion=nullptr;
+    pictor_kuzuha::FrameRecording recording;
     bool           fur_enabled     = false;
     FurShellParams fur;
     bool           fur_length_set  = false;   // --fur-length given (else radius-relative default)
@@ -986,6 +980,14 @@ public:
         model_dir_  = model_dir;
         shader_dir_ = shader_dir;
         options_    = options;
+        if (options.reconstruction.enabled) {
+            if(options.polynomial_motion && !options.reconstruction.raymarch)
+                throw std::invalid_argument("Polynomial motion requires --renderer raymarch");
+            reconstruction_ = std::make_unique<pictor_kuzuha::Reconstruction>(std::move(mesh_), options.reconstruction);
+            motion_.initialize(options.polynomial_motion,reconstruction_->model(),skeleton_);
+            mesh_ = reconstruction_->rebuild();
+            skinning_enabled_ = false; // Controlled source/PN comparison in the same bind pose.
+        }
         fur_enabled_ = options.fur_enabled;
         bind_enabled_ = options.bind_enabled;
         bind_pattern_ = options.bind_pattern;
@@ -1007,7 +1009,9 @@ public:
         }
 
         GlfwWindowConfig wc; wc.width = 1280; wc.height = 720; wc.title = "Pictor FBX Viewer";
+        if (reconstruction_) { wc.width=options.reconstruction.width;wc.height=options.reconstruction.height; }
         if (!provider_.create(wc)) { std::fprintf(stderr, "GLFW window create failed\n"); return false; }
+        if (reconstruction_) glfwSetWindowTitle(provider_.glfw_window(), reconstruction_->title().c_str());
         VulkanContextConfig vcfg;
         vcfg.app_name = "pictor_fbx_viewer";
         // This demo updates one shared set of host-visible resources. Keep it
@@ -1038,6 +1042,13 @@ public:
         if (!create_buffers())               return false;
         if (!load_textures())                return false;
         if (!create_descriptor_sets())       return false;
+        if (reconstruction_) {
+            pictor_kuzuha::RaymarchPass::CreateInfo ci;
+            ci.device=vk_.device();ci.physical_device=vk_.physical_device();ci.render_pass=render_pass_;
+            ci.scene_layout=scene_set_layout_;ci.texture_layout=tex_set_layout_;ci.shader_dir=shader_dir_;
+            if (!raymarch_.create(ci,motion_.initial_patches(reconstruction_->model()))) return false;
+            if (!hud_.initialize(vk_,shader_dir_.c_str(),render_pass_)) return false;
+        }
 
         AnimationSystemConfig acfg;
         acfg.gpu_skinning_enabled   = false;
@@ -1055,11 +1066,12 @@ public:
                             clips_.size(), clips_[clip_index_].name.c_str());
             }
         }
-        std::printf("Skinning: ON (press B to toggle bind-pose).\n");
+        std::printf("Skinning: %s (press B to toggle bind-pose).\n", skinning_enabled_ ? "ON" : "OFF");
+        if (reconstruction_) return true;
         std::printf("Fur shells: %s (press F to toggle).\n", fur_enabled_ ? "ON" : "OFF");
         fur_.print();
 
-        if (!setup_binding()) return false;
+        if (!reconstruction_ && !setup_binding()) return false;
         std::printf("Rope binding: %s (press T to toggle, Y pattern, I/K tightness).\n",
                     bind_enabled_ ? "ON" : "OFF");
         std::printf("Tears: %s (%zu eye anchor%s, press J to toggle).\n",
@@ -1347,15 +1359,31 @@ public:
         auto prev = t0;
         while (!provider_.should_close()) {
             provider_.poll_events();
+            if (reconstruction_ && reconstruction_->dirty()) {
+                if (!replace_reconstruction_mesh()) throw std::runtime_error("Cannot upload PN mesh");
+                glfwSetWindowTitle(provider_.glfw_window(), reconstruction_->title().c_str());
+            }
             auto now = std::chrono::steady_clock::now();
             float dt = std::chrono::duration<float>(now - prev).count();
             float elapsed = std::chrono::duration<float>(now - t0).count();
             prev = now;
+            // Exponential average in milliseconds. Keep the smoothing factor in
+            // one place: the new-sample weight must stay (1 - kFrameSmoothing),
+            // or the reported frame time silently gains a scale error.
+            constexpr float kFrameSmoothing = 0.9f;
+            const float dt_ms = dt * 1000.0f;
+            frame_ms_ = frame_ms_ > 0
+                          ? frame_ms_ * kFrameSmoothing + dt_ms * (1.0f - kFrameSmoothing)
+                          : dt_ms;
+            const float motion_dt=options_.recording.directory.empty()?dt:1.f/options_.recording.fps;
+            if (reconstruction_) reconstruction_->update(motion_dt);
 
             if (skinning_enabled_) anim_.update(dt);
 
             uint32_t img_idx = vk_.acquire_next_image();
             if (img_idx == UINT32_MAX) { handle_resize(); continue; }
+            if (reconstruction_) unresolved_=raymarch_.begin_frame();
+            if (reconstruction_) motion_.update(motion_dt,raymarch_);
             update_uniforms(elapsed);
             update_binding(elapsed);
             update_rope_tail();
@@ -1365,8 +1393,17 @@ public:
             vk_.present(img_idx);
             if (capture_pending_) {
                 capture_pending_ = false;
-                capture_.finish(vk_.device(), vk_.graphics_queue(), vk_.swapchain_format());
-                if (options_.exit_after_capture) {
+                const bool saved = capture_.finish(vk_.device(), vk_.graphics_queue(), vk_.swapchain_format());
+                if (reconstruction_ && !saved) throw std::runtime_error("Pictor frame capture failed");
+                if (reconstruction_) reconstruction_->record_capture(unresolved_,frame_ms_);
+                motion_.record_capture();
+                std::string next;
+                const bool recording=!options_.recording.directory.empty();
+                if(recording && frame_index_+1<options_.recording.count)
+                    next=pictor_kuzuha::recording_path(options_.recording,frame_index_+1);
+                else if(!recording && reconstruction_)next=reconstruction_->advance_capture();
+                if (!next.empty()) capture_.request(next, frame_index_ + (recording?1:32));
+                else if (options_.exit_after_capture) {
                     glfwSetWindowShouldClose(provider_.glfw_window(), GLFW_TRUE);
                 }
             }
@@ -1401,17 +1438,21 @@ public:
         tear_pass_.destroy();
         safe_buf(bind_buffer_, bind_mem_);
         capture_.destroy(d);
-        if (pipeline_)              vkDestroyPipeline(d, pipeline_, nullptr);
-        if (pipeline_layout_)       vkDestroyPipelineLayout(d, pipeline_layout_, nullptr);
-        if (debug_pipeline_)        vkDestroyPipeline(d, debug_pipeline_, nullptr);
-        if (debug_pipeline_layout_) vkDestroyPipelineLayout(d, debug_pipeline_layout_, nullptr);
-        if (scene_set_layout_)      vkDestroyDescriptorSetLayout(d, scene_set_layout_, nullptr);
-        if (tex_set_layout_)        vkDestroyDescriptorSetLayout(d, tex_set_layout_, nullptr);
-        if (desc_pool_)             vkDestroyDescriptorPool(d, desc_pool_, nullptr);
+        hud_.shutdown();raymarch_.destroy();
+        // Null each handle after destroying it: reconstruction can throw out of
+        // initialize() or run(), and main's handler calls shutdown() on a
+        // partially built viewer.
+        if (pipeline_)              { vkDestroyPipeline(d, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
+        if (pipeline_layout_)       { vkDestroyPipelineLayout(d, pipeline_layout_, nullptr); pipeline_layout_ = VK_NULL_HANDLE; }
+        if (debug_pipeline_)        { vkDestroyPipeline(d, debug_pipeline_, nullptr); debug_pipeline_ = VK_NULL_HANDLE; }
+        if (debug_pipeline_layout_) { vkDestroyPipelineLayout(d, debug_pipeline_layout_, nullptr); debug_pipeline_layout_ = VK_NULL_HANDLE; }
+        if (scene_set_layout_)      { vkDestroyDescriptorSetLayout(d, scene_set_layout_, nullptr); scene_set_layout_ = VK_NULL_HANDLE; }
+        if (tex_set_layout_)        { vkDestroyDescriptorSetLayout(d, tex_set_layout_, nullptr); tex_set_layout_ = VK_NULL_HANDLE; }
+        if (desc_pool_)             { vkDestroyDescriptorPool(d, desc_pool_, nullptr); desc_pool_ = VK_NULL_HANDLE; }
 
         for (auto fb : framebuffers_) if (fb) vkDestroyFramebuffer(d, fb, nullptr);
         framebuffers_.clear();
-        if (render_pass_) vkDestroyRenderPass(d, render_pass_, nullptr);
+        if (render_pass_) { vkDestroyRenderPass(d, render_pass_, nullptr); render_pass_ = VK_NULL_HANDLE; }
         destroy_depth_resources();
 
         vk_.shutdown();
@@ -1419,13 +1460,28 @@ public:
 
 private:
     static void key_callback(GLFWwindow* w, int key, int /*sc*/, int action, int /*mods*/) {
-        if (action != GLFW_PRESS) return;
+        const bool repeatable=key==GLFW_KEY_LEFT_BRACKET || key==GLFW_KEY_RIGHT_BRACKET ||
+            key==GLFW_KEY_LEFT || key==GLFW_KEY_RIGHT || key==GLFW_KEY_UP || key==GLFW_KEY_DOWN;
+        if (action != GLFW_PRESS && !(action==GLFW_REPEAT && repeatable)) return;
         auto* self = static_cast<FBXViewer*>(glfwGetWindowUserPointer(w));
         if (!self) return;
         self->on_key(key);
     }
 
     void on_key(int key) {
+        if (reconstruction_) {
+            if (motion_.key(key)) return;
+            if (motion_.enabled() && key==GLFW_KEY_F5) return; // live coefficients require the raymarch path
+            if (key==GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(provider_.glfw_window(), GLFW_TRUE);
+            if (reconstruction_->key(key)) {
+                if (reconstruction_->options().raymarch) skinning_enabled_=false;
+                glfwSetWindowTitle(provider_.glfw_window(), reconstruction_->title().c_str());
+                return;
+            }
+            // Research demo controls are independent of the effects viewer.
+            if (reconstruction_->options().raymarch && key!=GLFW_KEY_L) return;
+            if (key!=GLFW_KEY_B && key!=GLFW_KEY_L && key!=GLFW_KEY_SPACE && key!=GLFW_KEY_N && key!=GLFW_KEY_P && key!=GLFW_KEY_R) return;
+        }
         if (key == GLFW_KEY_B) {
             skinning_enabled_ = !skinning_enabled_;
             std::printf("Skinning: %s\n", skinning_enabled_ ? "ON" : "OFF (bind pose)");
@@ -1641,7 +1697,7 @@ private:
         VkDevice d = vk_.device();
 
         VkShaderModule vs = load_shader_spv(d, shader_dir_ + "/model.vert.spv");
-        VkShaderModule fs = load_shader_spv(d, shader_dir_ + "/model.frag.spv");
+        VkShaderModule fs = load_shader_spv(d, shader_dir_ + (reconstruction_ ? "/reconstruction.frag.spv" : "/model.frag.spv"));
         if (!vs || !fs) return false;
 
         VkPipelineShaderStageCreateInfo stages[2]{};
@@ -1850,6 +1906,32 @@ private:
         return true;
     }
 
+    bool replace_reconstruction_mesh() {
+        auto replacement = reconstruction_->rebuild();
+        const auto d=vk_.device(); const auto pd=vk_.physical_device();
+        const auto flags=VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        VkBuffer vb=VK_NULL_HANDLE,ib=VK_NULL_HANDLE;
+        VkDeviceMemory vm=VK_NULL_HANDLE,im=VK_NULL_HANDLE;
+        auto discard=[&]() {
+            if (vb) vkDestroyBuffer(d,vb,nullptr); if (vm) vkFreeMemory(d,vm,nullptr);
+            if (ib) vkDestroyBuffer(d,ib,nullptr); if (im) vkFreeMemory(d,im,nullptr);
+        };
+        const auto vs=replacement.vertices.size()*sizeof(TexturedSkinnedVertex);
+        const auto is=replacement.indices.size()*sizeof(uint32_t);
+        if (!create_buffer(d,pd,vs,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,flags,vb,vm) ||
+            !create_buffer(d,pd,is,VK_BUFFER_USAGE_INDEX_BUFFER_BIT,flags,ib,im)) { discard();return false; }
+        void* ptr=nullptr;
+        if (vkMapMemory(d,vm,0,vs,0,&ptr)!=VK_SUCCESS) { discard();return false; }
+        std::memcpy(ptr,replacement.vertices.data(),vs);vkUnmapMemory(d,vm);
+        if (vkMapMemory(d,im,0,is,0,&ptr)!=VK_SUCCESS) { discard();return false; }
+        std::memcpy(ptr,replacement.indices.data(),is);vkUnmapMemory(d,im);
+        vkDeviceWaitIdle(d);
+        vkDestroyBuffer(d,vb_,nullptr);vkFreeMemory(d,vb_mem_,nullptr);
+        vkDestroyBuffer(d,ib_,nullptr);vkFreeMemory(d,ib_mem_,nullptr);
+        vb_=vb;vb_mem_=vm;ib_=ib;ib_mem_=im;mesh_=std::move(replacement);
+        return true;
+    }
+
     bool create_buffers() {
         VkDevice d = vk_.device();
         VkPhysicalDevice pd = vk_.physical_device();
@@ -1925,12 +2007,18 @@ private:
                 continue;
             }
 
+            // Reconstruction has no tear effect: reuse decoded textures without
+            // running the legacy per-submesh image analysis.
+            if (reconstruction_ && textures_.count(base)) {
+                submesh_tex_keys_.push_back(base);
+                continue;
+            }
             int w, h, nch;
             stbi_uc* pixels = stbi_load(resolved.c_str(), &w, &h, &nch, STBI_rgb_alpha);
             // Score every textured submesh, including those sharing a cached
             // fallback texture. The face is the submesh whose UVs most closely
             // cover both detected eye blobs; iteration order is not stable.
-            if (pixels) {
+            if (pixels && !reconstruction_) {
                 std::vector<EyeAnchor> candidate = locate_eyes(
                     pixels, w, h, mesh_.vertices, mesh_.indices,
                     sm.index_start, sm.index_count);
@@ -2055,6 +2143,7 @@ private:
             mesh_.center.z + dist * std::sin(t * 0.4f),
         };
         float center[3] = {mesh_.center.x, mesh_.center.y, mesh_.center.z};
+        if (reconstruction_) reconstruction_->camera(eye,center);
         float up[3] = {0, 1, 0};
 
         SceneUBO ubo{};
@@ -2075,6 +2164,7 @@ private:
         mat4_identity(inst.model);
         inst.base_color[0] = 1.0f; inst.base_color[1] = 1.0f; inst.base_color[2] = 1.0f; inst.base_color[3] = 1.0f;
         inst.skin_info[0] = 0;
+        if (reconstruction_) inst.skin_info[2] = reconstruction_->display();
         inst.skin_info[1] = skinning_enabled_
                               ? static_cast<uint32_t>(anim_.get_bone_count(inst_))
                               : static_cast<uint32_t>(skeleton_.bones.size());
@@ -2084,7 +2174,7 @@ private:
 
         // Bone matrices: either driven by AnimationSystem (skinning on) or
         // all-identity (skinning off → bind-pose pass-through in the shader).
-        std::vector<float> bones(16 * kMaxBones, 0.0f);
+        std::array<float, 16 * kMaxBones> bones{};
         for (uint32_t b = 0; b < kMaxBones; ++b)
             bones[b * 16 + 0] = bones[b * 16 + 5] = bones[b * 16 + 10] = bones[b * 16 + 15] = 1.0f;
         if (skinning_enabled_) {
@@ -2226,7 +2316,18 @@ private:
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
 
-        if (show_mesh_) {
+        if (show_mesh_ && reconstruction_ && reconstruction_->options().raymarch) {
+            raymarch_.bind(cmd,scene_set_,reconstruction_->ray_parameters(ext.width,ext.height));
+            // Patch indices address the immutable source triangles, but the
+            // texture sets were allocated once per submesh of the mesh present
+            // at descriptor-set creation. Only the overlap is safe to bind.
+            const auto& submeshes=reconstruction_->model().source().submeshes;
+            const size_t drawable=std::min(submeshes.size(),submesh_tex_sets_.size());
+            for (size_t i=0;i<drawable;++i)
+                raymarch_.draw(cmd,submesh_tex_sets_[i],submeshes[i].index_start/3,submeshes[i].index_count/3);
+            if (drawable && motion_.extra_count())
+                raymarch_.draw(cmd,submesh_tex_sets_[0],motion_.source_count(),motion_.extra_count());
+        } else if (show_mesh_) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_,
                                     0, 1, &scene_set_, 0, nullptr);
@@ -2234,7 +2335,10 @@ private:
             vkCmdBindVertexBuffers(cmd, 0, 1, &vb_, &off);
             vkCmdBindIndexBuffer(cmd, ib_, 0, VK_INDEX_TYPE_UINT32);
 
-            for (size_t i = 0; i < mesh_.submeshes.size(); ++i) {
+            // Reconstruction can swap mesh_ after the texture sets were built.
+            // Bind only submeshes that still have a matching set.
+            const size_t drawable = std::min(mesh_.submeshes.size(), submesh_tex_sets_.size());
+            for (size_t i = 0; i < drawable; ++i) {
                 const SubMesh& sm = mesh_.submeshes[i];
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_,
                                         1, 1, &submesh_tex_sets_[i], 0, nullptr);
@@ -2243,8 +2347,8 @@ private:
 
             if (fur_enabled_ && fur_pass_.valid()) {
                 std::vector<FurShellSubmeshDraw> draws;
-                draws.reserve(mesh_.submeshes.size());
-                for (size_t i = 0; i < mesh_.submeshes.size(); ++i) {
+                draws.reserve(drawable);
+                for (size_t i = 0; i < drawable; ++i) {
                     const SubMesh& sm = mesh_.submeshes[i];
                     draws.push_back({sm.index_start, sm.index_count, submesh_tex_sets_[i]});
                 }
@@ -2264,7 +2368,14 @@ private:
             vkCmdDraw(cmd, debug_vertex_count_, 1, 0, 0);
         }
 
+        if (reconstruction_) {
+            hud_.begin(cmd,ext);
+            pictor_kuzuha::draw_debug_hud(hud_,*reconstruction_,unresolved_,frame_ms_,ext.height,motion_.enabled());
+            motion_.draw_status(hud_);
+            hud_.end();
+        }
         vkCmdEndRenderPass(cmd);
+        if (reconstruction_) raymarch_.finish_frame(cmd);
 
         if (capture_.should_capture(frame_index_)) {
             const auto& images = vk_.swapchain_images();
@@ -2272,6 +2383,11 @@ private:
                 capture_.record(cmd, vk_.device(), vk_.physical_device(), images[img_idx], ext,
                                 vk_.swapchain_format())) {
                 capture_pending_ = true;
+            } else if (reconstruction_) {
+                // The capture stays armed, so a silent failure would re-fire
+                // every frame while never completing the sequence. Reconstruction
+                // captures are the verification artifact: fail loudly instead.
+                throw std::runtime_error("Pictor frame capture could not be recorded");
             }
         }
 
@@ -2375,6 +2491,12 @@ private:
     bool               tears_enabled_  = false;
     VkBuffer           bind_buffer_ = VK_NULL_HANDLE; VkDeviceMemory bind_mem_ = VK_NULL_HANDLE;
     FrameCapture     capture_;
+    std::unique_ptr<pictor_kuzuha::Reconstruction> reconstruction_;
+    pictor_kuzuha::RaymarchPass raymarch_;
+    pictor_kuzuha::MotionBridge motion_;
+    pictor::BitmapTextRenderer hud_;
+    uint32_t unresolved_=0;
+    float frame_ms_=0;
     bool             capture_pending_        = false;
     uint32_t         frame_index_            = 0;
 };
@@ -2383,7 +2505,11 @@ private:
 // main
 // ============================================================
 
+#ifdef PICTOR_POLYNOMIAL_DEMO_LIBRARY
+int pictor::demo::run_polynomial_viewer(int argc,char** argv,PolynomialMotion* motion) {
+#else
 int main(int argc, char** argv) {
+#endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     std::printf("Pictor FBX Viewer\n");
@@ -2407,8 +2533,28 @@ int main(int argc, char** argv) {
     //   --tears               toon tears from the eyes found in the albedo
     std::vector<std::string> positional;
     ViewerOptions options;
+#ifdef PICTOR_POLYNOMIAL_DEMO_LIBRARY
+    options.polynomial_motion=motion;
+#endif
+#ifdef PICTOR_KUZUHA_DEMO
+    options.reconstruction.enabled=true;
+    options.show_bones=false;
+#endif
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
+        if (a=="--help") {
+            std::printf("Pictor FBX / Kuzuha reconstruction demo\n[path] [shader_dir]\n"
+                "--pn-factor 1|2|4|8 --pn-strength 0..1 --view head|body --yaw degrees --zoom factor\n"
+                "--renderer raymarch|raster --animate-interpolation --fixed-lod --window-width N --window-height N\n"
+                "--display texture|clay|facets|steps --capture file.bmp --capture-set directory --pn-report file.jsonl\n"
+                "Keys: F1-F4 quality, F5 renderer, [ ] strength, I animate, A auto LOD, S source/full, C shading, V view, arrows camera.\n"
+                "Research: Vlachos et al., Curved PN Triangles, I3D 2001, doi:10.1145/364338.364387\n");
+            return 0;
+        }
+        try {
+            if (pictor_kuzuha::parse_recording_option(argc,argv,i,options.recording)) continue;
+            if (pictor_kuzuha::parse_option(argc,argv,i,options.reconstruction)) continue;
+        } catch (const std::exception& e) { std::fprintf(stderr,"%s\n",e.what());return 2; }
         auto next = [&](const char* what) -> const char* {
             if (i + 1 >= argc) { std::fprintf(stderr, "%s needs a value\n", what); std::exit(2); }
             return argv[++i];
@@ -2464,6 +2610,30 @@ int main(int argc, char** argv) {
     }
     fs::path input_path = (positional.size() >= 1) ? fs::path(positional[0]) : fs::path("fbx/model1");
     std::string shader_dir = (positional.size() >= 2) ? positional[1] : "shaders";
+#ifdef PICTOR_KUZUHA_DEMO
+    const fs::path exe_dir=fs::absolute(argv[0]).parent_path();
+    if (positional.empty()) input_path=exe_dir/"model";
+    if (positional.size()<2) shader_dir=(exe_dir/"shaders").string();
+#endif
+    if(!options.recording.directory.empty()) {
+        if(!options.capture_path.empty() || !options.reconstruction.capture_directory.empty()) {
+            std::fprintf(stderr,"--record-frames cannot be combined with other capture options\n");return 2;
+        }
+        try {pictor_kuzuha::prepare_recording(options.recording);}
+        catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 2;}
+        options.capture_path=pictor_kuzuha::recording_path(options.recording,0);options.capture_frame=0;
+    }
+    // --capture-set drives a fixed eight-shot sequence and owns the camera,
+    // level and display state, so it cannot be combined with the single-shot
+    // --capture or with the view options it would silently overwrite.
+    if (!options.reconstruction.capture_directory.empty() && !options.capture_path.empty()) {
+        std::fprintf(stderr, "--capture-set cannot be combined with --capture\n");
+        return 2;
+    }
+    try {
+        const std::string first_capture=pictor_kuzuha::first_capture(options.reconstruction);
+        if (!first_capture.empty()) { options.capture_path=first_capture;options.capture_frame=32; }
+    } catch (const std::exception& e) { std::fprintf(stderr,"%s\n",e.what());return 2; }
 
     fs::path model_dir;
     fs::path model_file;
@@ -2511,7 +2681,7 @@ int main(int argc, char** argv) {
     bool cache_hit = false;
     {
         PROF_SCOPE("cache read (try)");
-        cache_hit = cache::read(cache_path, sources, mesh, skeleton, clips);
+        if (!options.reconstruction.enabled) cache_hit = cache::read(cache_path, sources, mesh, skeleton, clips);
     }
 
     if (cache_hit) {
@@ -2586,7 +2756,7 @@ int main(int argc, char** argv) {
         skeleton = std::move(result.skeleton);
         clips    = std::move(result.clips);
 
-        {
+        if (!options.reconstruction.enabled) {
             PROF_SCOPE("cache write");
             if (cache::write(cache_path, mesh, skeleton, clips, sources)) {
                 std::printf("Cache written: %s\n", cache_path.string().c_str());
@@ -2666,14 +2836,23 @@ int main(int argc, char** argv) {
     Profiler::instance().print("Load profile");
 
     FBXViewer viewer;
-    if (!viewer.initialize(std::move(mesh), std::move(skeleton), std::move(clips),
-                           model_dir, shader_dir, options)) {
-        std::fprintf(stderr, "Viewer init failed.\n");
-        return 1;
+    int exit_code = 0;
+    try {
+        if (!viewer.initialize(std::move(mesh), std::move(skeleton), std::move(clips),
+                               model_dir, shader_dir, options)) {
+            std::fprintf(stderr, "Viewer init failed.\n");
+            exit_code = 1;
+        } else {
+            viewer.run();
+        }
+    } catch (const std::exception& e) {
+        // Reconstruction reports invalid geometry, budget overruns and failed
+        // uploads by throwing; still tear the viewer down exactly once.
+        std::fprintf(stderr, "Pictor demo: %s\n", e.what());
+        exit_code = 1;
     }
-    viewer.run();
     viewer.shutdown();
-    return 0;
+    return exit_code;
 }
 
 #endif // PICTOR_HAS_VULKAN

@@ -1,0 +1,103 @@
+# NOTE: the three pc-kuzuha-hair-* services below are placeholders for the
+# planned hair work (spec/tasks/20260908-polynomial-motion-hair.md). Neither
+# the pictor_kuzuha_hair_demo target nor the --hair-* options exist yet, so
+# these entries cannot be launched until that target lands. The pc-kuzuha-demo
+# and pc-kuzuha-capture services below are backed by this PR's build.
+services:
+  - code: pc-kuzuha-hair-video
+    name: Pictor Kuzuha hair wind video frames
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-hair-demo/pictor_kuzuha_hair_demo.exe
+    app_kind: native
+    exec_args:
+      - --hair-warmup
+      - '2'
+      - --hair-wind-sequence
+      - --record-frames
+      - ${ARS_ROOT}/Pictor/build/kuzuha-hair-demo/wind-fork-video-frames
+      - --record-count
+      - '300'
+      - --record-fps
+      - '30'
+      - --pn-factor
+      - '2'
+      - --zoom
+      - '0.9'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-kuzuha-hair
+    name: Pictor Kuzuha live Fg hair formulas
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-hair-demo/pictor_kuzuha_hair_demo.exe
+    app_kind: native
+    exec_args:
+      - --hair-wind-sequence
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-kuzuha-hair-capture
+    name: Pictor Kuzuha Fg hair wind capture
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-hair-demo/pictor_kuzuha_hair_demo.exe
+    app_kind: native
+    exec_args:
+      - --hair-warmup
+      - '2'
+      - --hair-freeze
+      - --capture
+      - ${ARS_ROOT}/Pictor/build/kuzuha-hair-demo/hair-still.bmp
+      - --capture-frame
+      - '4'
+      - --pn-factor
+      - '2'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-kuzuha-demo
+    name: Pictor Kuzuha polynomial raymarch
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-demo/pictor_kuzuha_demo.exe
+    app_kind: native
+    exec_args: []
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-kuzuha-capture
+    name: Pictor Kuzuha comparison capture
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-demo/pictor_kuzuha_demo.exe
+    app_kind: native
+    exec_args:
+      - --capture-set
+      - ${ARS_ROOT}/Pictor/build/kuzuha-demo/raymarch-results
+      - --pn-report
+      - ${ARS_ROOT}/Pictor/build/kuzuha-demo/raymarch-results/refinement.jsonl
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
