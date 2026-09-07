@@ -7,6 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
 option(PICTOR_BUILD_TOOLS         "Build developer tool targets (feature selector etc.)" OFF)
+option(PICTOR_BUILD_POLYNOMIAL_SDK "Build/install the native polynomial demo adapter" OFF)
 option(PICTOR_BUILD_TESTS         "Build the headless test suite (CTest)"   ON)
 option(PICTOR_ENABLE_PROFILER     "Enable built-in profiler"        ON)
 option(PICTOR_USE_LARGE_PAGES     "Enable large page support"       OFF)
@@ -398,6 +399,25 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         )
         target_include_directories(pictor_fbx_viewer PRIVATE third_party/stb)
         target_link_libraries(pictor_fbx_viewer PRIVATE pictor)
+        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/pn_patch.cpp demo/<term-c01>/pn_model.cpp demo/<term-c01>/reconstruction.cpp)
+        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/pn_gpu_data.cpp demo/<term-c01>/raymarch_pass.cpp demo/<term-c01>/debug_hud.cpp)
+        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/motion_bridge.cpp)
+        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/frame_recording.cpp)
+        get_target_property(_fbx_viewer_sources pictor_fbx_viewer SOURCES)
+        add_executable(pictor_<term-c01>_demo ${_fbx_viewer_sources})
+        target_include_directories(pictor_<term-c01>_demo PRIVATE third_party/stb)
+        target_link_libraries(pictor_<term-c01>_demo PRIVATE pictor)
+        target_compile_definitions(pictor_<term-c01>_demo PRIVATE PICTOR_<term-c01>_DEMO=1)
+        if(PICTOR_BUILD_POLYNOMIAL_SDK)
+            include(cmake/PolynomialDemo.cmake)
+        endif()
+        if(MSVC)
+            # Both targets compile the same demo/fbx_viewer/main.cpp, which
+            # contains non-ASCII comments: /utf-8 must match on each or MSVC
+            # decodes those bytes with the local ANSI codepage.
+            target_compile_options(pictor_fbx_viewer PRIVATE /utf-8 /EHsc)
+            target_compile_options(pictor_<term-c01>_demo PRIVATE /utf-8 /EHsc)
+        endif()
     endif()
 
     if(Vulkan_FOUND AND glfw3_FOUND)
@@ -674,6 +694,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/graph/shaders/ui_rect.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.frag
+        ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/reconstruction.frag
+        ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray.vert
+        ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/fur_shell.vert
@@ -726,16 +749,23 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         get_filename_component(SHADER_NAME ${SHADER} NAME)
         set(SPIRV_OUT ${CMAKE_BINARY_DIR}/shaders/${SHADER_NAME}.spv)
         set(SHADER_DEPENDS ${SHADER} ${PICTOR_GLSL_INCLUDES})
+        set(SHADER_OPTIONS)
         if(SHADER MATCHES "/demo/shadow_play/shaders/")
             list(APPEND SHADER_DEPENDS ${PICTOR_SHADOW_PLAY_GLSL_INCLUDES})
         endif()
         if(SHADER MATCHES "/demo/fbx_viewer/shaders/")
             list(APPEND SHADER_DEPENDS ${PICTOR_FBX_VIEWER_GLSL_INCLUDES})
         endif()
+        if(SHADER MATCHES "/demo/<term-c01>/shaders/")
+            list(APPEND SHADER_OPTIONS -O)
+            list(APPEND SHADER_DEPENDS
+                ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray_common.glsl
+                ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray_distance.glsl)
+        endif()
         add_custom_command(
             OUTPUT ${SPIRV_OUT}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders
-            COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SPIRV_OUT}
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER_OPTIONS} ${SHADER} -o ${SPIRV_OUT}
             DEPENDS ${SHADER_DEPENDS}
             COMMENT "Compiling ${SHADER_NAME} -> SPIR-V"
         )
@@ -771,6 +801,9 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     endif()
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_shaders)
+    endif()
+    if(TARGET pictor_<term-c01>_demo)
+        add_dependencies(pictor_<term-c01>_demo pictor_shaders)
     endif()
     if(TARGET pictor_sharc_demo)
         add_dependencies(pictor_sharc_demo pictor_shaders)
