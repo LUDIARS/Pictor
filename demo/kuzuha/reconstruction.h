@@ -1,16 +1,19 @@
 #pragma once
 #include "pn_model.h"
 #include "raymarch_pass.h"
+#include "stage_orbit.h"
 #include <string>
 
 namespace pictor_kuzuha {
 struct Options {
     bool enabled=false, head=true;
     bool raymarch=true, auto_lod=true, animate_strength=false;
+    bool stage=false;
     unsigned factor=4, display=0;
     unsigned width=1280, height=720;
     float strength=1, yaw=90, zoom=1;
     std::string capture_directory, report;
+    std::string stage_orbit_curve;
 };
 // Consumes only reconstruction options; throws on missing/invalid values.
 bool parse_option(int argc,char** argv,int& index,Options& options);
@@ -20,6 +23,7 @@ public:
     pictor_fbx_viewer::PackedMesh rebuild();
     bool key(int code);
     void update(float dt);
+    void stage_time(float seconds) { stage_time_=seconds; }
     RaymarchParameters ray_parameters(unsigned width,unsigned height) const;
     void record_capture(uint32_t unresolved,float frame_ms) const;
     const PnModel& model() const { return model_; }
@@ -35,11 +39,13 @@ public:
 private:
     PnModel model_;
     Options options_;
+    StageOrbit stage_orbit_;
     RefinementStats stats_;
     bool dirty_=true;
     unsigned capture_index_=0;
     float height_=1, min_y_=0;
     float phase_=3.14159265f;
+    float stage_time_=0;
 };
 std::string first_capture(Options& options);
 }

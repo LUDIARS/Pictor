@@ -24,6 +24,11 @@ const char* captures[]{"source-head.bmp","pn-head.bmp","source-facets.bmp","pn-f
 /// @implements SPEC-PC-KUZUHA-RAYMARCH
 bool parse_option(int argc,char** argv,int& i,Options& o) {
     const std::string arg=argv[i];
+    if (arg=="--stage") { o.enabled=true;o.stage=true;return true; }
+    if (arg=="--stage-orbit-curve") {
+        if(++i>=argc) throw std::runtime_error("--stage-orbit-curve needs a file");
+        o.stage_orbit_curve=argv[i];o.enabled=true;o.stage=true;return true;
+    }
     if (arg=="--animate-interpolation") { o.enabled=true;o.animate_strength=true;return true; }
     if (arg=="--fixed-lod") { o.enabled=true;o.auto_lod=false;return true; }
     if (arg!="--pn-factor" && arg!="--pn-strength" && arg!="--view" && arg!="--yaw" &&
@@ -65,7 +70,7 @@ std::string first_capture(Options& o) {
 }
 /// @implements SPEC-PC-KUZUHA-RAYMARCH
 Reconstruction::Reconstruction(pictor_fbx_viewer::PackedMesh source,Options options)
-    :model_(std::move(source)),options_(std::move(options)) {
+    :model_(std::move(source)),options_(std::move(options)),stage_orbit_(options_.stage_orbit_curve) {
     min_y_=model_.source().vertices[0].position[1];float max_y=min_y_;
     for (const auto& v:model_.source().vertices) { min_y_=std::min(min_y_,v.position[1]);max_y=std::max(max_y,v.position[1]); }
     height_=max_y-min_y_;
@@ -117,9 +122,11 @@ void Reconstruction::update(float dt) {
 /// @implements SPEC-PC-KUZUHA-RAYMARCH
 void Reconstruction::camera(float eye[3],float center[3]) const {
     const auto& mesh=model_.source();
-    const float targetY=options_.head?min_y_+height_*.85f:mesh.center.y;
-    const float distance=(options_.head?height_*.43f:mesh.radius*2.6f)/options_.zoom;
-    const float angle=options_.yaw*3.14159265f/180;
+    const float targetY=options_.head?min_y_+height_*(options_.stage?.89f:.85f):mesh.center.y;
+    const float sweep=options_.stage?stage_orbit_.sample(stage_time_):0.f;
+    const float push=options_.stage?1.f+.10f*std::sin(stage_time_*.18f):1.f;
+    const float distance=(options_.head?height_*.43f:mesh.radius*2.6f)/(options_.zoom*push);
+    const float angle=(options_.yaw+12.f*sweep)*3.14159265f/180;
     center[0]=mesh.center.x;center[1]=targetY;center[2]=mesh.center.z;
     eye[0]=center[0]+distance*std::cos(angle);eye[1]=targetY+height_*.015f;eye[2]=center[2]+distance*std::sin(angle);
 }

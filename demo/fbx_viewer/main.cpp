@@ -1354,6 +1354,10 @@ public:
         return true;
     }
 
+    // Frames the exponential average needs before the first-sample warm-up
+    // outlier has decayed below a percent at kFrameSmoothing=0.9.
+    static constexpr uint32_t kFrameTimeWarmup = 45;
+
     void run() {
         auto t0 = std::chrono::steady_clock::now();
         auto prev = t0;
@@ -1384,7 +1388,9 @@ public:
             if (img_idx == UINT32_MAX) { handle_resize(); continue; }
             if (reconstruction_) unresolved_=raymarch_.begin_frame();
             if (reconstruction_) motion_.update(motion_dt,raymarch_);
-            update_uniforms(elapsed);
+            const float image_time=options_.recording.directory.empty()?elapsed:float(frame_index_)/options_.recording.fps;
+            if (reconstruction_) reconstruction_->stage_time(image_time);
+            update_uniforms(image_time);
             update_binding(elapsed);
             update_rope_tail();
             update_tears(elapsed);
@@ -1395,7 +1401,12 @@ public:
                 capture_pending_ = false;
                 const bool saved = capture_.finish(vk_.device(), vk_.graphics_queue(), vk_.swapchain_format());
                 if (reconstruction_ && !saved) throw std::runtime_error("Pictor frame capture failed");
-                if (reconstruction_) reconstruction_->record_capture(unresolved_,frame_ms_);
+                // frame_ms_ needs a few samples before the exponential average
+                // sheds the window-creation and pipeline warm-up outlier. Report
+                // it as unavailable rather than writing a warm-up number into the
+                // JSONL as if it were a steady-state measurement.
+                if (reconstruction_)
+                    reconstruction_->record_capture(unresolved_, frame_index_ >= kFrameTimeWarmup ? frame_ms_ : 0.0f);
                 motion_.record_capture();
                 std::string next;
                 const bool recording=!options_.recording.directory.empty();
@@ -2153,6 +2164,11 @@ private:
         float l = std::sqrt(ubo.light_dir[0]*ubo.light_dir[0] + ubo.light_dir[1]*ubo.light_dir[1] + ubo.light_dir[2]*ubo.light_dir[2]);
         ubo.light_dir[0] /= l; ubo.light_dir[1] /= l; ubo.light_dir[2] /= l;
         ubo.light_color[0] = 1.0f; ubo.light_color[1] = 0.97f; ubo.light_color[2] = 0.93f; ubo.light_color[3] = 0.3f;
+        // Stage mode is explicit; w carries the deterministic capture clock.
+        if (reconstruction_ && options_.reconstruction.stage) {
+            ubo.light_dir[3]=t;
+            ubo.light_color[3]=-1.f;
+        }
         ubo.camera_pos[0] = eye[0]; ubo.camera_pos[1] = eye[1]; ubo.camera_pos[2] = eye[2]; ubo.camera_pos[3] = 1.0f;
         camera_pos_ = {eye[0], eye[1], eye[2]};
         void* p = nullptr;
@@ -2300,6 +2316,7 @@ private:
 
         VkClearValue clears[2];
         clears[0].color = {{0.08f, 0.09f, 0.12f, 1.0f}};
+        if (options_.reconstruction.stage) clears[0].color={{.002f,.003f,.009f,1.f}};
         clears[1].depthStencil = {1.0f, 0};
 
         VkRenderPassBeginInfo rp{};
@@ -2370,8 +2387,10 @@ private:
 
         if (reconstruction_) {
             hud_.begin(cmd,ext);
-            pictor_kuzuha::draw_debug_hud(hud_,*reconstruction_,unresolved_,frame_ms_,ext.height,motion_.enabled());
-            motion_.draw_status(hud_);
+            if (!options_.reconstruction.stage) {
+                pictor_kuzuha::draw_debug_hud(hud_,*reconstruction_,unresolved_,frame_ms_,ext.height,motion_.enabled());
+                motion_.draw_status(hud_);
+            }
             hud_.end();
         }
         vkCmdEndRenderPass(cmd);
@@ -2615,6 +2634,10 @@ int main(int argc, char** argv) {
     if (positional.empty()) input_path=exe_dir/"model";
     if (positional.size()<2) shader_dir=(exe_dir/"shaders").string();
 #endif
+    if(options.reconstruction.stage && (!options.reconstruction.raymarch ||
+       options.reconstruction.display!=0 || !options.reconstruction.capture_directory.empty())) {
+        std::fprintf(stderr,"--stage requires textured raymarch and cannot use --capture-set\n");return 2;
+    }
     if(!options.recording.directory.empty()) {
         if(!options.capture_path.empty() || !options.reconstruction.capture_directory.empty()) {
             std::fprintf(stderr,"--record-frames cannot be combined with other capture options\n");return 2;

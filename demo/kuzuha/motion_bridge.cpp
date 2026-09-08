@@ -76,8 +76,12 @@ bool MotionBridge::key(int code) {
 void MotionBridge::draw_status(pictor::BitmapTextRenderer& text) const {
     if (!motion_) return;
     char status[1024]{};motion_->status(status,sizeof(status));status[sizeof(status)-1]=0;
+    // The status text comes from an external implementation, so its line count
+    // is not ours to trust. Stop before the block draw_debug_hud owns at the
+    // bottom of the screen rather than drawing off-screen over it.
+    constexpr unsigned kMaxLines=12;
     char* line=status;float y=326;
-    while (*line) {
+    for (unsigned drawn=0;*line && drawn<kMaxLines;++drawn) {
         char* end=std::strchr(line,'\n');if (end) *end=0;
         text.draw_text(17,y+1,line,0,0,0);text.draw_text(16,y,line,.9f,1.f,.65f);
         if (!end) break;line=end+1;y+=18;

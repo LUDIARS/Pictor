@@ -11,5 +11,5 @@
     {"pathPattern": "(^|/)tools/package_kuzuha_demo\\.ps1$"}
   ],
   "cardTemplate": "Explain cubic PN interpolation, conservative distance bounds, explicit unresolved rays, dynamic controls and GPU resource ownership.",
-  "specRefs": ["spec/feature/kuzuha-reconstruction.md", "spec/feature/kuzuha-raymarch.md", "spec/feature/polynomial-motion.md", "spec/setup/kuzuha-reconstruction.md"]
+  "specRefs": ["spec/feature/kuzuha-reconstruction.md", "spec/feature/kuzuha-raymarch.md", "spec/feature/polynomial-motion.md", "spec/feature/kuzuha-stage.md", "spec/setup/kuzuha-reconstruction.md"]
 }

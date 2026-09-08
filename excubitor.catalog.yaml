@@ -1,9 +1,67 @@
-# NOTE: the three pc-kuzuha-hair-* services below are placeholders for the
-# planned hair work (spec/tasks/20260908-polynomial-motion-hair.md). Neither
-# the pictor_kuzuha_hair_demo target nor the --hair-* options exist yet, so
-# these entries cannot be launched until that target lands. The pc-kuzuha-demo
-# and pc-kuzuha-capture services below are backed by this PR's build.
+# Hair services launch the native Pictor executable from the project main
+# folder. Candidate IDs are printed in the HUD/log; the selection service keeps
+# only the requested split tips independent.
 services:
+  - code: pc-kuzuha-stage-still
+    name: Kuzuha stage C production still
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-stage-demo/pictor_kuzuha_demo.exe
+    app_kind: native
+    exec_args:
+      - --stage
+      - --stage-orbit-curve
+      - ${ARS_ROOT}/Pictor/build/kuzuha-stage-demo/ks-turn-reference.txt
+      - --capture
+      - ${ARS_ROOT}/Pictor/build/kuzuha-stage-demo/stage-still.bmp
+      - --capture-frame
+      - '0'
+      - --window-width
+      - '800'
+      - --window-height
+      - '960'
+      - --zoom
+      - '1.05'
+      - --pn-factor
+      - '2'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-kuzuha-stage-video
+    name: Kuzuha stage C production frames
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-stage-demo/pictor_kuzuha_demo.exe
+    app_kind: native
+    exec_args:
+      - --stage
+      - --stage-orbit-curve
+      - ${ARS_ROOT}/Pictor/build/kuzuha-stage-demo/ks-turn-reference.txt
+      - --record-frames
+      - ${ARS_ROOT}/Pictor/build/kuzuha-stage-demo/stage-frames
+      - --record-count
+      - '432'
+      - --record-fps
+      - '24'
+      - --window-width
+      - '800'
+      - --window-height
+      - '960'
+      - --zoom
+      - '1.05'
+      - --pn-factor
+      - '2'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
   - code: pc-kuzuha-hair-video
     name: Pictor Kuzuha hair wind video frames
     project_code: Pc
@@ -65,6 +123,29 @@ services:
       - '4'
       - --pn-factor
       - '2'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-kuzuha-hair-select
+    name: Pictor Kuzuha selected independent hair tips
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/kuzuha-hair-demo/pictor_kuzuha_hair_demo.exe
+    app_kind: native
+    exec_args:
+      - --hair-warmup
+      - '2'
+      - --hair-independent
+      - '0,2,5'
+      - --hair-wind-sequence
+      - --pn-factor
+      - '2'
+      - --zoom
+      - '0.9'
     autostart: false
     restart_policy: 'no'
     health:

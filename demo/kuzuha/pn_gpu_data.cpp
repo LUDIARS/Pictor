@@ -84,6 +84,14 @@ std::vector<GpuPnPatch> make_gpu_patches(const PnModel& model) {
         out.uv2_bounds[3]=upward(delta);
         out.lower[3]=out.upper[3]=0;
     }
+    // Explicit source material groups; colour is not used to identify skin/hair.
+    for (const auto& sub:source.submeshes) {
+        const float kind=sub.texture_basename.find("Face")!=std::string::npos?1.f:
+            sub.texture_basename.find("Hair")!=std::string::npos?2.f:
+            sub.texture_basename.find("Crown")!=std::string::npos?3.f:4.f;
+        for (size_t t=sub.index_start/3;t<(sub.index_start+sub.index_count)/3;++t)
+            result.at(t).upper[3]=kind;
+    }
     return result;
 }
 /// @implements SPEC-PC-POLYNOMIAL-MOTION

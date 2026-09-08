@@ -760,7 +760,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
             list(APPEND SHADER_OPTIONS -O)
             list(APPEND SHADER_DEPENDS
                 ${CMAKE_SOURCE_DIR}/demo/kuzuha/shaders/pn_ray_common.glsl
-                ${CMAKE_SOURCE_DIR}/demo/kuzuha/shaders/pn_ray_distance.glsl)
+                ${CMAKE_SOURCE_DIR}/demo/kuzuha/shaders/pn_ray_distance.glsl
+                ${CMAKE_SOURCE_DIR}/demo/kuzuha/shaders/pn_stage.glsl)
         endif()
         add_custom_command(
             OUTPUT ${SPIRV_OUT}

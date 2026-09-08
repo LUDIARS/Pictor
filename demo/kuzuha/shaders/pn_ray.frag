@@ -6,6 +6,7 @@ layout(location=0) in flat uint patchIndex;
 layout(location=0) out vec4 outColor;
 layout(set=1,binding=0) uniform sampler2D uDiffuse;
 layout(std430,set=2,binding=1) buffer RayCounters { uint unresolved;uint spare0;uint spare1;uint spare2; };
+#include "pn_stage.glsl"
 
 void main() {
     PnData surface=patches[patchIndex];
@@ -38,6 +39,12 @@ void main() {
     if (!hit && !failed && t>end) discard;
     if (!hit) {
         // Budget exhaustion is visible and counted, never silently called MISS.
+        // Clamp t back into the marched interval: a failed march can leave t
+        // past `end`, which the shared depth test below would then reject,
+        // discarding the fragment after it was already counted. The counter and
+        // the magenta pixels must agree, or the HUD reports failures that are
+        // nowhere on screen.
+        t=clamp(t,nearPlane/axial,end);
         atomicAdd(unresolved,1);
         outColor=vec4(1.,0.,.65,1.);
     } else {
@@ -55,6 +62,8 @@ void main() {
         float key=max(dot(n,normalize(vec3(-.45,.7,.65))),0.);
         float fill=max(dot(n,normalize(vec3(.7,.2,-.5))),0.);
         outColor=vec4(base*(.27+.65*key+.18*fill),1.);
+        if (lightColor.w<0. && viewport.w==0.)
+            outColor=vec4(stageShade(base,n,cameraPos.xyz+t*direction,texUV,surface.upper.w),1.);
         if (viewport.w==3.) {
             float heat=clamp(float(steps)/80.,0.,1.);
             outColor=vec4(mix(vec3(.08,.3,.85),vec3(1.,.65,.05),heat),1.);
