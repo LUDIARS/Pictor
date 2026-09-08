@@ -11,5 +11,5 @@
     {"pathPattern": "(^|/)tools/package_<term-c01>_demo\\.ps1$"}
   ],
   "cardTemplate": "Explain cubic PN interpolation, conservative distance bounds, explicit unresolved rays, dynamic controls and GPU resource ownership.",
-  "specRefs": ["spec/feature/<term-c01>-reconstruction.md", "spec/feature/<term-c01>-raymarch.md", "spec/feature/polynomial-motion.md", "spec/setup/<term-c01>-reconstruction.md"]
+  "specRefs": ["spec/feature/<term-c01>-reconstruction.md", "spec/feature/<term-c01>-raymarch.md", "spec/feature/polynomial-motion.md", "spec/feature/<term-c01>-stage.md", "spec/setup/<term-c01>-reconstruction.md"]
 }

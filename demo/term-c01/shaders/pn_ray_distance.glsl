@@ -29,8 +29,12 @@ vec2 closestTriangle(vec3 point,vec3 a,vec3 b,vec3 c,out float distanceToTriangl
 // Lower bounds from ALL unpruned domains are retained, never only the nearest
 // surrogate. Upper bounds are evaluated actual PN points and used only for hits
 // and pruning; they are never used to advance the ray.
+// Capacity and the overflow guard below must stay in lockstep; a guard that
+// drifts from the array size is an out-of-bounds write in a shader, which most
+// drivers do not trap.
+#define PN_STACK_CAPACITY 28
 bool boundedDistance(PnData p,vec3 point,float epsilon,out float lower,out float upper,out vec2 bestUV) {
-    vec3 stack[28];int pending=1;stack[0]=vec3(0,0,1);
+    vec3 stack[PN_STACK_CAPACITY];int pending=1;stack[0]=vec3(0,0,1);
     lower=1e30;upper=1e30;bestUV=vec2(0);
     for (int visit=0;visit<768 && pending>0;++visit) {
         vec3 node=stack[--pending];vec2 origin=node.xy;float s=node.z;
@@ -50,7 +54,7 @@ bool boundedDistance(PnData p,vec3 point,float epsilon,out float lower,out float
         // Out of stack: the node cannot be refined, but its own bound is
         // already conservative. Retain it as a frontier leaf rather than
         // failing the pixel — a coarser step is correct, just slower.
-        if (pending+4>28) { lower=min(lower,bound);continue; }
+        if (pending+4>PN_STACK_CAPACITY) { lower=min(lower,bound);continue; }
         float h=s*.5;
         stack[pending++]=vec3(origin+vec2(h,h),-h);
         stack[pending++]=vec3(origin+vec2(0,h),h);

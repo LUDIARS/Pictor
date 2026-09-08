@@ -1,9 +1,67 @@
-# NOTE: the three pc-<term-c01>-hair-* services below are placeholders for the
-# planned hair work (spec/tasks/20260908-polynomial-motion-hair.md). Neither
-# the pictor_<term-c01>_hair_demo target nor the --hair-* options exist yet, so
-# these entries cannot be launched until that target lands. The pc-<term-c01>-demo
-# and pc-<term-c01>-capture services below are backed by this PR's build.
+# Hair services launch the native Pictor executable from the project main
+# folder. Candidate IDs are printed in the HUD/log; the selection service keeps
+# only the requested split tips independent.
 services:
+  - code: pc-<term-c01>-stage-still
+    name: <term-c01> stage C production still
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/<term-c01>-stage-demo/pictor_<term-c01>_demo.exe
+    app_kind: native
+    exec_args:
+      - --stage
+      - --stage-orbit-curve
+      - ${ARS_ROOT}/Pictor/build/<term-c01>-stage-demo/ks-turn-reference.txt
+      - --capture
+      - ${ARS_ROOT}/Pictor/build/<term-c01>-stage-demo/stage-still.bmp
+      - --capture-frame
+      - '0'
+      - --window-width
+      - '800'
+      - --window-height
+      - '960'
+      - --zoom
+      - '1.05'
+      - --pn-factor
+      - '2'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-<term-c01>-stage-video
+    name: <term-c01> stage C production frames
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/<term-c01>-stage-demo/pictor_<term-c01>_demo.exe
+    app_kind: native
+    exec_args:
+      - --stage
+      - --stage-orbit-curve
+      - ${ARS_ROOT}/Pictor/build/<term-c01>-stage-demo/ks-turn-reference.txt
+      - --record-frames
+      - ${ARS_ROOT}/Pictor/build/<term-c01>-stage-demo/stage-frames
+      - --record-count
+      - '432'
+      - --record-fps
+      - '24'
+      - --window-width
+      - '800'
+      - --window-height
+      - '960'
+      - --zoom
+      - '1.05'
+      - --pn-factor
+      - '2'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
   - code: pc-<term-c01>-hair-video
     name: Pictor <term-c01> hair wind video frames
     project_code: Pc
@@ -65,6 +123,29 @@ services:
       - '4'
       - --pn-factor
       - '2'
+    autostart: false
+    restart_policy: 'no'
+    health:
+      type: process
+  - code: pc-<term-c01>-hair-select
+    name: Pictor <term-c01> selected independent hair tips
+    project_code: Pc
+    tier: local-app
+    repo: LUDIARS/Pictor
+    runtime: app
+    cwd: ${ARS_ROOT}/Pictor
+    exec: ${ARS_ROOT}/Pictor/build/<term-c01>-hair-demo/pictor_<term-c01>_hair_demo.exe
+    app_kind: native
+    exec_args:
+      - --hair-warmup
+      - '2'
+      - --hair-independent
+      - '0,2,5'
+      - --hair-wind-sequence
+      - --pn-factor
+      - '2'
+      - --zoom
+      - '0.9'
     autostart: false
     restart_policy: 'no'
     health:
