@@ -3,6 +3,13 @@
 モバイル対応の現状・実装課題・設計。 総括は [../portability.md](../portability.md)、
 ビルド手順の詳細は `docs/android-build.md` (Issue #47 の段階計画) を参照。
 
+2026-09-10 更新: iOS の完成形はユーザー指示によりネイティブ Metal とする。
+以下の MoltenVK 記述は既存実装の現状であり、今後の採用方針ではない。
+Android Vulkan / iOS Metal / Windows DirectX 12 の共通フレーム結果と lifecycle
+を先行実装中。範囲・移行制約・残作業は
+[第1段階 task](../../tasks/2026-09-10-native-backend-frame-contract.md) を参照。
+ネイティブ Metal / DirectX 12 描画および実機検証はまだ完了していない。
+
 ---
 
 ## 1. 現状 (実装済みの範囲)
@@ -32,7 +39,7 @@
 - swapchain 再生成は `VK_ERROR_OUT_OF_DATE_KHR` / `SUBOPTIMAL` で実装済み
   (`vulkan_context.cpp:124-129, 168-169`)。
 
-### ライフサイクル — 実装済み・実機配線なし・テストなし
+### ライフサイクル — 実装済み・実機配線なし
 
 - `MobileLifecycleController` (D-1 切り出し):
   pause / resume / suspend / surface lost-regain / low-memory / thermal の
@@ -42,8 +49,9 @@
 - host が提供する Hooks: `current_frame` / `flush_frame_allocator` /
   `active_profile` / `switch_profile` (`mobile_lifecycle_controller.h:19-24`)。
   swapchain 再生成は host 責務 (`mobile_lifecycle.h:20-21`)。
-- 演習は `demo/mobile/main.cpp` (シミュレーション) のみ。 **ユニットテスト無し**
-  (かつモバイルビルドはテスト除外)。
+- `unit_frame_contract_test` で app activity / surface のイベント順序と
+  未初期化 frame API を headless 検査する。モバイルビルドではテストが
+  除外され、実機の surface/device loss 復旧は未検査。
 
 ### メモリ / SIMD — 部分実装
 
@@ -66,7 +74,7 @@
 | M-P2 | **JNI / Gradle (Phase 2-3) 未実装** | `android/` ディレクトリ・GameActivity 配線なし | 実機で動かす入口が無い |
 | M-P3 | **GPU プール予算がデスクトップ固定** | 既定 ~528MB (`gpu_memory_allocator.h:23-27`)、 profile から注入不可 | ローエンド機で確保失敗 (今回の autofix で失敗検出は入ったが、 予算調整手段が無い) |
 | M-P4 | **UMA Direct アップロード実コピー未実装** | uploader はスタブ (uma_memory.md:41-46) | モバイル (全機 UMA) で staging 二度書きの帯域損 |
-| M-P5 | **lifecycle のテスト不在** | tests/ に該当なし + モバイルビルドはテスト除外 | thermal 自動ダウングレード等の回帰が守られない (実際 2026-07-09 に空文字 sentinel バグを修正した) |
+| M-P5 | **lifecycle のテスト範囲が部分的** | `unit_frame_contract_test` はイベント順序を検査するが、モバイルビルドはテスト除外 | thermal 自動ダウングレードと実機連携の回帰はまだ守られない |
 | M-P6 | **c_api にモバイル入口なし** | c_api.cpp に lifecycle / surface 系シンボル 0 件 | JNI から C API 経由で叩けない (C++ API 直結が必要になる) |
 | M-P7 | **HW カウンタは Intel PCM (x86) のみ** | `hardware_counters.cpp:43-47` | モバイルでは Null provider に degrade (正直だが計測不能) |
 | M-P8 | **`MemoryConfig::use_large_pages` が虚偽 API** | serialize されるが runtime 未参照 (review L-8) | プロファイルで設定しても効かない |

@@ -52,6 +52,9 @@ private:
     Hooks                     hooks_;
     MobileAutoDowngradePolicy policy_;
     MobileLifecycleSnapshot   snapshot_{};
+    // App activity and surface availability are independent OS event streams.
+    LifecycleState            app_lifecycle_ = LifecycleState::ACTIVE;
+    bool                      surface_available_ = true;
     IMobileLifecycleObserver* observer_ = nullptr;
     /// 自動ダウングレード前に active だったプロファイル。
     /// 空文字はダウングレード状態の判定に使わない (active_profile() が空を

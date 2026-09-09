@@ -39,6 +39,7 @@ set(PICTOR_TESTS
     unit_gpu_ring_flight_test
     unit_swapchain_per_image_pool_test
     unit_gpu_timer_test
+    unit_frame_contract_test
     unit_animation_stub_contract_test
     unit_public_animation_header_test
     pixel_text_test

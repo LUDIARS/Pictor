@@ -51,26 +51,29 @@ void MobileLifecycleController::transition_thermal_(ThermalState next) {
 }
 
 void MobileLifecycleController::on_pause() {
-    if (snapshot_.lifecycle == LifecycleState::SURFACE_LOST) return; // stricter wins
-    transition_lifecycle_(LifecycleState::PAUSED);
+    app_lifecycle_ = LifecycleState::PAUSED;
+    if (surface_available_) transition_lifecycle_(app_lifecycle_);
 }
 
 void MobileLifecycleController::on_resume() {
-    if (snapshot_.lifecycle == LifecycleState::SURFACE_LOST) return; // wait for regain
-    transition_lifecycle_(LifecycleState::ACTIVE);
+    app_lifecycle_ = LifecycleState::ACTIVE;
+    if (surface_available_) transition_lifecycle_(app_lifecycle_);
 }
 
 void MobileLifecycleController::on_suspend() {
-    transition_lifecycle_(LifecycleState::SUSPENDED);
+    app_lifecycle_ = LifecycleState::SUSPENDED;
+    if (surface_available_) transition_lifecycle_(app_lifecycle_);
 }
 
 void MobileLifecycleController::on_surface_lost() {
+    surface_available_ = false;
     transition_lifecycle_(LifecycleState::SURFACE_LOST);
 }
 
 void MobileLifecycleController::on_surface_regained() {
-    if (snapshot_.lifecycle != LifecycleState::SURFACE_LOST) return;
-    transition_lifecycle_(LifecycleState::ACTIVE);
+    if (surface_available_) return;
+    surface_available_ = true;
+    transition_lifecycle_(app_lifecycle_);
 }
 
 void MobileLifecycleController::on_low_memory(MemoryPressure level) {
