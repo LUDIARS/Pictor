@@ -4,11 +4,13 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
+    { "pathPattern": "(^|/)browser/" },
     {
       "pathPattern": "(^|/)src/webgl/[^/]+$"
     },
     {
       "pathPattern": "(^|/)include/pictor/webgl/[^/]+$"
     }
-  ]
+  ],
+  "specRefs": ["spec/feature/browser-mesh-api.md"]
 }
