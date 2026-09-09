@@ -1,0 +1,9 @@
+{
+  "name": "@ludiars/pictor-browser",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pictor browser mesh rendering backend",
+  "license": "MIT",
+  "exports": { ".": { "types": "./index.d.ts", "import": "./index.js" } },
+  "files": ["index.js", "index.d.ts", "mesh-program.js", "README.md", "LICENSE"]
+}
