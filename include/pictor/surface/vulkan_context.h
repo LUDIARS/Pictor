@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "pictor/surface/surface_provider.h"
+#include "pictor/surface/frame_result.h"
 #include "pictor/surface/per_image_resource_pool.h"
 #include "pictor/surface/vulkan_per_image_backend.h"
 #include "pictor/core/device_memory_profile.h"
@@ -71,6 +72,19 @@ public:
 
     /// Present the given swapchain image.
     bool present(uint32_t image_index);
+
+    /// Typed equivalents of the legacy acquire/present API. Resize retains the
+    /// existing automatic recreation behavior. Only has_image() permits submit.
+    /// Native surface/device loss requires host-owned resource teardown followed
+    /// by explicit context reinitialization; these methods do not retry it.
+    FrameResult acquire_frame() {
+        acquire_next_image();
+        return last_frame_result_;
+    }
+    FrameResult present_frame(uint32_t image_index) {
+        present(image_index);
+        return last_frame_result_;
+    }
 
     /// Wait for device idle.
     void device_wait_idle();
@@ -215,6 +229,7 @@ private:
 #endif
 
     bool initialized_ = false;
+    FrameResult last_frame_result_{};
 };
 
 } // namespace pictor

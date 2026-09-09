@@ -1,11 +1,13 @@
 ﻿#include "pictor/surface/vulkan_context.h"
 
+#include <cstdio>
+
 #ifdef PICTOR_HAS_VULKAN
 
 #include "pictor/surface/vk_result.h"
+#include "vulkan_frame_result.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -25,6 +27,25 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
     return VK_FALSE;
 }
 
+template <typename T, typename Query>
+VkResult enumerate_vulkan_values(Query&& query, std::vector<T>& values) {
+    for (;;) {
+        uint32_t count = 0;
+        VkResult result = VK_CHECK(query(&count, nullptr));
+        if (result != VK_SUCCESS) return result;
+
+        values.resize(count);
+        if (count == 0) return VK_SUCCESS;
+
+        result = query(&count, values.data());
+        if (result == VK_INCOMPLETE) continue;
+
+        result = VK_CHECK(result);
+        if (result == VK_SUCCESS) values.resize(count);
+        return result;
+    }
+}
+
 // ---------- public ----------
 
 VulkanContext::VulkanContext() = default;
@@ -36,6 +57,7 @@ VulkanContext::~VulkanContext() {
 bool VulkanContext::initialize(ISurfaceProvider* provider,
                                const VulkanContextConfig& cfg)
 {
+    if (instance_ || device_) return false;
     if (!provider) return false;
     provider_ = provider;
 
@@ -74,6 +96,7 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     }
 
     initialized_ = true;
+    last_frame_result_ = {FrameStatus::Ready};
     return true;
 }
 
@@ -119,19 +142,40 @@ void VulkanContext::shutdown() {
     provider_ = nullptr;
 
     initialized_ = false;
+    last_frame_result_ = {};
 }
 
 bool VulkanContext::recreate_swapchain() {
+    if (!initialized_ || !device_ || !provider_) return false;
+    if (last_frame_result_.status == FrameStatus::DeviceLost ||
+        last_frame_result_.status == FrameStatus::SurfaceLost ||
+        last_frame_result_.status == FrameStatus::Error) return false;
+    if (provider_->get_native_handle().type == NativeWindowHandle::Type::None) {
+        last_frame_result_ = {FrameStatus::SurfaceLost};
+        return false;
+    }
     // GPU が旧 swapchain / 旧 per-image リソースを使い終わるまで待つ。
     // これ以降、 旧リソースの解放は安全。
-    vkDeviceWaitIdle(device_);
+    const VkResult idle = VK_CHECK(vkDeviceWaitIdle(device_));
+    if (idle != VK_SUCCESS) {
+        last_frame_result_ = {vulkan_frame_status(idle)};
+        return false;
+    }
     cleanup_swapchain();
 
-    if (!create_swapchain())    { discard_swapchain_resources(); return false; }
-    if (!create_image_views())  { discard_swapchain_resources(); return false; }
+    const auto failed = [this]() {
+        discard_swapchain_resources();
+        if (last_frame_result_.status != FrameStatus::DeviceLost &&
+            last_frame_result_.status != FrameStatus::SurfaceLost) {
+            last_frame_result_ = {FrameStatus::Error};
+        }
+        return false;
+    };
+    if (!create_swapchain())    return failed();
+    if (!create_image_views())  return failed();
     if (create_default_rp_on_init_) {
-        if (!create_render_pass())  { discard_swapchain_resources(); return false; }
-        if (!create_framebuffers()) { discard_swapchain_resources(); return false; }
+        if (!create_render_pass())  return failed();
+        if (!create_framebuffers()) return failed();
     }
 
     // swapchain image 数は再生成で変わりうる (present mode / surface
@@ -139,7 +183,7 @@ bool VulkanContext::recreate_swapchain() {
     // リソースを新しい個数へ作り直さないと、 consumer の
     // command_buffers()[image_index] や present() の render-finished
     // セマフォ参照が配列外になる。
-    if (!rebuild_per_image_resources()) { discard_swapchain_resources(); return false; }
+    if (!rebuild_per_image_resources()) return failed();
 
     // 新しい image 集合に対する acquire 履歴は無い。 添字を先頭へ戻す。
     last_acquired_image_ = 0;
@@ -147,10 +191,23 @@ bool VulkanContext::recreate_swapchain() {
 }
 
 uint32_t VulkanContext::acquire_next_image() {
-    // 再生成に失敗して discard_swapchain_resources() が走ったあとは swapchain も
-    // per-image リソースも空。 このまま vkAcquireNextImageKHR を呼ぶと NULL
-    // swapchain を渡すことになるので、 このフレームは描かず再生成を試みる。
+    if (!initialized_) {
+        last_frame_result_ = {};
+        return UINT32_MAX;
+    }
+    // A native loss is sticky until the host explicitly reinitializes. Retrying
+    // acquire on the old surface/device cannot restore its native ownership.
+    if (last_frame_result_.status == FrameStatus::DeviceLost ||
+        last_frame_result_.status == FrameStatus::SurfaceLost ||
+        last_frame_result_.status == FrameStatus::Error) return UINT32_MAX;
+    if (provider_->get_native_handle().type == NativeWindowHandle::Type::None) {
+        last_frame_result_ = {FrameStatus::SurfaceLost};
+        return UINT32_MAX;
+    }
+    // An empty swapchain cannot be acquired. Explicit failures above remain
+    // latched; only an otherwise healthy context may enter resize recovery.
     if (swapchain_ == VK_NULL_HANDLE || per_image_.empty()) {
+        last_frame_result_ = {FrameStatus::RecreateSwapchain};
         recreate_swapchain();
         return UINT32_MAX;
     }
@@ -158,7 +215,11 @@ uint32_t VulkanContext::acquire_next_image() {
     // 現在の flight の fence を待つ — これが「CPU が GPU に対して何フレーム
     // 先行できるか」を frames_in_flight_ 段に制限する (Q-3)。
     VkFence flight_fence = in_flight_fences_[current_frame_];
-    VK_CHECK(vkWaitForFences(device_, 1, &flight_fence, VK_TRUE, UINT64_MAX));
+    const VkResult waited = VK_CHECK(vkWaitForFences(device_, 1, &flight_fence, VK_TRUE, UINT64_MAX));
+    if (waited != VK_SUCCESS) {
+        last_frame_result_ = {vulkan_frame_status(waited)};
+        return UINT32_MAX;
+    }
 
     uint32_t index = 0;
     VkResult result = VK_CHECK(vkAcquireNextImageKHR(
@@ -166,6 +227,7 @@ uint32_t VulkanContext::acquire_next_image() {
         image_available_sems_[current_frame_], VK_NULL_HANDLE, &index));
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        last_frame_result_ = {FrameStatus::RecreateSwapchain};
         // No queue submit will follow this frame, so the fence must stay
         // signaled — resetting it here (as the old code did before acquire)
         // left it unsignaled with nothing to signal it, deadlocking the next
@@ -178,6 +240,7 @@ uint32_t VulkanContext::acquire_next_image() {
     // fence は signaled のまま温存し (OUT_OF_DATE と同様)、 次フレームの待機が
     // デッドロックしないようにする (Q-M3)。 SUBOPTIMAL は image 有効なので継続。
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        last_frame_result_ = {vulkan_frame_status(result)};
         return UINT32_MAX;
     }
 
@@ -188,22 +251,43 @@ uint32_t VulkanContext::acquire_next_image() {
     // 範囲外 index は null fence として返るので配列外アクセスにならない。
     VkFence image_fence = per_image_.in_flight_fence(index);
     if (image_fence != VK_NULL_HANDLE && image_fence != flight_fence) {
-        VK_CHECK(vkWaitForFences(device_, 1, &image_fence, VK_TRUE, UINT64_MAX));
+        const VkResult image_waited = VK_CHECK(vkWaitForFences(device_, 1, &image_fence, VK_TRUE, UINT64_MAX));
+        if (image_waited != VK_SUCCESS) {
+            last_frame_result_ = {vulkan_frame_status(image_waited)};
+            return UINT32_MAX;
+        }
     }
     per_image_.set_in_flight_fence(index, flight_fence);
     last_acquired_image_ = index;
 
     // Image acquired; a submit signaling flight_fence will follow, so it is
     // safe to reset the fence now (must happen before that submit).
-    VK_CHECK(vkResetFences(device_, 1, &flight_fence));
+    const VkResult reset = VK_CHECK(vkResetFences(device_, 1, &flight_fence));
+    if (reset != VK_SUCCESS) {
+        last_frame_result_ = {vulkan_frame_status(reset)};
+        return UINT32_MAX;
+    }
+    last_frame_result_ = {FrameStatus::Ready, index, result == VK_SUBOPTIMAL_KHR};
     return index;
 }
 
 bool VulkanContext::present(uint32_t image_index) {
+    if (!initialized_) {
+        last_frame_result_ = {};
+        return false;
+    }
+    if (last_frame_result_.status == FrameStatus::DeviceLost ||
+        last_frame_result_.status == FrameStatus::SurfaceLost ||
+        last_frame_result_.status == FrameStatus::Error) return false;
+    if (provider_->get_native_handle().type == NativeWindowHandle::Type::None) {
+        last_frame_result_ = {FrameStatus::SurfaceLost};
+        return false;
+    }
     // present は「その image を描き終えた」render-finished セマフォ (image 単位) を待つ。
     // セマフォは per_image_ が swapchain image 数と同じ個数で保持している。
     VkSemaphore wait_sem = per_image_.render_finished(image_index);
     if (wait_sem == VK_NULL_HANDLE) {
+        last_frame_result_ = {FrameStatus::RecreateSwapchain};
         // 再生成直後などで image_index が現在の image 集合の範囲外。 present を
         // 投げると未定義動作なので、 このフレームは捨てる。
         fprintf(stderr, "[Pictor] present: stale image index %u (swapchain has %u images)\n",
@@ -231,6 +315,8 @@ bool VulkanContext::present(uint32_t image_index) {
     info.pImageIndices      = &image_index;
 
     VkResult result = VK_CHECK(vkQueuePresentKHR(present_queue_, &info));
+    // Present consumes the frame; it never returns an acquired image index.
+    last_frame_result_ = {vulkan_frame_status(result)};
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         recreate_swapchain();
     }
@@ -347,6 +433,7 @@ bool VulkanContext::create_instance(const VulkanContextConfig& cfg) {
 
 bool VulkanContext::create_surface() {
     auto handle = provider_->get_native_handle();
+    if (handle.type == NativeWindowHandle::Type::None) return false;
 
     switch (handle.type) {
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -633,25 +720,37 @@ bool VulkanContext::create_logical_device() {
 
 bool VulkanContext::create_swapchain() {
     VkSurfaceCapabilitiesKHR caps;
-    if (VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-            physical_device_, surface_, &caps)) != VK_SUCCESS) {
+    const VkResult capabilities = VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+        physical_device_, surface_, &caps));
+    if (capabilities != VK_SUCCESS) {
+        last_frame_result_ = {vulkan_frame_status(capabilities)};
         return false;
     }
 
-    uint32_t fmt_count = 0;
-    VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &fmt_count, nullptr));
-    std::vector<VkSurfaceFormatKHR> formats(fmt_count);
-    VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &fmt_count, formats.data()));
+    const auto succeeded = [this](VkResult result) {
+        if (result == VK_SUCCESS) return true;
+        last_frame_result_ = {vulkan_frame_status(result)};
+        return false;
+    };
+    std::vector<VkSurfaceFormatKHR> formats;
+    if (!succeeded(enumerate_vulkan_values(
+            [this](uint32_t* count, VkSurfaceFormatKHR* values) {
+                return vkGetPhysicalDeviceSurfaceFormatsKHR(
+                    physical_device_, surface_, count, values);
+            }, formats))) return false;
 
-    uint32_t pm_count = 0;
-    VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &pm_count, nullptr));
-    std::vector<VkPresentModeKHR> present_modes(pm_count);
-    VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &pm_count, present_modes.data()));
+    std::vector<VkPresentModeKHR> present_modes;
+    if (!succeeded(enumerate_vulkan_values(
+            [this](uint32_t* count, VkPresentModeKHR* values) {
+                return vkGetPhysicalDeviceSurfacePresentModesKHR(
+                    physical_device_, surface_, count, values);
+            }, present_modes))) return false;
 
     // surface format / present mode が 0 件だと formats[0] が UB (Q-M5)。
-    if (fmt_count == 0 || pm_count == 0) {
+    if (formats.empty() || present_modes.empty()) {
         fprintf(stderr, "[Pictor] Surface reports no formats (%u) or present modes (%u)\n",
-                fmt_count, pm_count);
+                static_cast<uint32_t>(formats.size()),
+                static_cast<uint32_t>(present_modes.size()));
         return false;
     }
 
@@ -724,14 +823,17 @@ bool VulkanContext::create_swapchain() {
     sc_info.clipped          = VK_TRUE;
     sc_info.oldSwapchain     = VK_NULL_HANDLE;
 
-    if (vkCreateSwapchainKHR(device_, &sc_info, nullptr, &swapchain_) != VK_SUCCESS) {
+    const VkResult created = VK_CHECK(vkCreateSwapchainKHR(device_, &sc_info, nullptr, &swapchain_));
+    if (created != VK_SUCCESS) {
+        last_frame_result_ = {vulkan_frame_status(created)};
         fprintf(stderr, "[Pictor] Failed to create swapchain\n");
         return false;
     }
 
-    vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
-    swapchain_images_.resize(image_count);
-    vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data());
+    if (!succeeded(enumerate_vulkan_values(
+            [this](uint32_t* count, VkImage* values) {
+                return vkGetSwapchainImagesKHR(device_, swapchain_, count, values);
+            }, swapchain_images_))) return false;
 
     provider_->on_swapchain_created(swapchain_extent_.width, swapchain_extent_.height);
     return true;
