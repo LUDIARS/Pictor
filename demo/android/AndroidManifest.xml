@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ludiars.pictor.demos" android:versionCode="1" android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34" />
+  <uses-feature android:name="android.hardware.vulkan.version" android:version="4202496" android:required="true" />
+  <application android:label="Pictor Demos" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false" android:extractNativeLibs="true">
+    <activity android:name=".RenderActivity" android:exported="false" />
+    <activity android:name=".DemoActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
