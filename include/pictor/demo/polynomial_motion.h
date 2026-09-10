@@ -39,6 +39,9 @@ public:
     virtual void command(MotionCommand command)=0;
     virtual void status(char* destination,size_t capacity) const=0;
     virtual void record_capture() const=0;
+    // Translation of eye and target for the currently sampled world-space pose.
+    // Never apply this to geometry. Rebuild consumers after interface changes.
+    virtual float3 camera_translation() const { return {}; }
 };
 // Blocking native viewer. The caller owns motion until the function returns.
 // Available through the optional installed PictorDemo package.

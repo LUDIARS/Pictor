@@ -1388,6 +1388,7 @@ public:
             if (img_idx == UINT32_MAX) { handle_resize(); continue; }
             if (reconstruction_) unresolved_=raymarch_.begin_frame();
             if (reconstruction_) motion_.update(motion_dt,raymarch_);
+            if (reconstruction_) reconstruction_->camera_translation(motion_.camera_translation());
             const float image_time=options_.recording.directory.empty()?elapsed:float(frame_index_)/options_.recording.fps;
             if (reconstruction_) reconstruction_->stage_time(image_time);
             update_uniforms(image_time);

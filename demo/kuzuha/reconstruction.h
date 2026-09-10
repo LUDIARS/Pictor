@@ -8,7 +8,7 @@ namespace pictor_kuzuha {
 struct Options {
     bool enabled=false, head=true;
     bool raymarch=true, auto_lod=true, animate_strength=false;
-    bool stage=false;
+    bool stage=false, stage_fixed_camera=false;
     unsigned factor=4, display=0;
     unsigned width=1280, height=720;
     float strength=1, yaw=90, zoom=1;
@@ -24,6 +24,7 @@ public:
     bool key(int code);
     void update(float dt);
     void stage_time(float seconds) { stage_time_=seconds; }
+    void camera_translation(pictor::float3 offset) { camera_translation_=offset; }
     RaymarchParameters ray_parameters(unsigned width,unsigned height) const;
     void record_capture(uint32_t unresolved,float frame_ms) const;
     const PnModel& model() const { return model_; }
@@ -46,6 +47,7 @@ private:
     float height_=1, min_y_=0;
     float phase_=3.14159265f;
     float stage_time_=0;
+    pictor::float3 camera_translation_{};
 };
 std::string first_capture(Options& options);
 }

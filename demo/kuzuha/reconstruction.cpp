@@ -25,6 +25,7 @@ const char* captures[]{"source-head.bmp","pn-head.bmp","source-facets.bmp","pn-f
 bool parse_option(int argc,char** argv,int& i,Options& o) {
     const std::string arg=argv[i];
     if (arg=="--stage") { o.enabled=true;o.stage=true;return true; }
+    if (arg=="--stage-fixed-camera") { o.enabled=true;o.stage=true;o.stage_fixed_camera=true;return true; }
     if (arg=="--stage-orbit-curve") {
         if(++i>=argc) throw std::runtime_error("--stage-orbit-curve needs a file");
         o.stage_orbit_curve=argv[i];o.enabled=true;o.stage=true;return true;
@@ -123,12 +124,18 @@ void Reconstruction::update(float dt) {
 void Reconstruction::camera(float eye[3],float center[3]) const {
     const auto& mesh=model_.source();
     const float targetY=options_.head?min_y_+height_*(options_.stage?.89f:.85f):mesh.center.y;
-    const float sweep=options_.stage?stage_orbit_.sample(stage_time_):0.f;
-    const float push=options_.stage?1.f+.10f*std::sin(stage_time_*.18f):1.f;
+    const bool moving=options_.stage&&!options_.stage_fixed_camera;
+    const float sweep=moving?stage_orbit_.sample(stage_time_):0.f;
+    const float push=moving?1.f+.10f*std::sin(stage_time_*.18f):1.f;
     const float distance=(options_.head?height_*.43f:mesh.radius*2.6f)/(options_.zoom*push);
     const float angle=(options_.yaw+12.f*sweep)*3.14159265f/180;
     center[0]=mesh.center.x;center[1]=targetY;center[2]=mesh.center.z;
     eye[0]=center[0]+distance*std::cos(angle);eye[1]=targetY+height_*.015f;eye[2]=center[2]+distance*std::sin(angle);
+    const float offset[3]={camera_translation_.x,camera_translation_.y,camera_translation_.z};
+    for(unsigned i=0;i<3;++i){
+        if(!std::isfinite(offset[i]))throw std::runtime_error("Nonfinite camera translation");
+        eye[i]+=offset[i];center[i]+=offset[i];
+    }
 }
 /// @implements SPEC-PC-KUZUHA-RAYMARCH
 RaymarchParameters Reconstruction::ray_parameters(unsigned width,unsigned height) const {
@@ -155,6 +162,9 @@ std::string Reconstruction::title() const {
 }
 /// @implements SPEC-PC-KUZUHA-RAYMARCH
 void Reconstruction::record_capture(uint32_t unresolved,float frame_ms) const {
+    float eye[3],target[3];camera(eye,target);
+    std::printf("[Camera capture] time=%.6f eye=%.6f,%.6f,%.6f target=%.6f,%.6f,%.6f\n",
+        stage_time_,eye[0],eye[1],eye[2],target[0],target[1],target[2]);
     std::printf("[PN capture] renderer=%s alpha=%.3f tolerance=%.3fpx auto_lod=%d unresolved_previous_frame=%u frame_ms=%.3f\n",
         options_.raymarch?"raymarch":"raster",options_.strength,pixel_tolerance(),options_.auto_lod,unresolved,frame_ms);
     if (options_.report.empty()) return;
