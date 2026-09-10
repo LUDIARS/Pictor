@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef PICTOR_HAS_POSTPROCESS
+#error "Link Pictor::postprocess to use this optional module"
+#endif
+
 /// PostProcessChain — 任意 post-process pass を挿入できる汎用チェーン記述.
 ///
 /// 背景 (`spec/rendering-extensibility-design.md` §6.3, phase 2 項目1):

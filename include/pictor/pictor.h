@@ -58,7 +58,9 @@
 
 // Post-process pipeline (host-driven, real Vulkan)
 #include "pictor/postprocess/postprocess_effect.h"
+#ifdef PICTOR_HAS_POSTPROCESS
 #include "pictor/postprocess/postprocess_pipeline.h"
+#endif
 
 // Surface abstraction
 #include "pictor/surface/surface_provider.h"

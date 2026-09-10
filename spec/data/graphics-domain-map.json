@@ -1,0 +1,521 @@
+{
+  "version": 1,
+  "ux": "DoDのモダンなレンダリングフレームワーク",
+  "cores": [
+    {
+      "id": "dod",
+      "name": "DoDによる高速描画"
+    },
+    {
+      "id": "platform",
+      "name": "Web/PC/Android/iOSのマルチプラットフォーム"
+    },
+    {
+      "id": "pipeline",
+      "name": "フレキシブルレンダーパイプライン"
+    },
+    {
+      "id": "high",
+      "name": "ハイグラフィック"
+    },
+    {
+      "id": "general",
+      "name": "汎用グラフィクス"
+    },
+    {
+      "id": "post",
+      "name": "ポストプロセス"
+    },
+    {
+      "id": "vector",
+      "name": "モダンなベクター処理"
+    },
+    {
+      "id": "dev",
+      "name": "開発支援"
+    }
+  ],
+  "businessDomains": [
+    {
+      "id": "scene-composition",
+      "name": "シーンと描画オブジェクト管理",
+      "cores": [
+        "dod"
+      ],
+      "modules": [
+        {
+          "name": "scene-composition-implementation",
+          "description": "シーンと描画オブジェクト管理",
+          "paths": [
+            "(^|/)src/scene/[^/]+$",
+            "(^|/)include/pictor/scene/[^/]+$",
+            "(^|/)src/update/[^/]+$",
+            "(^|/)include/pictor/update/[^/]+$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "memory-management",
+      "name": "描画メモリ管理",
+      "cores": [
+        "dod"
+      ],
+      "modules": [
+        {
+          "name": "memory-management-implementation",
+          "description": "描画メモリ管理",
+          "paths": [
+            "(^|/)src/memory/[^/]+$",
+            "(^|/)include/pictor/memory/[^/]+$",
+            "(^|/)tests/unit_(?:frame_allocator|device_memory_profile|cache_info)_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "draw-batching",
+      "name": "描画バッチ化",
+      "cores": [
+        "dod"
+      ],
+      "modules": [
+        {
+          "name": "draw-batching-implementation",
+          "description": "描画バッチ化",
+          "paths": [
+            "(^|/)src/batch/[^/]+$",
+            "(^|/)include/pictor/batch/[^/]+$",
+            "(^|/)tests/unit_(?:batch_builder|radix_sort)_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "visibility-culling",
+      "name": "可視判定と空間分割",
+      "cores": [
+        "dod"
+      ],
+      "modules": [
+        {
+          "name": "visibility-culling-implementation",
+          "description": "可視判定と空間分割",
+          "paths": [
+            "(^|/)src/culling/[^/]+$",
+            "(^|/)include/pictor/culling/[^/]+$",
+            "(^|/)tests/unit_culling_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "engine-core",
+      "name": "描画コア・更新・ライフサイクル",
+      "cores": [
+        "dod",
+        "platform"
+      ],
+      "modules": [
+        {
+          "name": "engine-core-implementation",
+          "description": "描画コア・更新・ライフサイクル",
+          "paths": [
+            "(^|/)src/core/[^/]+$",
+            "(^|/)include/pictor/core/[^/]+$",
+            "(^|/)include/pictor/pictor\\.h$",
+            "(^|/)tests/unit_file_watch_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "profiling",
+      "name": "計測",
+      "cores": [
+        "dev",
+        "dod"
+      ],
+      "modules": [
+        {
+          "name": "frame-profiling",
+          "description": "CPU/GPUプロファイラー",
+          "paths": [
+            "(^|/)(src/profiler|include/pictor/profiler)/(cpu_timer|gpu_timer|profiler|batch_gpu_timer)\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "statistics-display",
+          "description": "統計表示・計測データ出力",
+          "paths": [
+            "(^|/)(src/profiler|include/pictor/profiler)/(overlay_renderer|stats_overlay|data_exporter|bitmap_text_renderer|perf_query_api)\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "hardware-counters",
+          "description": "ハードウェアカウンター",
+          "paths": [
+            "(^|/)(src/profiler|include/pictor/profiler)/hardware_counters\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "profiling-contracts",
+          "description": "計測契約・関連検査",
+          "paths": [
+            "(^|/)(include/pictor/profiler/[^/]+|tests/unit_gpu_timer_test\\.cpp)$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gpu-surface",
+      "name": "ネイティブ描画先とGPUデバイス",
+      "cores": [
+        "platform"
+      ],
+      "modules": [
+        {
+          "name": "gpu-surface-implementation",
+          "description": "ネイティブ描画先とGPUデバイス",
+          "paths": [
+            "(^|/)src/surface/[^/]+$",
+            "(^|/)include/pictor/surface/[^/]+$",
+            "(^|/)src/gpu/[^/]+$",
+            "(^|/)include/pictor/gpu/[^/]+$",
+            "(^|/)tests/unit_(?:gpu_ring_flight|gpu_timer|swapchain_per_image_pool)_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "webgl-backend",
+      "name": "Web描画",
+      "cores": [
+        "platform"
+      ],
+      "modules": [
+        {
+          "name": "webgl-backend-implementation",
+          "description": "Web描画",
+          "paths": [
+            "(^|/)src/webgl/[^/]+$",
+            "(^|/)include/pictor/webgl/[^/]+$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c-api",
+      "name": "C ABIによる組み込み",
+      "cores": [
+        "platform"
+      ],
+      "modules": [
+        {
+          "name": "c-api-implementation",
+          "description": "C ABIによる組み込み",
+          "paths": [
+            "(^|/)src/c_api/[^/]+$",
+            "(^|/)include/pictor/c_api\\.h$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "render-pipeline",
+      "name": "レンダリングパイプラインの調整機構",
+      "cores": [
+        "pipeline"
+      ],
+      "modules": [
+        {
+          "name": "render-pipeline-implementation",
+          "description": "レンダリングパイプラインの調整機構",
+          "paths": [
+            "(^|/)src/pipeline/[^/]+$",
+            "(^|/)include/pictor/pipeline/[^/]+$",
+            "(^|/)profiles/[^/]+\\.json$",
+            "(^|/)tests/unit_(?:attachment_def|compiled_graph_wiring|pipeline_hot_reload|pipeline_profile_serializer|pipeline_registries|pipeline_tiers)_test\\.cpp$",
+            "(^|/)spec/feature/rendering-extensibility-design\\.md$",
+            "(^|/)spec/feature/pipeline-hot-reload\\.md$",
+            "(^|/)spec/tasks/[^/]*pipeline-hot-reload[^/]*\\.md$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "visus-authoring",
+      "name": "Visus",
+      "cores": [
+        "dod",
+        "pipeline"
+      ],
+      "modules": [
+        {
+          "name": "visus-authoring-implementation",
+          "description": "Visus",
+          "paths": [
+            "(^|/)src/visus/[^/]+$",
+            "(^|/)include/pictor/visus/[^/]+$",
+            "(^|/)tools/visus_migrate/[^/]+$",
+            "(^|/)tests/unit_(?:visus_[^/]+|parser_dos)_test\\.cpp$",
+            "(^|/)spec/feature/visus-v2-design\\.md$",
+            "(^|/)spec/tasks/[^/]*visus[^/]*\\.md$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shading-materials",
+      "name": "シェーダとマテリアル",
+      "cores": [
+        "general"
+      ],
+      "modules": [
+        {
+          "name": "shading-materials-implementation",
+          "description": "シェーダとマテリアル",
+          "paths": [
+            "(^|/)src/material/[^/]+$",
+            "(^|/)include/pictor/material/[^/]+$",
+            "(^|/)src/shader/[^/]+$",
+            "(^|/)include/pictor/shader/[^/]+$",
+            "^shaders/(?:.*/)?[^/]+$",
+            "(^|/)tests/unit_shader_registry_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "global-illumination",
+      "name": "照明",
+      "cores": [
+        "high"
+      ],
+      "modules": [
+        {
+          "name": "probe-lighting",
+          "description": "プローブ照明",
+          "paths": [
+            "(^|/)(src/gi|include/pictor/gi)/(gi_probe_field|gi_gpu_executor|gi_sh)\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "gi-baking",
+          "description": "GIベイク",
+          "paths": [
+            "(^|/)(src/gi|include/pictor/gi)/(gi_bake)\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "sharc-cache",
+          "description": "SHaRCライティングキャッシュ",
+          "paths": [
+            "(^|/)(src/gi|include/pictor/gi)/(sharc_[^/]+)\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "reflection-probes",
+          "description": "反射プローブ",
+          "paths": [
+            "(^|/)(src/gi|include/pictor/gi)/(gi_reflection_probe)\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "lighting-coordination",
+          "description": "照明制御とシーンproxy（影・遮蔽との既存結合は今後分離）",
+          "paths": [
+            "(^|/)(src/gi|include/pictor/gi)/(gi_lighting_system|gi_scene_proxy|gi_types|gi_config)\\.(cpp|h)$"
+          ]
+        },
+        {
+          "name": "lighting-contract-checks",
+          "description": "照明の契約検査",
+          "paths": [
+            "(^|/)tests/unit_(gi_bake|gi_probe_field|sharc_estimator|sharc_hash)_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "post-processing",
+      "name": "ポストエフェクト",
+      "cores": [
+        "post"
+      ],
+      "modules": [
+        {
+          "name": "post-processing-implementation",
+          "description": "ポストエフェクト",
+          "paths": [
+            "(^|/)src/postprocess/[^/]+$",
+            "(^|/)include/pictor/postprocess/[^/]+$",
+            "(^|/)tests/unit_postprocess_chain_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "decals",
+      "name": "デカール",
+      "cores": [
+        "general"
+      ],
+      "modules": [
+        {
+          "name": "decals-implementation",
+          "description": "デカール",
+          "paths": [
+            "(^|/)src/decal/[^/]+$",
+            "(^|/)include/pictor/decal/[^/]+$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "text-rendering",
+      "name": "文字描画",
+      "cores": [
+        "general"
+      ],
+      "modules": [
+        {
+          "name": "text-rendering-implementation",
+          "description": "文字描画",
+          "paths": [
+            "(^|/)src/text/[^/]+$",
+            "(^|/)include/pictor/text/[^/]+$",
+            "(^|/)fonts/[^/]+$",
+            "(^|/)tests/pixel_text_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ui-rendering",
+      "name": "UI",
+      "cores": [
+        "general"
+      ],
+      "modules": [
+        {
+          "name": "ui-rendering-implementation",
+          "description": "UIとオーバーレイ",
+          "paths": [
+            "(^|/)src/ui/[^/]+$",
+            "(^|/)include/pictor/ui/[^/]+$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vector-graphics",
+      "name": "ベクター描画",
+      "cores": [
+        "vector"
+      ],
+      "modules": [
+        {
+          "name": "vector-graphics-implementation",
+          "description": "ベクター描画",
+          "paths": [
+            "(^|/)src/vector/[^/]+$",
+            "(^|/)include/pictor/vector/[^/]+$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "animation",
+      "name": "アニメーション",
+      "cores": [
+        "general",
+        "vector"
+      ],
+      "modules": [
+        {
+          "name": "animation-implementation",
+          "description": "アニメーション",
+          "paths": [
+            "(^|/)src/animation/[^/]+$",
+            "(^|/)include/pictor/animation/[^/]+$",
+            "(^|/)tests/unit_(?:animation_stub_contract|public_animation_header)_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "asset-data",
+      "name": "描画アセット管理",
+      "cores": [
+        "general",
+        "dod"
+      ],
+      "modules": [
+        {
+          "name": "asset-data-implementation",
+          "description": "描画アセット管理",
+          "paths": [
+            "(^|/)src/data/[^/]+$",
+            "(^|/)include/pictor/data/[^/]+$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "samples-and-tools",
+      "name": "描画サンプルと制作ツール",
+      "cores": [
+        "dev",
+        "pipeline"
+      ],
+      "modules": [
+        {
+          "name": "samples-and-tools-implementation",
+          "description": "描画サンプルと制作ツール",
+          "paths": [
+            "(^|/)demo/(?:.*/)?[^/]+$",
+            "(^|/)tools/(?:.*/)?[^/]+$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shadows",
+      "name": "影",
+      "cores": [
+        "high"
+      ],
+      "modules": [
+        {
+          "name": "shadow-atlas",
+          "description": "シャドウ描画・シャドウアトラス",
+          "paths": [
+            "(^|/)(src/gi|include/pictor/gi)/(gi_shadow_atlas)\\.(cpp|h)$"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ambient-occlusion",
+      "name": "遮蔽",
+      "cores": [
+        "high"
+      ],
+      "modules": [
+        {
+          "name": "ssao",
+          "description": "SSAO",
+          "paths": [
+            "(^|/)(src/gi|include/pictor/gi)/(gi_ssao_compute)\\.(cpp|h)$"
+          ]
+        }
+      ]
+    }
+  ],
+  "policy": {
+    "demo": "各demo固有のパイプラインを個別デフォルトとして提供。共有・統合しない。",
+    "native": "必要なモジュール単位でbackend対応。全機能統合しない。",
+    "game": "Pictorにゲーム依存実装を持ち込まない。"
+  }
+}

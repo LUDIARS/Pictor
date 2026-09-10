@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef PICTOR_HAS_POSTPROCESS
+#error "Link Pictor::postprocess to use this optional module"
+#endif
+
 // core/types.h を Vulkan ヘッダより先に取り込む。 Win32 では <vulkan/vulkan.h>
 // が <windows.h> 経由で GDI の `TRANSPARENT` / `OPAQUE` 等をマクロ定義する
 // ため、 これらと同名の enum / constexpr を持つ core ヘッダは vulkan.h より

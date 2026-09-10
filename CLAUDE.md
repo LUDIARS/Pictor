@@ -6,6 +6,11 @@ Pictor は **Data-Driven Rendering Pipeline Module** (C++20、 AVX2、 Vulkan)�
 ObjectDescriptor 入力で render path を自動選択するシステムレイヤのレンダリング基盤。
 LUDIARS 短縮コード: **Pc**。
 
+ドメイン構成の正本: `spec/data/graphics-domain-map.json` と
+`spec/feature/graphics-domain-structure.md`。necoの訂正により「多様な描画機能」を
+5コアへ分割する。UIは汎用グラフィクス、計測は開発支援。各demoは固有パイプラインを
+個別デフォルトとして提供し、demo間で共有・統合しない。native対応も必要モジュール単位。
+
 ## コード規約 (Pictor 固有)
 
 共通: `coding-conventions` skill (= `AIFormat/RULE_CODE.md`) を参照。 以下は Pictor 固有の上書き / 追加。

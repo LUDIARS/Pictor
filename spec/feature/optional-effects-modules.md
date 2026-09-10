@@ -1,0 +1,32 @@
+# ポストプロセス・デカールの選択モジュール
+
+`PICTOR_ENABLE_POSTPROCESS=OFF`または`PICTOR_ENABLE_DECALS=OFF`で、対応する
+実装ライブラリと専用shader生成をビルドから除外する。既定は両方ON。
+coreから効果ライブラリへの逆リンクはなく、利用側が以下を指定する。
+
+```cmake
+target_link_libraries(app PRIVATE Pictor::postprocess)
+target_link_libraries(app PRIVATE Pictor::decals)
+```
+
+利用しないモジュールはリンクしない。共通profileの値型はcoreに残すが、
+効果の実行APIを直接includeする際は対応targetが必要で、未選択ならcompileエラーにする。
+umbrella headerは選択したときだけpostprocess実行APIを公開する。
+既存consumerはcoreだけのリンクから上記target追加へ移行する必要がある。
+
+postprocessは既存のCPUチェーン構築とVulkan実行、decalは既存のホスト主導APIを提供する。
+VulkanがないビルドにGPU機能を実装済みと扱わず、公開されたCPU契約のみ利用できる。
+glslcがない場合は明示メッセージを出し、利用側が生成済みSPIR-Vを渡す既存契約を維持する。
+
+postprocess shaderの出力はbuild内の`shaders`、decalは`shaders/decal`。
+decalが必要なfullscreen頂点shaderはdecal側で生成し、postprocessライブラリを必要としない。
+両方ONでも同一出力を複数targetが生成しない。両方OFFならこれらの生成ruleは存在しない。
+過去のbuildディレクトリに残るファイルの自動削除は行わない。
+
+postprocess専用demoと、bridgeを使う既存3テストtargetはpostprocessがONの場合のみ登録する。
+coreのVulkan/GLFW探索や他demoのビルドまで除外する変更ではない。
+今回の実装粒度はpostprocess全体とdecal。Bloom等の各効果を個別のbuild targetへ分ける作業は未完了。
+runtimeではhostが必要な効果だけでチェーンを構築する。取り外し時はGPU利用完了後に所有者が
+`shutdown()`/破棄で専用資源を解放する。単に描画出力を隠すことを無効化と扱わない。
+
+各demoの固有パイプラインの統合、native描画の全機能統合、Ergo依存の追加は行わない。

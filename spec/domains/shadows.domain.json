@@ -1,0 +1,11 @@
+{
+  "name": "shadows",
+  "description": "影。機能: シャドウ描画・シャドウアトラス",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)(src/gi|include/pictor/gi)/(gi_shadow_atlas)\\.(cpp|h)$"
+    }
+  ]
+}

@@ -120,13 +120,7 @@ add_library(pictor STATIC
     src/gi/gi_ssao_compute.cpp
     src/gi/gi_reflection_probe.cpp
 
-    # Post-Process (host-driven, real Vulkan)
-    src/postprocess/postprocess_pipeline.cpp
-    src/postprocess/postprocess_config_bridge.cpp
-    src/postprocess/postprocess_chain.cpp
-
-    # Decals (projected, host-driven)
-    src/decal/decal_system.cpp
+    # Host-driven postprocess and decals are optional leaf targets below.
 
     # Material
     src/material/base_material_builder.cpp
@@ -231,6 +225,8 @@ add_library(pictor STATIC
     src/core/mobile_lifecycle_controller.cpp
     src/core/gi_facade.cpp
 )
+
+include(cmake/PictorOptionalEffects.cmake)
 
 # サーフェスプロバイダ — プラットフォーム別に条件付きで追加。
 # デスクトップ: GLFW プロバイダ。 Android/iOS: 各ネイティブプロバイダ。
@@ -460,8 +456,10 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         target_link_libraries(pictor_text_demo PRIVATE pictor)
 
         # Post-process demo
-        add_executable(pictor_postprocess_demo demo/postprocess/main.cpp)
-        target_link_libraries(pictor_postprocess_demo PRIVATE pictor)
+        if(TARGET pictor_postprocess)
+            add_executable(pictor_postprocess_demo demo/postprocess/main.cpp)
+            target_link_libraries(pictor_postprocess_demo PRIVATE Pictor::postprocess)
+        endif()
 
         # Rive Renderer demo (plays an official .riv file through pictor::RiveRenderer).
         # Always builds so Pictor's CI catches compile-time regressions in the
@@ -660,35 +658,6 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.frag
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.vert
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/fullscreen_quad.vert
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_blur.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/color_grade.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/dof.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssao_apply.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/motion_blur.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/fxaa.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/taa.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssr.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/exposure_measure.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/exposure_apply.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_down.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_up.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/motion_blur_velocity.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/taa_velocity.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/lens_flare.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/volumetric_fog.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssgi_gather.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/ssgi_apply.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/bloom_composite.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/tone_mapping.frag
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/dof.comp
-        ${CMAKE_SOURCE_DIR}/shaders/postprocess/gaussian_blur.comp
-        ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.vert
-        ${CMAKE_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.vert
         ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.frag
         ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_node.vert
