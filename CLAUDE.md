@@ -33,8 +33,11 @@ LUDIARS 短縮コード: **Pc**。
 
 ### レイヤ依存
 
+- **恒久ルールの正本**: `spec/architecture/framework-boundaries.md`。ゲーム非依存、
+  任意の描画機能モジュール、demoと共有するパイプライン既定値を設計・レビューで必ず守る。
 - **Pictor は最下層**。 上位ライブラリ (Ergo / AdventureCube / PrivateGame / ergo_custos 等) を Pictor demo / test に取り込まない ([[feedback_pictor_no_upper_dep]])。
-- Pictor → Vulkan / GLFW / 標準ライブラリのみ。
+- Ergoは主なconsumerであり、Pictorの必須依存にしない。非ゲームhostからも組み合わせて使える。
+- GPU API・windowing・外部描画ライブラリの依存は対応backend/任意モジュール内へ限定する。
 
 ### ビルド / 実行 / テスト
 
