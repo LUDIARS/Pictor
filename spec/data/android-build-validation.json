@@ -1,0 +1,28 @@
+{
+  "date": "2026-09-10",
+  "baseRevision": "5822f253",
+  "changes": "Android allocation, Visus numeric conversion and Vulkan header compatibility in this change",
+  "configuration": {
+    "abi": "arm64-v8a",
+    "api": 26,
+    "ndk": "21.4.7075529",
+    "cmake": "4.1.2",
+    "buildType": "Debug",
+    "target": "pictor",
+    "demo": false,
+    "tests": false,
+    "tools": false,
+    "rive": false,
+    "hardwareCounters": false,
+    "largePages": false
+  },
+  "configure": "passed",
+  "staticLibraryBuild": "passed",
+  "artifact": "libpictor.a",
+  "applicationLink": "not-run",
+  "deviceDrawing": "not-run",
+  "backgroundResume": "not-run",
+  "surfaceRecovery": "not-run",
+  "deviceRecovery": "not-run",
+  "reference": "spec/feature/android-build-validation.md"
+}
