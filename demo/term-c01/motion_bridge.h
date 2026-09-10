@@ -17,6 +17,7 @@ public:
     bool key(int code);
     void draw_status(pictor::BitmapTextRenderer& text) const;
     void record_capture() const;
+    pictor::float3 camera_translation() const { return motion_?motion_->camera_translation():pictor::float3{}; }
     /// Patches appended by the motion implementation, drawn after the source.
     /// @implements SPEC-PC-POLYNOMIAL-MOTION
     uint32_t extra_count() const { return total_count_-source_count_; }

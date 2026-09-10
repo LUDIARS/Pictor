@@ -24,6 +24,16 @@ controls remain available. The provider receives 0/1/2/P/R commands for zero,
 positive, negative external force, pause and reset, and supplies its own status.
 These controls are distinct from viewer animation/bind-pose controls.
 
+`PolynomialMotion::camera_translation()` optionally returns the world-space
+translation of the camera eye and target for the currently sampled pose. Its
+default is zero. MotionBridge passes the offset after motion update, before
+camera uniforms are generated. Reconstruction applies it consistently to its
+view matrix and raymarch ray basis. Nonfinite offsets are rejected. Providers
+must preserve actor/background world geometry instead of recentering patches
+to implement camera tracking, and cache the offset if update advances a clock
+after evaluating the pose. Recording logs the actual eye/target for each frame.
+This extends the optional C++ demo ABI; rebuild the SDK and its consumers together.
+
 `--record-frames <new-or-empty-directory> --record-count 300 --record-fps 30`
 captures consecutive actual swapchain images as `frame-00000.bmp` etc.
 Reconstruction/provider time advances by exactly 1/fps per rendered frame,
