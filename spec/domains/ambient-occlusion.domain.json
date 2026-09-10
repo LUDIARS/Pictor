@@ -1,0 +1,11 @@
+{
+  "name": "ambient-occlusion",
+  "description": "遮蔽。機能: SSAO",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)(src/gi|include/pictor/gi)/(gi_ssao_compute)\\.(cpp|h)$"
+    }
+  ]
+}

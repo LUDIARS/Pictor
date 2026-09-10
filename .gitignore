@@ -25,3 +25,7 @@ Art/
 # tools/download_sharc_demo_assets.py, never committed.
 demo/assets/
 
+# Derived Anatomia snapshots; committed domain/taxonomy declarations live beside them.
+spec/data/generated/anatomia/
+spec/data/domain-map/*.knowledge.jsonl
+

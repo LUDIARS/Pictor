@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef PICTOR_HAS_POSTPROCESS
+#error "Link Pictor::postprocess to use this optional module"
+#endif
+
 /// Post-process config bridge — 系統A → 系統B の橋渡し.
 ///
 /// `PipelineProfileDef::post_process_stack` (系統A: 宣言データ) を実描画が

@@ -1,0 +1,32 @@
+set(_postprocess_shaders
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/fullscreen_quad.vert
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_extract.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_blur.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/color_grade.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/dof.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/ssao_apply.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/motion_blur.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/fxaa.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/taa.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/ssr.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/exposure_measure.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/exposure_apply.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_down.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_up.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/motion_blur_velocity.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/taa_velocity.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/lens_flare.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/volumetric_fog.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/ssgi_gather.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/ssgi_apply.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_extract.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_downsample.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_upsample.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/bloom_composite.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/tone_mapping.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/dof.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/gaussian_blur.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.vert
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
+)
+pictor_effect_shaders(pictor_postprocess "${_postprocess_shaders}" "${CMAKE_CURRENT_BINARY_DIR}/shaders")

@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef PICTOR_HAS_DECALS
+#error "Link Pictor::decals to use this optional module"
+#endif
+
 /// 投影デカール (projected decal) システム。
 ///
 /// シーン深度からワールド座標を再構成し、 デカールの OBB (有向境界ボックス)

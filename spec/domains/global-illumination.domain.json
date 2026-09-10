@@ -1,17 +1,26 @@
 {
   "name": "global-illumination",
-  "description": "大域照明。 ライトのベイクとプローブフィールド、 SHARC 系のハッシュ/推定、 実行時 relight。",
+  "description": "照明。機能: プローブ照明、GIベイク、SHaRCライティングキャッシュ、反射プローブ、照明制御とシーンproxy（影・遮蔽との既存結合は今後分離）、照明の契約検査",
   "presetRules": [],
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)src/gi/[^/]+$"
+      "pathPattern": "(^|/)(src/gi|include/pictor/gi)/(gi_probe_field|gi_gpu_executor|gi_sh)\\.(cpp|h)$"
     },
     {
-      "pathPattern": "(^|/)include/pictor/gi/[^/]+$"
+      "pathPattern": "(^|/)(src/gi|include/pictor/gi)/(gi_bake)\\.(cpp|h)$"
     },
     {
-      "pathPattern": "(^|/)tests/unit_(?:gi_bake|gi_probe_field|sharc_estimator|sharc_hash)_test\\.cpp$"
+      "pathPattern": "(^|/)(src/gi|include/pictor/gi)/(sharc_[^/]+)\\.(cpp|h)$"
+    },
+    {
+      "pathPattern": "(^|/)(src/gi|include/pictor/gi)/(gi_reflection_probe)\\.(cpp|h)$"
+    },
+    {
+      "pathPattern": "(^|/)(src/gi|include/pictor/gi)/(gi_lighting_system|gi_scene_proxy|gi_types|gi_config)\\.(cpp|h)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_(gi_bake|gi_probe_field|sharc_estimator|sharc_hash)_test\\.cpp$"
     }
   ]
 }
