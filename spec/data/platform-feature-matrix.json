@@ -1,0 +1,883 @@
+{
+  "version": 1,
+  "date": "2026-09-10",
+  "platforms": [
+    "Web/WebGL2",
+    "Windows/Vulkan",
+    "Windows/DX12",
+    "Linux/Vulkan",
+    "macOS/Vulkan",
+    "Android/Vulkan",
+    "iOS/Metal"
+  ],
+  "sourceRevisions": [
+    "5822f253",
+    "47967d8",
+    "661a02f"
+  ],
+  "rows": [
+    {
+      "code": "PC-FEAT-DOD-01",
+      "name": "ObjectDescriptor・SoA描画オブジェクト管理",
+      "domain": "scene-composition",
+      "status": "実装あり",
+      "note": "登録・分類・更新・削除。",
+      "evidence": [
+        "src/scene/soa_stream.cpp",
+        "src/scene/object_pool.cpp",
+        "src/scene/object_classifier.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-02",
+      "name": "フレーム・プール・GPU論理メモリ管理",
+      "domain": "memory-management",
+      "status": "実装あり",
+      "note": "GPU論理割当と実転送の完成を区別する。",
+      "evidence": [
+        "src/memory/frame_allocator.cpp",
+        "src/memory/pool_allocator.cpp",
+        "src/memory/gpu_memory_allocator.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "失敗†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-03",
+      "name": "radix sortと描画バッチ構築",
+      "domain": "draw-batching",
+      "status": "実装あり",
+      "note": "描画状態による並べ替えとbatch生成。",
+      "evidence": [
+        "src/batch/radix_sort.cpp",
+        "src/batch/batch_builder.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-04",
+      "name": "フラスタム・flat BVHカリング",
+      "domain": "visibility-culling",
+      "status": "実装あり",
+      "note": "CPU可視判定。GPU-driven統合とは別。",
+      "evidence": [
+        "src/culling/frustum_culler.cpp",
+        "src/culling/flat_bvh.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-05",
+      "name": "ワールド空間分割",
+      "domain": "visibility-culling",
+      "status": "実装あり",
+      "note": "空間領域による管理。",
+      "evidence": [
+        "src/culling/world_partition.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-06",
+      "name": "ジョブ分配と更新スケジューリング",
+      "domain": "engine-core",
+      "status": "実装あり",
+      "note": "Webはthread実行条件への対応が別途必要。",
+      "evidence": [
+        "src/update/job_dispatcher.cpp",
+        "src/update/update_scheduler.cpp"
+      ],
+      "platforms": [
+        "要thread構成",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-07",
+      "name": "GPU-driven update/cull/LOD/indirect draw",
+      "domain": "engine-core",
+      "status": "部分実装",
+      "note": "シェーダとAPIはあるがGPUDrivenPipeline::executeのcompute dispatchは未実装。",
+      "evidence": [
+        "src/gpu/gpu_driven_pipeline.cpp",
+        "shaders/compute_cull.comp",
+        "shaders/lod_select.comp"
+      ],
+      "platforms": [
+        "未接続",
+        "部分VK",
+        "未接続",
+        "部分VK",
+        "部分VK※",
+        "部分VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-08",
+      "name": "CPU/GPU性能計測・統計照会・出力",
+      "domain": "profiling",
+      "status": "実装あり",
+      "note": "timer・統計・出力。HW counterは端末能力と設定に依存。",
+      "evidence": [
+        "src/profiler/profiler.cpp",
+        "src/profiler/gpu_timer.cpp",
+        "src/profiler/perf_query_api.cpp",
+        "src/profiler/data_exporter.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU+VK",
+        "CPUのみ",
+        "CPU+VK",
+        "CPU+VK※",
+        "CPU+VK†",
+        "CPUのみ‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DOD-09",
+      "name": "UMA/ReBARメモリ判定",
+      "domain": "memory-management",
+      "status": "部分実装",
+      "note": "判定処理あり。staging省略の実アップロード完成ではない。",
+      "evidence": [
+        "src/core/device_memory_profile.cpp",
+        "spec/feature/subsystem/uma_memory.md"
+      ],
+      "platforms": [
+        "未接続",
+        "部分VK",
+        "未接続",
+        "部分VK",
+        "部分VK※",
+        "部分VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PLAT-01",
+      "name": "PC Vulkanデバイス・surface・swapchain",
+      "domain": "gpu-surface",
+      "status": "実装あり",
+      "note": "GLFWとper-image同期。完全なsurface/device復旧は後続。",
+      "evidence": [
+        "src/surface/vulkan_context.cpp",
+        "src/surface/glfw_surface_provider.cpp"
+      ],
+      "platforms": [
+        "対象外",
+        "VK",
+        "対象外",
+        "VK",
+        "VK※",
+        "別provider†",
+        "対象外"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PLAT-02",
+      "name": "WebGL2/Emscripten描画",
+      "domain": "webgl-backend",
+      "status": "部分実装",
+      "note": "独立した最小renderer。本体の全描画機能との同等性はない。",
+      "evidence": [
+        "src/webgl/webgl_renderer.cpp",
+        "spec/feature/portability/web.md"
+      ],
+      "platforms": [
+        "Web実装",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PLAT-03",
+      "name": "Android native surfaceとNDKビルド分岐",
+      "domain": "gpu-surface",
+      "status": "部分実装",
+      "note": "providerとVulkan作成経路。APK・consumer接続・実機検証は未完了。",
+      "evidence": [
+        "src/surface/android_surface_provider.cpp",
+        "CMakeLists.txt"
+      ],
+      "platforms": [
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "部分VK†",
+        "対象外"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PLAT-04",
+      "name": "モバイルpause/suspend・memory/thermal制御",
+      "domain": "engine-core",
+      "status": "部分実装",
+      "note": "状態制御あり。OS host配線と全GPU submit抑止は未完了。PR1638の改善は解析後にマージ済み（5b98c9bebe7b）。",
+      "evidence": [
+        "src/core/mobile_lifecycle_controller.cpp",
+        "include/pictor/core/mobile_lifecycle.h"
+      ],
+      "platforms": [
+        "未接続",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "部分CPU†",
+        "部分CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PLAT-05",
+      "name": "iOSネイティブMetal描画",
+      "domain": "gpu-surface",
+      "status": "設計・委託中",
+      "note": "47967d8のMetalContextにmesh upload/drawと復旧APIあり。PR #1640のマージ状態は未確認。各効果のMetal実装を意味しない。",
+      "evidence": [
+        "src/surface/ios_surface_provider.cpp",
+        "spec/feature/metal-backend-design.md"
+      ],
+      "platforms": [
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外",
+        "Metal別枝‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PLAT-06",
+      "name": "Windows DirectX 12描画バックエンド",
+      "domain": "gpu-surface",
+      "status": "部分実装・委託中",
+      "note": "47967d8のDx12Contextにmesh upload/drawと復旧APIあり。SHaRC DX12 executorとは独立。PR #1640のマージ状態は未確認。",
+      "evidence": [
+        "src/gi/sharc_dx12_executor.cpp",
+        "spec/feature/dx12-backend-design.md"
+      ],
+      "platforms": [
+        "対象外",
+        "対象外",
+        "DX12別枝",
+        "対象外",
+        "対象外",
+        "対象外",
+        "対象外"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PLAT-07",
+      "name": "C ABI組み込み",
+      "domain": "c-api",
+      "status": "部分実装",
+      "note": "C APIあり。モバイルsurface/lifecycle入口と全backend同等接続は未完了。",
+      "evidence": [
+        "include/pictor/c_api.h",
+        "spec/feature/portability/mobile.md"
+      ],
+      "platforms": [
+        "未接続",
+        "部分CPU",
+        "要配線",
+        "部分CPU",
+        "部分CPU",
+        "要配線†",
+        "要配線‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PIPE-01",
+      "name": "描画プロファイル・JSON設定・プリセット",
+      "domain": "render-pipeline",
+      "status": "実装あり",
+      "note": "宣言的設定。実GPUパスへの接続範囲は別途確認する。",
+      "evidence": [
+        "src/pipeline/pipeline_profile_loader.cpp",
+        "src/pipeline/pipeline_profile_serializer.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PIPE-02",
+      "name": "attachment/render pass/framebuffer構成",
+      "domain": "render-pipeline",
+      "status": "実装あり",
+      "note": "系統B registry/compilerによるVulkan資源構成。",
+      "evidence": [
+        "src/pipeline/attachment_registry.cpp",
+        "src/pipeline/render_pass_registry.cpp",
+        "src/pipeline/framebuffer_registry.cpp",
+        "src/pipeline/pipeline_compiler.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "未接続",
+        "VK",
+        "VK※",
+        "VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PIPE-03",
+      "name": "コンパイル済みパスとbatch記録",
+      "domain": "render-pipeline",
+      "status": "部分実装",
+      "note": "driver/recorderあり。SHADOW/DEPTH_ONLYの記録は未実装を明示。",
+      "evidence": [
+        "src/pipeline/compiled_path_driver.cpp",
+        "src/pipeline/compiled_batch_recorder.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "部分VK",
+        "未接続",
+        "部分VK",
+        "部分VK※",
+        "部分VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-PIPE-04",
+      "name": "パイプライン・シェーダのホットリロード",
+      "domain": "render-pipeline",
+      "status": "実装あり",
+      "note": "変更検知とcallback。GPU資源rebuildはhostが配線する。",
+      "evidence": [
+        "src/core/file_watch.cpp",
+        "src/pipeline/pipeline_hot_reload.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU/host",
+        "CPU/host",
+        "CPU/host",
+        "CPU/host",
+        "要host†",
+        "要host‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-VISUS-01",
+      "name": "Visus描画定義・メタデータ・保存",
+      "domain": "visus-authoring",
+      "status": "実装あり",
+      "note": "DoDとフレキシブルパイプラインの両方に帰属。",
+      "evidence": [
+        "src/visus/visus_types.cpp",
+        "src/visus/visus_metadata.cpp",
+        "src/visus/visus_serializer.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-VISUS-02",
+      "name": "Visusカタログ・runtime解決・実体化",
+      "domain": "visus-authoring",
+      "status": "実装あり",
+      "note": "描画定義からObjectDescriptorへ接続。",
+      "evidence": [
+        "src/visus/visus_catalog.cpp",
+        "src/visus/visus_runtime.cpp",
+        "src/visus/visus_instantiator.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-VISUS-03",
+      "name": "Visus shader packageと版移行",
+      "domain": "visus-authoring",
+      "status": "実装あり",
+      "note": "package管理、互換・移行。",
+      "evidence": [
+        "src/visus/visus_shader_package.cpp",
+        "src/visus/visus_package_catalog.cpp",
+        "src/visus/visus_migrate.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-01",
+      "name": "マテリアル定義・保存・カスタムシェーダ",
+      "domain": "shading-materials",
+      "status": "実装あり",
+      "note": "material builder/serializerとshader registry。",
+      "evidence": [
+        "src/material/base_material_builder.cpp",
+        "src/material/material_serializer.cpp",
+        "src/shader/shader_registry.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-02",
+      "name": "PBR・Lit・Toon・ホログラム",
+      "domain": "shading-materials",
+      "status": "実装あり",
+      "note": "シェーダ資産あり。全backendへの移植は未完了。",
+      "evidence": [
+        "shaders/pbr.frag",
+        "shaders/lit.frag",
+        "shaders/toon.frag",
+        "shaders/hologram.frag"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "未接続",
+        "VK",
+        "VK※",
+        "VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-03",
+      "name": "影・CSM shadow atlas",
+      "domain": "global-illumination",
+      "status": "部分実装",
+      "note": "atlas/深度資源あり。実シーンのshadow描画はhostの接続責務。",
+      "evidence": [
+        "src/gi/gi_shadow_atlas.cpp",
+        "shaders/shadow_depth.vert"
+      ],
+      "platforms": [
+        "未接続",
+        "部分VK",
+        "未接続",
+        "部分VK",
+        "部分VK※",
+        "部分VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-04",
+      "name": "SSAO",
+      "domain": "global-illumination",
+      "status": "実装あり",
+      "note": "compute executorとshader。",
+      "evidence": [
+        "src/gi/gi_ssao_compute.cpp",
+        "shaders/ssao_gen.comp"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "未接続",
+        "VK",
+        "VK※",
+        "VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-05",
+      "name": "GI bake・irradiance probe・relight",
+      "domain": "global-illumination",
+      "status": "実装あり",
+      "note": "CPU bake/probeとGPU sample経路。host接続は別途。",
+      "evidence": [
+        "src/gi/gi_bake.cpp",
+        "src/gi/gi_probe_field.cpp",
+        "src/gi/gi_gpu_executor.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU+VK",
+        "CPUのみ",
+        "CPU+VK",
+        "CPU+VK※",
+        "CPU+VK†",
+        "CPUのみ‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-06",
+      "name": "反射プローブ",
+      "domain": "global-illumination",
+      "status": "部分実装",
+      "note": "cubemap/mip資源処理。シーンcaptureはhost責務。",
+      "evidence": [
+        "src/gi/gi_reflection_probe.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "部分VK",
+        "未接続",
+        "部分VK",
+        "部分VK※",
+        "部分VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-07",
+      "name": "SHaRCライティングキャッシュ Vulkan/DX12",
+      "domain": "global-illumination",
+      "status": "実装あり",
+      "note": "専用executorとcompute shader。一般DX12描画backendとは別。",
+      "evidence": [
+        "src/gi/sharc_executor.cpp",
+        "src/gi/sharc_dx12_executor.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "DX12",
+        "VK",
+        "VK※",
+        "VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-08",
+      "name": "ポストエフェクトチェーン",
+      "domain": "post-processing",
+      "status": "実装あり",
+      "note": "chain/config bridgeとBloom等のshader。",
+      "evidence": [
+        "src/postprocess/postprocess_pipeline.cpp",
+        "src/postprocess/postprocess_chain.cpp",
+        "shaders/postprocess/bloom_extract.frag"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "未接続",
+        "VK",
+        "VK※",
+        "VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-09",
+      "name": "デカール",
+      "domain": "decals",
+      "status": "実装あり",
+      "note": "管理処理と専用shader。",
+      "evidence": [
+        "src/decal/decal_system.cpp",
+        "shaders/decal/decal.frag"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "未接続",
+        "VK",
+        "VK※",
+        "VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-10",
+      "name": "フォント・文字画像・SVG描画",
+      "domain": "text-rendering",
+      "status": "実装あり",
+      "note": "フォント読込、ラスタライズ、画像/SVG出力。",
+      "evidence": [
+        "src/text/font_loader.cpp",
+        "src/text/text_rasterizer.cpp",
+        "src/text/text_image_renderer.cpp",
+        "src/text/text_svg_renderer.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-11",
+      "name": "文字・グリフパスエフェクト",
+      "domain": "text-rendering",
+      "status": "実装あり",
+      "note": "文字とパスの表現処理。",
+      "evidence": [
+        "src/text/text_effects.cpp",
+        "src/text/glyph_path_effects.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-12",
+      "name": "UI・screen overlay",
+      "domain": "ui-rendering",
+      "status": "実装あり",
+      "note": "renderer/overlay pipeline/group。",
+      "evidence": [
+        "src/ui/ui_renderer.cpp",
+        "src/ui/ui_overlay_pipeline.cpp",
+        "src/ui/screen_overlay_group.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "未接続",
+        "VK",
+        "VK※",
+        "VK†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-13",
+      "name": "Riveベクター描画",
+      "domain": "vector-graphics",
+      "status": "部分実装",
+      "note": "adapterあり。PICTOR_ENABLE_RIVEと外部prebuiltが必要。モバイルは別途。",
+      "evidence": [
+        "src/vector/rive_renderer.cpp",
+        "cmake/FindRive.cmake"
+      ],
+      "platforms": [
+        "未接続",
+        "条件VK",
+        "未接続",
+        "条件VK",
+        "条件VK※",
+        "要依存確認†",
+        "未接続"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-14",
+      "name": "骨格・clip・IK・montage",
+      "domain": "animation",
+      "status": "実装あり",
+      "note": "animation systemと骨格アニメーション。",
+      "evidence": [
+        "src/animation/skeleton.cpp",
+        "src/animation/animation_clip.cpp",
+        "src/animation/ik_solver.cpp",
+        "src/animation/montage.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-15",
+      "name": "FBX/BVH取り込み",
+      "domain": "animation",
+      "status": "実装あり",
+      "note": "FBX scene/importerとBVH importer。全形式機能の完全性は未検証。",
+      "evidence": [
+        "src/animation/fbx_importer.cpp",
+        "src/animation/fbx_scene.cpp",
+        "src/animation/bvh_importer.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU",
+        "CPU†",
+        "CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-16",
+      "name": "2D・vector・Lottie・Rive animation",
+      "domain": "animation",
+      "status": "部分実装",
+      "note": "adapter/APIあり。形式別の完全性と外部依存は未検証。",
+      "evidence": [
+        "src/animation/animation_2d.cpp",
+        "src/animation/vector_animation.cpp",
+        "src/animation/lottie_animation.cpp",
+        "src/animation/rive_animation.cpp"
+      ],
+      "platforms": [
+        "未接続",
+        "部分CPU",
+        "部分CPU",
+        "部分CPU",
+        "部分CPU",
+        "部分CPU†",
+        "部分CPU‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-DRAW-17",
+      "name": "メッシュ・テクスチャ・モデル登録/照会",
+      "domain": "asset-data",
+      "status": "部分実装",
+      "note": "registry/queryあり。一部uploadはstaging確保とフラグ更新だけで実GPU転送未完了。",
+      "evidence": [
+        "src/data/vertex_data_uploader.cpp",
+        "src/data/texture_registry.cpp",
+        "src/data/model_data_handler.cpp",
+        "src/data/data_query_api.cpp"
+      ],
+      "platforms": [
+        "別Web実装",
+        "部分CPU/VK",
+        "別枝meshのみ",
+        "部分CPU/VK",
+        "部分CPU/VK※",
+        "部分CPU/VK†",
+        "別枝meshのみ‡"
+      ]
+    },
+    {
+      "code": "PC-FEAT-TOOLS-01",
+      "name": "描画デモ・機能選択・Visus移行ツール",
+      "domain": "samples-and-tools",
+      "status": "実装あり",
+      "note": "demo/tools targetあり。毛皮・縄・涙・影絵等のdemo専用表現を汎用library APIと区別する。",
+      "evidence": [
+        "CMakeLists.txt",
+        "spec/tasks/2026-09-02-fbx-viewer-fur-effects.md",
+        "spec/feature/shadow-play-kirie-backdrop.md"
+      ],
+      "platforms": [
+        "一部Web",
+        "PC demo",
+        "SHaRC demo",
+        "PC demo",
+        "PC demo※",
+        "demo無効",
+        "demo無効"
+      ]
+    },
+    {
+      "code": "PC-FEAT-HW-01",
+      "name": "Intel PCMハードウェアカウンター",
+      "status": "条件付き実装",
+      "note": "PCM prebuilt、対応CPU、権限/driverが必要。ARM Android/iOS向けカウンター実装ではない。",
+      "evidence": [
+        "src/profiler/hardware_counters.cpp",
+        "CMakeLists.txt"
+      ],
+      "platforms": [
+        "未接続",
+        "条件CPU",
+        "条件CPU",
+        "条件CPU",
+        "未確認",
+        "未接続",
+        "未接続"
+      ]
+    }
+  ]
+}
