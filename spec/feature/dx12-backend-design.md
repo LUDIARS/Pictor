@@ -1,6 +1,7 @@
 # DirectX 12 Backend — 設計検討 (RHI 抽象化)
 
-> ステータス: **設計のみ (未実装)**。Pictor は現状 Vulkan 専用。本書は DX12 を
+> ステータス: **surface/present と SHaRC compute を実装済み**。残る
+> renderer-wide RHI 移行を本書で扱う。本書は DX12 を
 > 併設するための RHI (Render Hardware Interface) 抽象と段階的移行計画を示す。
 > キャッシュ整列 / UMA とは独立した別軸 (GPU API の話)。
 

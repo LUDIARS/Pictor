@@ -33,14 +33,9 @@ void IOSSurfaceProvider::on_swapchain_created(uint32_t width, uint32_t height) {
 
 uint32_t IOSSurfaceProvider::get_required_instance_extensions(
         const char** out_names, uint32_t max_count) const {
-    static const char* kExts[] = {
-        "VK_KHR_surface",
-        "VK_EXT_metal_surface",
-    };
-    const uint32_t n = sizeof(kExts) / sizeof(kExts[0]);
-    const uint32_t count = (n < max_count) ? n : max_count;
-    for (uint32_t i = 0; i < count; ++i) out_names[i] = kExts[i];
-    return count;
+    (void)out_names;
+    (void)max_count;
+    return 0;
 }
 
 void IOSSurfaceProvider::update_layer(void* metal_layer,

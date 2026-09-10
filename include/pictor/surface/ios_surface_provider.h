@@ -6,8 +6,7 @@
 
 namespace pictor {
 
-/// IOSSurfaceProvider — CAMetalLayer を VkSurfaceKHR 用ハンドルに橋渡しする
-/// (MoltenVK 経由)。
+/// IOSSurfaceProvider — host-owned CAMetalLayer を native Metal context へ渡す。
 ///
 /// iOS では UIView (の layerClass = CAMetalLayer) をアプリが所有する。
 /// ホストの ViewController / UIView が CAMetalLayer* を作り、

@@ -195,6 +195,8 @@ private:
     uint32_t                 queue_family_index_ = UINT32_MAX;
 
     VkSwapchainKHR           swapchain_          = VK_NULL_HANDLE;
+    /// Non-owning old swapchain passed only while constructing a replacement.
+    VkSwapchainKHR           replacement_old_swapchain_ = VK_NULL_HANDLE;
     VkFormat                 swapchain_format_   = VK_FORMAT_B8G8R8A8_SRGB;
     VkExtent2D               swapchain_extent_   = {0, 0};
     std::vector<VkImage>     swapchain_images_;

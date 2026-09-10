@@ -22,10 +22,9 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 #
 #   Android: NDK 同梱 Vulkan を直接指す。 GLFW は Android ターゲットを持たない
 #            ので FetchContent を止める。
-#   iOS    : MoltenVK 経由で Vulkan。 同じく GLFW は使わない。
-# どちらも `find_package(Vulkan)` / GLFW FetchContent をスキップし、
-# PICTOR_HAS_VULKAN を明示的に立てる。 デスクトップ (WIN32/UNIX/APPLE-macOS)
-# は従来パスのまま影響を受けない。
+#   iOS    : Metal を直接使用する。GLFW / Vulkan discovery は行わない。
+# Android は PICTOR_HAS_VULKAN を明示的に立てる。デスクトップ
+# (WIN32/UNIX/APPLE-macOS) は従来の Vulkan discovery を維持する。
 # ---------------------------------------------------------------------------
 set(PICTOR_MOBILE OFF)
 if(ANDROID)
@@ -38,11 +37,8 @@ if(ANDROID)
 elseif(IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(PICTOR_MOBILE ON)
     set(PICTOR_PLATFORM_IOS ON)
-    # iOS は MoltenVK (Vulkan→Metal)。 ホストが MoltenVK.xcframework をリンクし、
-    # -DVulkan_LIBRARIES / -DVulkan_INCLUDE_DIRS で指す想定。 ここでは
-    # PICTOR_HAS_VULKAN を立てるだけ (実リンクはホスト xcodeproj 側)。
-    set(Vulkan_FOUND TRUE)
-    message(STATUS "Pictor: iOS build (MoltenVK 経由)")
+    enable_language(OBJCXX)
+    message(STATUS "Pictor: iOS build (native Metal)")
 endif()
 
 # --- Vulkan (requires Vulkan SDK to be installed) — デスクトップのみ ---
@@ -233,9 +229,17 @@ include(cmake/PictorOptionalEffects.cmake)
 if(PICTOR_PLATFORM_ANDROID)
     target_sources(pictor PRIVATE src/surface/android_surface_provider.cpp)
 elseif(PICTOR_PLATFORM_IOS)
-    target_sources(pictor PRIVATE src/surface/ios_surface_provider.cpp)
+    target_sources(pictor PRIVATE
+        src/surface/ios_surface_provider.cpp
+        src/surface/metal_context.mm)
 else()
     target_sources(pictor PRIVATE src/surface/glfw_surface_provider.cpp)
+endif()
+
+if(WIN32)
+    target_sources(pictor PRIVATE src/surface/dx12_context.cpp)
+    target_link_libraries(pictor PUBLIC d3d12 dxgi d3dcompiler)
+    target_compile_definitions(pictor PUBLIC PICTOR_HAS_DX12=1)
 endif()
 
 target_include_directories(pictor PUBLIC
@@ -249,15 +253,6 @@ if(Vulkan_FOUND)
         # NDK 同梱の libvulkan / android / log を直接リンク。
         target_link_libraries(pictor PUBLIC vulkan android log)
         target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_ANDROID_KHR=1)
-    elseif(PICTOR_PLATFORM_IOS)
-        # iOS は MoltenVK。 リンクはホスト xcodeproj 側 (MoltenVK.xcframework)。
-        if(Vulkan_LIBRARIES)
-            target_link_libraries(pictor PUBLIC ${Vulkan_LIBRARIES})
-        endif()
-        if(Vulkan_INCLUDE_DIRS)
-            target_include_directories(pictor PUBLIC ${Vulkan_INCLUDE_DIRS})
-        endif()
-        target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_METAL_EXT=1)
     else()
         target_link_libraries(pictor PUBLIC Vulkan::Vulkan)
         if(WIN32)
@@ -268,6 +263,12 @@ if(Vulkan_FOUND)
             target_compile_definitions(pictor PUBLIC VK_USE_PLATFORM_MACOS_MVK=1)
         endif()
     endif()
+endif()
+
+if(PICTOR_PLATFORM_IOS)
+    target_link_libraries(pictor PUBLIC "-framework Metal" "-framework QuartzCore")
+    target_compile_definitions(pictor PUBLIC PICTOR_HAS_METAL=1)
+    target_compile_options(pictor PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 endif()
 
 if(PICTOR_ENABLE_PROFILER)

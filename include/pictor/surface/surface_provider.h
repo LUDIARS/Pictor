@@ -29,7 +29,7 @@ struct NativeWindowHandle {
         Wayland = 4,   // VK_KHR_wayland_surface
         Cocoa   = 5,   // VK_MVK_macos_surface / VK_EXT_metal_surface (macOS)
         Android = 6,   // VK_KHR_android_surface
-        iOS     = 7,   // VK_EXT_metal_surface (MoltenVK, CAMetalLayer)
+        iOS     = 7,   // native Metal CAMetalLayer
     };
 
     Type type = Type::None;
@@ -68,7 +68,7 @@ struct NativeWindowHandle {
         void* native_window = nullptr; // ANativeWindow*
     };
 
-    // iOS / Metal (MoltenVK)
+    // iOS / native Metal
     struct IOS {
         void* metal_layer = nullptr;   // CAMetalLayer*
     };
