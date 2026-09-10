@@ -99,6 +99,13 @@ void PoolAllocator::add_chunk(size_t min_size) {
     Chunk chunk;
 #ifdef _MSC_VER
     chunk.data = static_cast<uint8_t*>(_aligned_malloc(alloc_size, CACHE_LINE));
+#elif defined(__ANDROID__)
+    // Android aligned_alloc requires API 28; posix_memalign supports API 17.
+    void* allocation = nullptr;
+    if (posix_memalign(&allocation, CACHE_LINE, alloc_size) != 0) {
+        throw std::bad_alloc();
+    }
+    chunk.data = static_cast<uint8_t*>(allocation);
 #else
     chunk.data = static_cast<uint8_t*>(std::aligned_alloc(CACHE_LINE, alloc_size));
 #endif

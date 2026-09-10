@@ -383,7 +383,7 @@ bool VulkanContext::create_instance(const VulkanContextConfig& cfg) {
     app_info.applicationVersion = cfg.app_version;
     app_info.pEngineName        = "Pictor";
     app_info.engineVersion      = VK_MAKE_VERSION(2, 2, 0);
-    app_info.apiVersion         = VK_API_VERSION_1_2;
+    app_info.apiVersion         = VK_MAKE_VERSION(1, 2, 0);
 
     // Collect extensions from provider
     const char* ext_names[16] = {};
@@ -621,7 +621,9 @@ bool VulkanContext::create_logical_device() {
     // buffer binds on the CPU record side, which matters especially in
     // Debug builds where Rive's record work is not optimized.
     bool ext_interlock_avail = false;
+#ifdef VK_EXT_rasterization_order_attachment_access
     bool ext_rov_avail       = false;
+#endif
     {
         uint32_t ecount = 0;
         vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &ecount, nullptr);
@@ -630,33 +632,44 @@ bool VulkanContext::create_logical_device() {
         for (const auto& e : eprops) {
             if (std::strcmp(e.extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME) == 0)
                 ext_interlock_avail = true;
+#ifdef VK_EXT_rasterization_order_attachment_access
             else if (std::strcmp(e.extensionName,
                                  VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME) == 0)
                 ext_rov_avail = true;
+#endif
         }
     }
+
+    // Old NDK headers cannot describe ROV; the existing atomic path remains available.
+    has_rasterization_order_attachment_access_ = false;
 
     // Query the per-extension feature bits via pNext chain. These can be
     // advertised by the extension yet disabled on the physical device.
     VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock_feat_probe{};
     interlock_feat_probe.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
+#ifdef VK_EXT_rasterization_order_attachment_access
     VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT rov_feat_probe{};
     rov_feat_probe.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
+#endif
     // Chain probes only for extensions the device actually exposes — passing
     // an unknown struct type to vkGetPhysicalDeviceFeatures2 is a VUID fail.
     VkPhysicalDeviceFeatures2 probe2{};
     probe2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     void** ptail = &probe2.pNext;
     if (ext_interlock_avail) { *ptail = &interlock_feat_probe; ptail = &interlock_feat_probe.pNext; }
+#ifdef VK_EXT_rasterization_order_attachment_access
     if (ext_rov_avail)       { *ptail = &rov_feat_probe;       ptail = &rov_feat_probe.pNext; }
+#endif
     vkGetPhysicalDeviceFeatures2(physical_device_, &probe2);
 
     has_fragment_shader_interlock_ =
         ext_interlock_avail && interlock_feat_probe.fragmentShaderPixelInterlock == VK_TRUE;
+#ifdef VK_EXT_rasterization_order_attachment_access
     has_rasterization_order_attachment_access_ =
         ext_rov_avail && rov_feat_probe.rasterizationOrderColorAttachmentAccess == VK_TRUE;
+#endif
 
     if (has_fragment_shader_interlock_)
         printf("[Pictor] VK_EXT_fragment_shader_interlock enabled "
@@ -672,8 +685,10 @@ bool VulkanContext::create_logical_device() {
     dev_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     if (has_fragment_shader_interlock_)
         dev_extensions.push_back(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME);
+#ifdef VK_EXT_rasterization_order_attachment_access
     if (has_rasterization_order_attachment_access_)
         dev_extensions.push_back(VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
+#endif
 
     // Build the enable-side pNext chain with VkPhysicalDeviceFeatures2.
     // Using features2 means pEnabledFeatures MUST be nullptr.
@@ -681,10 +696,12 @@ bool VulkanContext::create_logical_device() {
     interlock_feat_en.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
     interlock_feat_en.fragmentShaderPixelInterlock = VK_TRUE;
+#ifdef VK_EXT_rasterization_order_attachment_access
     VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT rov_feat_en{};
     rov_feat_en.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
     rov_feat_en.rasterizationOrderColorAttachmentAccess = VK_TRUE;
+#endif
 
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -693,9 +710,11 @@ bool VulkanContext::create_logical_device() {
     if (has_fragment_shader_interlock_) {
         *etail = &interlock_feat_en; etail = &interlock_feat_en.pNext;
     }
+#ifdef VK_EXT_rasterization_order_attachment_access
     if (has_rasterization_order_attachment_access_) {
         *etail = &rov_feat_en; etail = &rov_feat_en.pNext;
     }
+#endif
 
     VkDeviceCreateInfo create_info{};
     create_info.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

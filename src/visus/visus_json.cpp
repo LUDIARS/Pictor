@@ -10,6 +10,11 @@
 #include <fstream>
 #include <limits>
 #include <system_error>
+#ifdef __ANDROID__
+#include <iomanip>
+#include <locale>
+#include <sstream>
+#endif
 
 namespace pictor::visus_json {
 
@@ -31,12 +36,20 @@ constexpr size_t kMaxObjectMembers  = 1024;
 
 void emit_number(std::string& out, double v) {
     if (!std::isfinite(v)) { out += "0"; return; }
+#ifdef __ANDROID__
+    // Older NDK libc++ lacks floating-point charconv. Keep JSON locale-neutral.
+    std::ostringstream number;
+    number.imbue(std::locale::classic());
+    number << std::setprecision(std::numeric_limits<double>::max_digits10) << v;
+    out += number.str();
+#else
     char buf[64];
     const auto result = std::to_chars(buf, buf + sizeof(buf), v,
                                       std::chars_format::general,
                                       std::numeric_limits<double>::max_digits10);
     if (result.ec != std::errc{}) { out += "0"; return; }
     out.append(buf, static_cast<size_t>(result.ptr - buf));
+#endif
 }
 
 void pad(std::string& out, int indent) {
@@ -187,9 +200,25 @@ struct Parser {
             while (p < end && *p >= '0' && *p <= '9') ++p;
         }
 
+#ifdef __ANDROID__
+        std::istringstream number(std::string(start, p));
+        number.imbue(std::locale::classic());
+        number >> std::noskipws >> out;
+        if (number.fail() || !number.eof() || !std::isfinite(out))
+            return fail("number out of range");
+        // Stream conversion can silently round underflow to zero; from_chars
+        // rejects it. Ignore exponent digits when recognizing an actual zero.
+        if (out == 0.0) {
+            for (const char* digit = start; digit != p && *digit != 'e' && *digit != 'E'; ++digit) {
+                if (*digit >= '1' && *digit <= '9')
+                    return fail("number out of range");
+            }
+        }
+#else
         const auto result = std::from_chars(start, p, out, std::chars_format::general);
         if (result.ec != std::errc{} || result.ptr != p || !std::isfinite(out))
             return fail("number out of range");
+#endif
         return true;
     }
 

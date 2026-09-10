@@ -49,6 +49,13 @@ FrameAllocator::FrameAllocator(size_t capacity)
     // Standard aligned allocation (64-byte alignment for cache lines)
 #ifdef _MSC_VER
     buffer_ = static_cast<uint8_t*>(_aligned_malloc(capacity, 64));
+#elif defined(__ANDROID__)
+    // Keep free() pairing without requiring Android API 28's aligned_alloc.
+    void* allocation = nullptr;
+    if (posix_memalign(&allocation, 64, capacity) != 0) {
+        throw std::bad_alloc();
+    }
+    buffer_ = static_cast<uint8_t*>(allocation);
 #else
     // std::aligned_alloc requires size to be a multiple of the alignment
     buffer_ = static_cast<uint8_t*>(std::aligned_alloc(64, (capacity + 63) & ~size_t{63}));
