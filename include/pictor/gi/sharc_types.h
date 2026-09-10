@@ -11,8 +11,7 @@
 ///
 /// 全て純関数 / 定数 (状態なし・決定的) — headless テスト対象。
 
-#include "pictor/core/types.h"
-
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 

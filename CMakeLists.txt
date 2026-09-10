@@ -116,7 +116,6 @@ add_library(pictor STATIC
     src/gi/gi_scene_proxy.cpp
     src/gi/gi_probe_field.cpp
     src/gi/gi_gpu_executor.cpp
-    src/gi/sharc_executor.cpp
     src/gi/gi_shadow_atlas.cpp
     src/gi/gi_ssao_compute.cpp
     src/gi/gi_reflection_probe.cpp
@@ -342,6 +341,9 @@ if(glfw3_FOUND)
     target_link_libraries(pictor PUBLIC glfw)
 endif()
 
+# Optional SHaRC targets depend on core; core never links them back.
+include(cmake/PictorSharc.cmake)
+
 # デモ群は GLFW / Vulkan SDK 前提。 モバイル (Android/iOS) ではビルドしない
 # (Phase 2 以降で headless demo を .so 化する場合は別途ゲートする)。
 if(PICTOR_BUILD_DEMO AND PICTOR_MOBILE)
@@ -477,20 +479,22 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
         target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
 
-        # SHaRC 拡張デモ (D1 roughness ladder / D2 逆光透過、 4 パス compute)
-        add_executable(pictor_sharc_demo
-            demo/sharc/main.cpp
-            demo/sharc/ply_mesh.cpp
-            demo/sharc/obj_mesh.cpp
-            demo/sharc/mesh_bvh.cpp
-            demo/sharc/present_renderer.cpp
-            demo/sharc/gbuffer_renderer.cpp
-            demo/sharc/bloom_pipeline.cpp
-            demo/sharc/texture_atlas.cpp
-            third_party/stb/stb_image_impl.cpp
-        )
-        target_include_directories(pictor_sharc_demo PRIVATE third_party/stb)
-        target_link_libraries(pictor_sharc_demo PRIVATE pictor)
+        if(TARGET pictor_sharc_vulkan)
+            # SHaRC 拡張デモ (D1 roughness ladder / D2 逆光透過、 4 パス compute)
+            add_executable(pictor_sharc_demo
+                demo/sharc/main.cpp
+                demo/sharc/ply_mesh.cpp
+                demo/sharc/obj_mesh.cpp
+                demo/sharc/mesh_bvh.cpp
+                demo/sharc/present_renderer.cpp
+                demo/sharc/gbuffer_renderer.cpp
+                demo/sharc/bloom_pipeline.cpp
+                demo/sharc/texture_atlas.cpp
+                third_party/stb/stb_image_impl.cpp
+            )
+            target_include_directories(pictor_sharc_demo PRIVATE third_party/stb)
+            target_link_libraries(pictor_sharc_demo PRIVATE Pictor::sharc_vulkan)
+        endif()
 
         # Iter relation-graph demo (instanced/DoD graph view + cull/hit-test + dock)
         add_executable(pictor_graph_demo
@@ -525,21 +529,20 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
     # HLSL は D3DCompile (d3dcompiler_47) でランタイムコンパイルするため dxc /
     # pictor_shaders (SPIR-V) には依存しない。 Bistro OBJ を読み込み固定カメラで
     # 60 フレーム実行し、 出力を sharc_dx12_out.ppm へ書き出す。
-    if(WIN32)
+    if(TARGET pictor_sharc_dx12)
         add_executable(pictor_sharc_dx12_test
             demo/sharc/dx12_test_main.cpp
             demo/sharc/ply_mesh.cpp
             demo/sharc/obj_mesh.cpp
             demo/sharc/mesh_bvh.cpp
             demo/sharc/texture_atlas.cpp
-            src/gi/sharc_dx12_executor.cpp
             third_party/stb/stb_image_impl.cpp
         )
         target_include_directories(pictor_sharc_dx12_test PRIVATE include third_party/stb)
-        target_link_libraries(pictor_sharc_dx12_test PRIVATE d3d12 dxgi d3dcompiler)
+        target_link_libraries(pictor_sharc_dx12_test PRIVATE Pictor::sharc_dx12)
         target_compile_definitions(pictor_sharc_dx12_test PRIVATE
             NOMINMAX=1
-            PICTOR_SHARC_HLSL_DIR="${CMAKE_SOURCE_DIR}/shaders/sharc/hlsl")
+            PICTOR_SHARC_HLSL_DIR="${PICTOR_SHARC_HLSL_DIR}")
         if(MSVC)
             # /utf-8 does not propagate from the pictor lib to demo targets
             # ([[feedback_msvc_utf8_test_targets]]). 公開ヘッダ/ソースは日本語
@@ -707,21 +710,6 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/tear.frag
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.vert
         ${CMAKE_SOURCE_DIR}/shaders/ui/ui_overlay.frag
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_hit.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_march.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_compact.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_update.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_resolve.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_ao_bake.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_gbuffer_resolve.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_gbuffer.vert
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_gbuffer.frag
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_shadow.vert
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_bloom_extract.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_bloom_down.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_bloom_up.comp
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.vert
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_present.frag
     )
     # include される共通 GLSL — 変更時に consumer SPIR-V を再生成させる
     # (DEPENDS がトップレベル shader のみだと古い SPIR-V が残る)
@@ -730,10 +718,6 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/gi.glsl
         ${CMAKE_SOURCE_DIR}/shaders/shadow.glsl
         ${CMAKE_SOURCE_DIR}/shaders/velocity.glsl
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_common.glsl
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_scene.glsl
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_moments.glsl
-        ${CMAKE_SOURCE_DIR}/shaders/sharc/sharc_lobes.glsl
     )
     set(PICTOR_SHADOW_PLAY_GLSL_INCLUDES
         ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_scene.glsl

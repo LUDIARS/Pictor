@@ -27,8 +27,6 @@ set(PICTOR_TESTS
     unit_pipeline_tiers_test
     unit_postprocess_chain_test
     unit_gi_probe_field_test
-    unit_sharc_hash_test
-    unit_sharc_estimator_test
     unit_gi_bake_test
     unit_attachment_def_test
     unit_pipeline_registries_test
@@ -45,6 +43,10 @@ set(PICTOR_TESTS
     pixel_text_test
     fps_baseline_test
 )
+
+if(PICTOR_ENABLE_SHARC)
+    list(APPEND PICTOR_TESTS unit_sharc_hash_test unit_sharc_estimator_test)
+endif()
 
 foreach(_t ${PICTOR_TESTS})
     add_executable(${_t} ${_t}.cpp)
