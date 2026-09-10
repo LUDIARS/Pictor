@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef PICTOR_HAS_SHARC_DX12
+#error "SHaRC DX12 requires linking Pictor::sharc_dx12 (PICTOR_ENABLE_SHARC_DX12=ON)"
+#endif
+
 /// SharcDx12Executor — SHaRC 拡張ライティングキャッシュの DirectX 12 実行。
 ///
 /// `pictor::SharcGpuExecutor` (Vulkan 版, src/gi/sharc_executor.cpp) と同一
@@ -26,8 +30,7 @@
 
 #include "pictor/core/types.h"
 #include "pictor/gi/sharc_types.h"
-#include "pictor/gi/sharc_executor.h"   // SharcConfig / SharcRayGpu / SharcShadeRequestGpu /
-                                         // SharcLightGpu / SharcSceneUpload (API 非依存の値型)
+#include "pictor/gi/sharc_config.h"
 
 #include <cstdint>
 #include <functional>
