@@ -1,8 +1,7 @@
 # Metal Backend — iOS 直呼び設計 (RHI 合流 / SHaRC 先行)
 
-> ステータス: **設計 + 移植マッピング** (実装は macOS + 実機環境が前提)。
-> iOS は現状 MoltenVK 前提 (`portability/mobile.md` §1) だが、 本書は
-> **Metal 直呼び** へ置き換える。 Android は既存の Vulkan 直呼びを維持する。
+> ステータス: **native surface/present 実装済み + SHaRC 移植マッピング**。
+> iOS surface は **Metal 直呼び**。Android は既存 Vulkan を維持する。
 > RHI 抽象は `dx12-backend-design.md` の `IRhi*` 案に合流する (DX12 /
 > WebGPU / Metal の分岐点は 1 つ)。
 

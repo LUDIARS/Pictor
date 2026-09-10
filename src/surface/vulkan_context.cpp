@@ -161,10 +161,49 @@ bool VulkanContext::recreate_swapchain() {
         last_frame_result_ = {vulkan_frame_status(idle)};
         return false;
     }
-    cleanup_swapchain();
+    // Keep the complete old presentation graph alive until the replacement is
+    // usable. Vulkan permits this through VkSwapchainCreateInfoKHR::oldSwapchain.
+    const VkSwapchainKHR old_swapchain = swapchain_;
+    const VkRenderPass old_render_pass = render_pass_;
+    auto old_images = std::move(swapchain_images_);
+    auto old_views = std::move(swapchain_image_views_);
+    auto old_framebuffers = std::move(framebuffers_);
+    const VkFormat old_format = swapchain_format_;
+    const VkExtent2D old_extent = swapchain_extent_;
+    swapchain_ = VK_NULL_HANDLE;
+    render_pass_ = VK_NULL_HANDLE;
+    replacement_old_swapchain_ = old_swapchain;
+    bool replacement_created = false;
 
-    const auto failed = [this]() {
-        discard_swapchain_resources();
+    const auto failed = [this, old_swapchain, old_render_pass, old_format, old_extent,
+                         &old_images, &old_views, &old_framebuffers,
+                         &replacement_created]() {
+        // PerImageResourcePool retains its old allocation when replacement
+        // creation fails, so only discard the partial new swapchain graph.
+        cleanup_swapchain();
+        if (!replacement_created) {
+            swapchain_ = old_swapchain;
+            render_pass_ = old_render_pass;
+            swapchain_images_ = std::move(old_images);
+            swapchain_image_views_ = std::move(old_views);
+            framebuffers_ = std::move(old_framebuffers);
+            swapchain_format_ = old_format;
+            swapchain_extent_ = old_extent;
+        } else {
+            // A successfully created replacement retires oldSwapchain by Vulkan
+            // contract. It cannot be restored if a dependent allocation fails.
+            for (VkFramebuffer framebuffer : old_framebuffers) {
+                if (framebuffer) vkDestroyFramebuffer(device_, framebuffer, nullptr);
+            }
+            if (old_render_pass) vkDestroyRenderPass(device_, old_render_pass, nullptr);
+            for (VkImageView view : old_views) {
+                if (view) vkDestroyImageView(device_, view, nullptr);
+            }
+            if (old_swapchain) vkDestroySwapchainKHR(device_, old_swapchain, nullptr);
+            VulkanPerImageBackend backend(device_, command_pool_);
+            per_image_.destroy(backend);
+        }
+        replacement_old_swapchain_ = VK_NULL_HANDLE;
         if (last_frame_result_.status != FrameStatus::DeviceLost &&
             last_frame_result_.status != FrameStatus::SurfaceLost) {
             last_frame_result_ = {FrameStatus::Error};
@@ -172,6 +211,7 @@ bool VulkanContext::recreate_swapchain() {
         return false;
     };
     if (!create_swapchain())    return failed();
+    replacement_created = true;
     if (!create_image_views())  return failed();
     if (create_default_rp_on_init_) {
         if (!create_render_pass())  return failed();
@@ -184,6 +224,17 @@ bool VulkanContext::recreate_swapchain() {
     // command_buffers()[image_index] や present() の render-finished
     // セマフォ参照が配列外になる。
     if (!rebuild_per_image_resources()) return failed();
+
+    // The replacement is now complete. Retire the old graph in dependency order.
+    for (VkFramebuffer framebuffer : old_framebuffers) {
+        if (framebuffer) vkDestroyFramebuffer(device_, framebuffer, nullptr);
+    }
+    if (old_render_pass) vkDestroyRenderPass(device_, old_render_pass, nullptr);
+    for (VkImageView view : old_views) {
+        if (view) vkDestroyImageView(device_, view, nullptr);
+    }
+    if (old_swapchain) vkDestroySwapchainKHR(device_, old_swapchain, nullptr);
+    replacement_old_swapchain_ = VK_NULL_HANDLE;
 
     // 新しい image 集合に対する acquire 履歴は無い。 添字を先頭へ戻す。
     last_acquired_image_ = 0;
@@ -840,7 +891,7 @@ bool VulkanContext::create_swapchain() {
     sc_info.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     sc_info.presentMode      = present_mode;
     sc_info.clipped          = VK_TRUE;
-    sc_info.oldSwapchain     = VK_NULL_HANDLE;
+    sc_info.oldSwapchain     = replacement_old_swapchain_;
 
     const VkResult created = VK_CHECK(vkCreateSwapchainKHR(device_, &sc_info, nullptr, &swapchain_));
     if (created != VK_SUCCESS) {
