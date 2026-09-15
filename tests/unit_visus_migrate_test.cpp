@@ -21,7 +21,7 @@ const char* kV1 = R"({
   "name": "rabbit",
   "geometry": {
     "kind": "model",
-    "asset": { "local_path": "../../<term-c05>/Assets/3D/Characters/ch_<term-c07>/<term-c08>.fbx",
+    "asset": { "local_path": "../../GameProject/Assets/3D/Characters/ch_Rabbit/Rabbit.fbx",
                "remote_url": "", "sha256": "", "size_bytes": 0, "fetch_policy": "cache_first", "headers": [] },
     "rive_artboard": "", "text_default": "",
     "mesh": "none", "model": "handle:3", "shader": "none", "generic_handle": 0
@@ -29,7 +29,7 @@ const char* kV1 = R"({
   "materials": [],
   "textures": [
     { "slot": "diffuse", "texture": "none",
-      "resource": { "local_path": "../../<term-c05>/Assets/3D/Characters/ch_<term-c07>/T_<term-c08>_Albedo.png" } }
+      "resource": { "local_path": "../../GameProject/Assets/3D/Characters/ch_Rabbit/T_Rabbit_Albedo.png" } }
   ],
   "flags": { "default_flags": 2, "layer": 0, "pool_hint": "dynamic", "initial_lod": 0 },
   "animation_default": { "kind": "clip", "name": "Idle", "loop": true, "speed": 1 },

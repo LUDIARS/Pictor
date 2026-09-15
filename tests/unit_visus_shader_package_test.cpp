@@ -172,7 +172,7 @@ void test_package_ref_value_forms() {
 
 void test_visus_json_round_trip_with_packages() {
     VisusDesc d;
-    d.name  = "<term-c01>";
+    d.name  = "hero";
     d.kind  = VisusKind::MODEL;
     d.asset = "k.fbx";
     d.packages = {ref("toon"), ref_param("outline", "width", 0.02)};

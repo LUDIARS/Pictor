@@ -4,7 +4,7 @@ The existing raymarch viewer had static source-derived coefficients. An optional
 installed PictorDemo SDK now accepts a caller-owned PolynomialMotion provider,
 updates changed coefficients and their bounds after the previous frame fence,
 and displays provider controls/status. An upper Fg app consumes this SDK without
-adding an upper-library dependency to Pictor. It bends the existing <term-c01> hair
+adding an upper-library dependency to Pictor. It bends the existing character hair
 and six fork tips, then supplies the resulting cubic control nets.
 
 The viewer can record actual swapchain images at fixed simulation intervals.
@@ -15,7 +15,7 @@ numerical LOD controls remain available.
 
 ## Validation, 2026-09-08 JST
 
-- Release builds of `pictor_polynomial_demo` and `pictor_<term-c01>_demo` succeeded.
+- Release builds of `pictor_polynomial_demo` and `pictor_pn_demo` succeeded.
   The installed SDK linked successfully into the Fg consumer executable.
 - Anatomia domain audit after SDK ownership/spec additions: 69 modules,
   3520 symbols, zero unclassified. Earlier PR #1464 Test OK refers to the prior
@@ -33,8 +33,8 @@ numerical LOD controls remain available.
 - No unrelated suites or manual keyboard tests were run. Native Computer Use
   was unavailable. Testing claims were released after capture.
 
-Artifact directory: `Pictor/build/<term-c01>-hair-demo/`; final recording:
-`pictor-<term-c01>-hair-forks-20260908.mp4`; detailed metrics:
+Artifact directory: `Pictor/build/pn-hair-demo/`; final recording:
+`pictor-character-hair-forks-20260908.mp4`; detailed metrics:
 `wind-fork-validation.json`. It is a fixed-time recording: interactive rendering
 on the GTX 1070 was about 2 fps. This does not claim completion of the separately
 requested cel-look renderer, exact garment collision, or a closed-form temporal

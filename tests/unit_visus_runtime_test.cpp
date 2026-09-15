@@ -64,9 +64,9 @@ struct FakeResolver : IVisusResolver {
 
 VisusDesc model_desc() {
     VisusDesc d;
-    d.name  = "<term-c01>";
+    d.name  = "hero";
     d.kind  = VisusKind::MODEL;
-    d.asset = "models/<term-c01>.fbx";
+    d.asset = "models/hero.fbx";
     VisusPart pbr;  pbr.part = "T_Cloak_bsc";  pbr.shader = VisusShaderRef::builtin();
     VisusPart face; face.part = "T_Face_bsc";  face.shader = VisusShaderRef::stages("sh/face.vert.spv", "sh/face.frag.spv");
     face.metadata.set(visus_keys::kShaderKeyOverride, 5);
@@ -75,7 +75,7 @@ VisusDesc model_desc() {
     VisusPart shared; shared.part = "*";        shared.shader = VisusShaderRef::visus("fx_shader");
     d.parts = {pbr, face, toon, shared};
     d.metadata.set(visus_keys::kShaderKeyOverride, 9);
-    VisusChildRef facial; facial.visus = "<term-c01>_facial"; facial.attach.bone = "Head";
+    VisusChildRef facial; facial.visus = "hero_facial"; facial.attach.bone = "Head";
     d.children.push_back(facial);
     return d;
 }
@@ -97,19 +97,19 @@ void test_model_parts_and_children() {
     VisusCatalog cat;
     cat.add(model_desc());
     cat.add(custom_desc("fx_shader", "sh/fx.vert.spv", "sh/fx.frag.spv"));
-    VisusDesc facial; facial.name = "<term-c01>_facial"; facial.kind = VisusKind::RIVE; facial.asset = "rive/face.riv";
+    VisusDesc facial; facial.name = "hero_facial"; facial.kind = VisusKind::RIVE; facial.asset = "rive/face.riv";
     cat.add(facial);
 
     FakeResolver rs;
     VisusRuntime rt;
     std::vector<std::string> warnings;
-    PT_ASSERT(rt.resolve(cat, "<term-c01>", rs, &warnings), "resolve root");
+    PT_ASSERT(rt.resolve(cat, "hero", rs, &warnings), "resolve root");
     PT_ASSERT(warnings.empty(), "no warnings on healthy tree");
 
-    const VisusResolved* r = rt.get("<term-c01>");
+    const VisusResolved* r = rt.get("hero");
     PT_ASSERT(r && r->kind == VisusKind::MODEL, "root resolved");
     PT_ASSERT(r->model == 101, "model handle from resolver");
-    PT_ASSERT(rs.models.size() == 1 && rs.models[0] == "models/<term-c01>.fbx", "asset path passed (no source dir → as-is)");
+    PT_ASSERT(rs.models.size() == 1 && rs.models[0] == "models/hero.fbx", "asset path passed (no source dir → as-is)");
     PT_ASSERT_OP(r->parts.size(), ==, size_t{4}, "4 parts resolved in order");
     PT_ASSERT(r->parts[0].part == "T_Cloak_bsc" && r->parts[0].mesh == 501 &&
               r->parts[3].part == "T_Shoes_bsc" && r->parts[3].mesh == 504,
@@ -142,21 +142,21 @@ void test_model_parts_and_children() {
     PT_ASSERT_OP(rs.shaders.size(), ==, size_t{2}, "exactly 2 shader registrations (face + fx)");
 
     // children も再帰的に解決
-    const VisusResolved* f = rt.get("<term-c01>_facial");
+    const VisusResolved* f = rt.get("hero_facial");
     PT_ASSERT(f && f->kind == VisusKind::RIVE && f->generic_handle == 401, "child rive resolved via load_generic");
-    PT_ASSERT_OP(rt.size(), ==, size_t{3}, "<term-c01> + fx_shader + <term-c01>_facial");
+    PT_ASSERT_OP(rt.size(), ==, size_t{3}, "hero + fx_shader + hero_facial");
 
     // 再 resolve は no-op (resolver を呼び直さない)
-    rt.resolve(cat, "<term-c01>", rs, &warnings);
+    rt.resolve(cat, "hero", rs, &warnings);
     PT_ASSERT_OP(rs.models.size(), ==, size_t{1}, "already resolved → not reloaded");
-    PT_ASSERT(rt.invalidate("<term-c01>") && rt.size() == 0,
+    PT_ASSERT(rt.invalidate("hero") && rt.size() == 0,
               "invalidating a root also drops child and shared-shader dependencies");
 
-    PT_ASSERT(rt.resolve(cat, "<term-c01>", rs, &warnings), "resolve invalidated tree");
+    PT_ASSERT(rt.resolve(cat, "hero", rs, &warnings), "resolve invalidated tree");
     PT_ASSERT_OP(rs.models.size(), ==, size_t{2}, "root model reloaded");
     PT_ASSERT_OP(rs.generics.size(), ==, size_t{2}, "child asset reloaded");
     PT_ASSERT_OP(rs.shaders.size(), ==, size_t{4}, "direct and shared shaders re-registered");
-    PT_ASSERT(rt.get("fx_shader") && rt.get("<term-c01>_facial"),
+    PT_ASSERT(rt.get("fx_shader") && rt.get("hero_facial"),
               "dependent entries repopulated with the refreshed tree");
 }
 
@@ -380,9 +380,9 @@ void test_shader_packages() {
     FakeResolver rs;
     VisusRuntime rt;
     std::vector<std::string> w;
-    PT_ASSERT(rt.resolve(cat, "<term-c01>", rs, &w, &packages), "resolve with a package catalog");
+    PT_ASSERT(rt.resolve(cat, "hero", rs, &w, &packages), "resolve with a package catalog");
 
-    const VisusResolved* r = rt.get("<term-c01>");
+    const VisusResolved* r = rt.get("hero");
     PT_ASSERT(r != nullptr, "resolved");
     const VisusResolvedPart* cloak = r->find_part("T_Cloak_bsc");
     PT_ASSERT(cloak != nullptr, "cloak resolved");
@@ -419,9 +419,9 @@ void test_shader_packages_need_a_catalog() {
     FakeResolver rs;
     VisusRuntime rt;
     std::vector<std::string> w;
-    PT_ASSERT(rt.resolve(cat, "<term-c01>", rs, &w), "resolves without a package catalog");
+    PT_ASSERT(rt.resolve(cat, "hero", rs, &w), "resolves without a package catalog");
     PT_ASSERT(has(w, "no package catalog"), "missing package catalog warned");
-    const VisusResolved* r = rt.get("<term-c01>");
+    const VisusResolved* r = rt.get("hero");
     PT_ASSERT(r && r->find_part("T_Cloak_bsc") && r->find_part("T_Cloak_bsc")->packages.empty(),
               "no overlay passes without a catalog");
 }

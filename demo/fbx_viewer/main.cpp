@@ -42,10 +42,10 @@
 #include "textured_skinned_vertex.h"
 #include "vk_buffer_util.h"
 #include "packed_mesh.h"
-#include "../<term-c01>/reconstruction.h"
-#include "../<term-c01>/motion_bridge.h"
-#include "../<term-c01>/frame_recording.h"
-#include "../<term-c01>/debug_hud.h"
+#include "../pn_surface/reconstruction.h"
+#include "../pn_surface/motion_bridge.h"
+#include "../pn_surface/frame_recording.h"
+#include "../pn_surface/debug_hud.h"
 
 #include "stb_image.h"
 
@@ -911,9 +911,9 @@ static std::string find_texture_file(const fs::path& texture_dir, const std::str
 // ============================================================
 
 struct ViewerOptions {
-    pictor_<term-c01>::Options reconstruction;
+    pictor_pn::Options reconstruction;
     pictor::demo::PolynomialMotion* polynomial_motion=nullptr;
-    pictor_<term-c01>::FrameRecording recording;
+    pictor_pn::FrameRecording recording;
     bool           fur_enabled     = false;
     FurShellParams fur;
     bool           fur_length_set  = false;   // --fur-length given (else radius-relative default)
@@ -983,7 +983,7 @@ public:
         if (options.reconstruction.enabled) {
             if(options.polynomial_motion && !options.reconstruction.raymarch)
                 throw std::invalid_argument("Polynomial motion requires --renderer raymarch");
-            reconstruction_ = std::make_unique<pictor_<term-c01>::Reconstruction>(std::move(mesh_), options.reconstruction);
+            reconstruction_ = std::make_unique<pictor_pn::Reconstruction>(std::move(mesh_), options.reconstruction);
             motion_.initialize(options.polynomial_motion,reconstruction_->model(),skeleton_);
             mesh_ = reconstruction_->rebuild();
             skinning_enabled_ = false; // Controlled source/PN comparison in the same bind pose.
@@ -1043,7 +1043,7 @@ public:
         if (!load_textures())                return false;
         if (!create_descriptor_sets())       return false;
         if (reconstruction_) {
-            pictor_<term-c01>::RaymarchPass::CreateInfo ci;
+            pictor_pn::RaymarchPass::CreateInfo ci;
             ci.device=vk_.device();ci.physical_device=vk_.physical_device();ci.render_pass=render_pass_;
             ci.scene_layout=scene_set_layout_;ci.texture_layout=tex_set_layout_;ci.shader_dir=shader_dir_;
             if (!raymarch_.create(ci,motion_.initial_patches(reconstruction_->model()))) return false;
@@ -1412,7 +1412,7 @@ public:
                 std::string next;
                 const bool recording=!options_.recording.directory.empty();
                 if(recording && frame_index_+1<options_.recording.count)
-                    next=pictor_<term-c01>::recording_path(options_.recording,frame_index_+1);
+                    next=pictor_pn::recording_path(options_.recording,frame_index_+1);
                 else if(!recording && reconstruction_)next=reconstruction_->advance_capture();
                 if (!next.empty()) capture_.request(next, frame_index_ + (recording?1:32));
                 else if (options_.exit_after_capture) {
@@ -2392,7 +2392,7 @@ private:
         if (reconstruction_) {
             hud_.begin(cmd,ext);
             if (!options_.reconstruction.stage) {
-                pictor_<term-c01>::draw_debug_hud(hud_,*reconstruction_,unresolved_,frame_ms_,ext.height,motion_.enabled());
+                pictor_pn::draw_debug_hud(hud_,*reconstruction_,unresolved_,frame_ms_,ext.height,motion_.enabled());
                 motion_.draw_status(hud_);
             }
             hud_.end();
@@ -2514,9 +2514,9 @@ private:
     bool               tears_enabled_  = false;
     VkBuffer           bind_buffer_ = VK_NULL_HANDLE; VkDeviceMemory bind_mem_ = VK_NULL_HANDLE;
     FrameCapture     capture_;
-    std::unique_ptr<pictor_<term-c01>::Reconstruction> reconstruction_;
-    pictor_<term-c01>::RaymarchPass raymarch_;
-    pictor_<term-c01>::MotionBridge motion_;
+    std::unique_ptr<pictor_pn::Reconstruction> reconstruction_;
+    pictor_pn::RaymarchPass raymarch_;
+    pictor_pn::MotionBridge motion_;
     pictor::BitmapTextRenderer hud_;
     uint32_t unresolved_=0;
     float frame_ms_=0;
@@ -2559,14 +2559,14 @@ int main(int argc, char** argv) {
 #ifdef PICTOR_POLYNOMIAL_DEMO_LIBRARY
     options.polynomial_motion=motion;
 #endif
-#ifdef PICTOR_<term-c01>_DEMO
+#ifdef PICTOR_PN_DEMO
     options.reconstruction.enabled=true;
     options.show_bones=false;
 #endif
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a=="--help") {
-            std::printf("Pictor FBX / <term-c01> reconstruction demo\n[path] [shader_dir]\n"
+            std::printf("Pictor FBX / PN reconstruction demo\n[path] [shader_dir]\n"
                 "--pn-factor 1|2|4|8 --pn-strength 0..1 --view head|body --yaw degrees --zoom factor\n"
                 "--renderer raymarch|raster --animate-interpolation --fixed-lod --window-width N --window-height N\n"
                 "--display texture|clay|facets|steps --capture file.bmp --capture-set directory --pn-report file.jsonl\n"
@@ -2575,8 +2575,8 @@ int main(int argc, char** argv) {
             return 0;
         }
         try {
-            if (pictor_<term-c01>::parse_recording_option(argc,argv,i,options.recording)) continue;
-            if (pictor_<term-c01>::parse_option(argc,argv,i,options.reconstruction)) continue;
+            if (pictor_pn::parse_recording_option(argc,argv,i,options.recording)) continue;
+            if (pictor_pn::parse_option(argc,argv,i,options.reconstruction)) continue;
         } catch (const std::exception& e) { std::fprintf(stderr,"%s\n",e.what());return 2; }
         auto next = [&](const char* what) -> const char* {
             if (i + 1 >= argc) { std::fprintf(stderr, "%s needs a value\n", what); std::exit(2); }
@@ -2633,7 +2633,7 @@ int main(int argc, char** argv) {
     }
     fs::path input_path = (positional.size() >= 1) ? fs::path(positional[0]) : fs::path("fbx/model1");
     std::string shader_dir = (positional.size() >= 2) ? positional[1] : "shaders";
-#ifdef PICTOR_<term-c01>_DEMO
+#ifdef PICTOR_PN_DEMO
     const fs::path exe_dir=fs::absolute(argv[0]).parent_path();
     if (positional.empty()) input_path=exe_dir/"model";
     if (positional.size()<2) shader_dir=(exe_dir/"shaders").string();
@@ -2646,9 +2646,9 @@ int main(int argc, char** argv) {
         if(!options.capture_path.empty() || !options.reconstruction.capture_directory.empty()) {
             std::fprintf(stderr,"--record-frames cannot be combined with other capture options\n");return 2;
         }
-        try {pictor_<term-c01>::prepare_recording(options.recording);}
+        try {pictor_pn::prepare_recording(options.recording);}
         catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 2;}
-        options.capture_path=pictor_<term-c01>::recording_path(options.recording,0);options.capture_frame=0;
+        options.capture_path=pictor_pn::recording_path(options.recording,0);options.capture_frame=0;
     }
     // --capture-set drives a fixed eight-shot sequence and owns the camera,
     // level and display state, so it cannot be combined with the single-shot
@@ -2658,7 +2658,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     try {
-        const std::string first_capture=pictor_<term-c01>::first_capture(options.reconstruction);
+        const std::string first_capture=pictor_pn::first_capture(options.reconstruction);
         if (!first_capture.empty()) { options.capture_path=first_capture;options.capture_frame=32; }
     } catch (const std::exception& e) { std::fprintf(stderr,"%s\n",e.what());return 2; }
 

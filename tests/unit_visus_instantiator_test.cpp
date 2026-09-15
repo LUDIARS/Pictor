@@ -49,7 +49,7 @@ struct BoneResolver : IVisusResolver {
 
 VisusResolved resolved_model() {
     VisusResolved r;
-    r.name  = "<term-c01>";
+    r.name  = "hero";
     r.kind  = VisusKind::MODEL;
     r.model = 7;
     VisusResolvedPart a; a.part = "cloak"; a.mesh = 31; a.shader = INVALID_SHADER; a.shader_key = 9;
@@ -122,23 +122,23 @@ void test_model_parts_and_children() {
     SceneRegistry   scene(memory);
 
     VisusCatalog cat;
-    VisusDesc <term-c01>; <term-c01>.name = "<term-c01>"; <term-c01>.kind = VisusKind::MODEL; <term-c01>.asset = "k.fbx";
+    VisusDesc hero; hero.name = "hero"; hero.kind = VisusKind::MODEL; hero.asset = "k.fbx";
     VisusPart p0; p0.part = "cloak"; VisusPart p1; p1.part = "face";
-    <term-c01>.parts = {p0, p1};
-    <term-c01>.metadata.set(visus_keys::kRenderLayer, 1);
-    VisusChildRef facial; facial.visus = "<term-c01>_facial"; facial.attach.bone = "Head"; facial.attach.offset[2] = 0.05f;
+    hero.parts = {p0, p1};
+    hero.metadata.set(visus_keys::kRenderLayer, 1);
+    VisusChildRef facial; facial.visus = "hero_facial"; facial.attach.bone = "Head"; facial.attach.offset[2] = 0.05f;
     VisusChildRef aura;   aura.visus   = "aura";                                  // bone 無し → 親 transform
     VisusChildRef ghost;  ghost.visus  = "missing";                               // 未解決
-    <term-c01>.children = {facial, aura, ghost};
-    cat.add(<term-c01>);
-    VisusDesc f; f.name = "<term-c01>_facial"; f.kind = VisusKind::RIVE; f.asset = "face.riv"; cat.add(f);
+    hero.children = {facial, aura, ghost};
+    cat.add(hero);
+    VisusDesc f; f.name = "hero_facial"; f.kind = VisusKind::RIVE; f.asset = "face.riv"; cat.add(f);
     VisusDesc g; g.name = "aura"; g.kind = VisusKind::GROUP;
     VisusChildRef cube; cube.visus = "cube"; cube.attach.offset[0] = 2.0f; g.children.push_back(cube); cat.add(g);
     VisusDesc c; c.name = "cube"; c.kind = VisusKind::PRIMITIVE; c.asset = "cube.mesh"; cat.add(c);
 
     VisusRuntime rt;
     rt.set(resolved_model());
-    VisusResolved rf; rf.name = "<term-c01>_facial"; rf.kind = VisusKind::RIVE;
+    VisusResolved rf; rf.name = "hero_facial"; rf.kind = VisusKind::RIVE;
     rf.generic_handle = 51; rt.set(rf);
     VisusResolved rc; rc.name = "cube"; rc.kind = VisusKind::PRIMITIVE; rc.mesh = 21; rt.set(rc);
 
@@ -146,11 +146,11 @@ void test_model_parts_and_children() {
     VisusInstance inst;
     std::vector<std::string> w;
     const AABB bb = {{-1, -1, -1}, {1, 1, 1}};
-    PT_ASSERT(instantiate_visus(scene, cat, rt, "<term-c01>", translation(100, 0, 0), bb, inst, &w, &bones),
+    PT_ASSERT(instantiate_visus(scene, cat, rt, "hero", translation(100, 0, 0), bb, inst, &w, &bones),
               "root instantiates");
 
     // 自身: part ごとに 1 個
-    PT_ASSERT(inst.name == "<term-c01>", "instance name");
+    PT_ASSERT(inst.name == "hero", "instance name");
     PT_ASSERT_OP(inst.objects.size(), ==, size_t{2}, "2 parts -> 2 objects");
     PT_ASSERT(inst.objects[0] != inst.objects[1], "distinct ids");
     for (size_t i = 0; i < inst.objects.size(); ++i) {
@@ -163,7 +163,7 @@ void test_model_parts_and_children() {
     // children: facial (bone) / aura (group → 0 objects, 1 grandchild) / missing (skipped + warning)
     PT_ASSERT_OP(inst.children.size(), ==, size_t{2}, "2 resolvable children");
     const VisusInstance& fi = inst.children[0];
-    PT_ASSERT(fi.name == "<term-c01>_facial" && fi.objects.empty() && fi.generic_handle == 51,
+    PT_ASSERT(fi.name == "hero_facial" && fi.objects.empty() && fi.generic_handle == 51,
               "rive child exposes host generic handle without invalid mesh object");
     {
         const float3 t = fi.transform.get_translation();
@@ -313,7 +313,7 @@ void test_package_overlay_passes() {
 
     VisusCatalog cat;
     VisusDesc d;
-    d.name  = "<term-c01>";
+    d.name  = "hero";
     d.kind  = VisusKind::MODEL;
     d.asset = "k.fbx";
     cat.add(d);
@@ -336,7 +336,7 @@ void test_package_overlay_passes() {
     VisusInstance inst;
     std::vector<std::string> w;
     const AABB bb = {{-1, -1, -1}, {1, 1, 1}};
-    PT_ASSERT(instantiate_visus(scene, cat, rt, "<term-c01>", float4x4::identity(), bb, inst, &w),
+    PT_ASSERT(instantiate_visus(scene, cat, rt, "hero", float4x4::identity(), bb, inst, &w),
               "instantiates");
     PT_ASSERT_OP(inst.objects.size(), ==, size_t{5}, "2 base + 3 overlay passes");
     PT_ASSERT_OP(inst.bindings.size(), ==, size_t{3}, "one binding per overlay pass");

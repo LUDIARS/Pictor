@@ -27,7 +27,7 @@ struct VulkanContextConfig {
     ///
     /// false にすると create_render_pass / framebuffers を skip し、 host が
     /// RenderPassRegistry + FramebufferRegistry 経由で profile-driven に作る
-    /// 前提になる (KS Phase 4 step 4 など `default_render_pass()` を使わない
+    /// 前提になる (PrivateGame Phase 4 step 4 など `default_render_pass()` を使わない
     /// パス専用)。 default_render_pass() / framebuffers() は VK_NULL_HANDLE を
     /// 返すので、 これらに依存するコンポーネントは同居できない。
     bool        create_default_render_pass = true;

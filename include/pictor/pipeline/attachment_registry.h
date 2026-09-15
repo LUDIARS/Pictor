@@ -87,7 +87,7 @@ public:
 
     /// Replace an attachment with caller-owned VkImage/VkImageView handles.
     ///
-    /// Use when the host already owns the GPU resources (e.g. KS の
+    /// Use when the host already owns the GPU resources (e.g. PrivateGame の
     /// `PostProcessLayer` が `PostProcessPipeline` 内部で先に作った
     /// `scene_hdr_color`) と Phase 4 で AttachmentRegistry に参照させたい
     /// 場合。 `name` で attachment を引き、 内部で作成済みだった

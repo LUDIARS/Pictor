@@ -27,5 +27,5 @@ set_config / push constant でプログラムから流し込む)。
 - `include/pictor/core/`, `src/core/`, `include/pictor/pipeline/`, `src/pipeline/`, `include/pictor/shader/`, `src/shader/`, `tests/`, `CMakeLists.txt`, `tests/CMakeLists.txt`
 
 ## 非スコープ (ホスト配線 = 別タスク)
-- KS `kuzu_visus_preview` / `GameRenderer` の watch 配線、Ergo render_pipeline エディタ側 (spec §2)。
+- PrivateGame `game_visus_preview` / `GameRenderer` の watch 配線、Ergo render_pipeline エディタ側 (spec §2)。
 - GLSL→SPIR-V コンパイル、GI/decal 等の組み込み固定シェーダのリロード。

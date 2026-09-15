@@ -265,7 +265,7 @@ void rebuild_intermediate_targets(PostProcessChain& chain);
 ///
 /// 戻り値の `passes` には組み込み pass 列のあと、 ホスト定義の任意 pass
 /// (`extra` 引数) が続く。 `extra` の各 pass は inputs/output を論理名で
-/// 指定できる (現状 KS は空で呼ぶ)。 組み込み pass 名 (dof / ssao_apply /
+/// 指定できる (現状 PrivateGame は空で呼ぶ)。 組み込み pass 名 (dof / ssao_apply /
 /// motion_blur / fxaa / bloom_extract / bloom_blur_h / bloom_blur_v /
 /// color_grade) は `refresh_post_process_chain()` が push_data を管理する
 /// 予約名 — extra には使わないこと。

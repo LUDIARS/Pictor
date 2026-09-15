@@ -14,7 +14,7 @@
 | `PICTOR_BUILD_WEBGL` | `OFF` | WebGL2 バックエンド (別ライブラリ `pictor_webgl`) をビルド。Emscripten 前提 | `-DPICTOR_BUILD_WEBGL=ON` / `:13,390` |
 | `PICTOR_ENABLE_RIVE` | `OFF` | Rive Renderer 統合。prebuilt rive-runtime が必要 (下記 §Rive) | `-DPICTOR_ENABLE_RIVE=ON` / `:14,260` |
 
-> 注: `../../README.md` には `PICTOR_BUILD_C_API` (C ABI エクスポート) が列挙されているが、現行 `../../CMakeLists.txt` には対応する `option()` もターゲット定義も無く、ビルドフラグとしては未配線。`include/pictor/c_api.h` / `src/c_api/c_api.cpp` のソースは存在するが、現状このフラグを渡しても効果は無い。同様に consumer (KS) や CI が渡す `PICTOR_BUILD_BENCHMARK` も Pictor 側では未配線で、無害なキャッシュ変数として無視される。本ガイドでは未実装のため操作対象に含めない。
+> 注: `../../README.md` には `PICTOR_BUILD_C_API` (C ABI エクスポート) が列挙されているが、現行 `../../CMakeLists.txt` には対応する `option()` もターゲット定義も無く、ビルドフラグとしては未配線。`include/pictor/c_api.h` / `src/c_api/c_api.cpp` のソースは存在するが、現状このフラグを渡しても効果は無い。同様に consumer (PrivateGame) や CI が渡す `PICTOR_BUILD_BENCHMARK` も Pictor 側では未配線で、無害なキャッシュ変数として無視される。本ガイドでは未実装のため操作対象に含めない。
 
 ## Rive 統合の入力 (§Rive)
 

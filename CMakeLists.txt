@@ -398,15 +398,15 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         )
         target_include_directories(pictor_fbx_viewer PRIVATE third_party/stb)
         target_link_libraries(pictor_fbx_viewer PRIVATE pictor)
-        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/pn_patch.cpp demo/<term-c01>/pn_model.cpp demo/<term-c01>/reconstruction.cpp)
-        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/pn_gpu_data.cpp demo/<term-c01>/raymarch_pass.cpp demo/<term-c01>/debug_hud.cpp)
-        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/motion_bridge.cpp demo/<term-c01>/motion_layout.cpp)
-        target_sources(pictor_fbx_viewer PRIVATE demo/<term-c01>/frame_recording.cpp)
+        target_sources(pictor_fbx_viewer PRIVATE demo/pn_surface/pn_patch.cpp demo/pn_surface/pn_model.cpp demo/pn_surface/reconstruction.cpp)
+        target_sources(pictor_fbx_viewer PRIVATE demo/pn_surface/pn_gpu_data.cpp demo/pn_surface/raymarch_pass.cpp demo/pn_surface/debug_hud.cpp)
+        target_sources(pictor_fbx_viewer PRIVATE demo/pn_surface/motion_bridge.cpp demo/pn_surface/motion_layout.cpp)
+        target_sources(pictor_fbx_viewer PRIVATE demo/pn_surface/frame_recording.cpp)
         get_target_property(_fbx_viewer_sources pictor_fbx_viewer SOURCES)
-        add_executable(pictor_<term-c01>_demo ${_fbx_viewer_sources})
-        target_include_directories(pictor_<term-c01>_demo PRIVATE third_party/stb)
-        target_link_libraries(pictor_<term-c01>_demo PRIVATE pictor)
-        target_compile_definitions(pictor_<term-c01>_demo PRIVATE PICTOR_<term-c01>_DEMO=1)
+        add_executable(pictor_pn_demo ${_fbx_viewer_sources})
+        target_include_directories(pictor_pn_demo PRIVATE third_party/stb)
+        target_link_libraries(pictor_pn_demo PRIVATE pictor)
+        target_compile_definitions(pictor_pn_demo PRIVATE PICTOR_PN_DEMO=1)
         if(PICTOR_BUILD_POLYNOMIAL_SDK)
             include(cmake/PolynomialDemo.cmake)
         endif()
@@ -415,7 +415,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             # contains non-ASCII comments: /utf-8 must match on each or MSVC
             # decodes those bytes with the local ANSI codepage.
             target_compile_options(pictor_fbx_viewer PRIVATE /utf-8 /EHsc)
-            target_compile_options(pictor_<term-c01>_demo PRIVATE /utf-8 /EHsc)
+            target_compile_options(pictor_pn_demo PRIVATE /utf-8 /EHsc)
         endif()
     endif()
 
@@ -668,8 +668,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/model.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/reconstruction.frag
-        ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray.vert
-        ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray.frag
+        ${CMAKE_SOURCE_DIR}/demo/pn_surface/shaders/pn_ray.vert
+        ${CMAKE_SOURCE_DIR}/demo/pn_surface/shaders/pn_ray.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.vert
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/bone.frag
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/fur_shell.vert
@@ -710,12 +710,12 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         if(SHADER MATCHES "/demo/fbx_viewer/shaders/")
             list(APPEND SHADER_DEPENDS ${PICTOR_FBX_VIEWER_GLSL_INCLUDES})
         endif()
-        if(SHADER MATCHES "/demo/<term-c01>/shaders/")
+        if(SHADER MATCHES "/demo/pn_surface/shaders/")
             list(APPEND SHADER_OPTIONS -O)
             list(APPEND SHADER_DEPENDS
-                ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray_common.glsl
-                ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_ray_distance.glsl
-                ${CMAKE_SOURCE_DIR}/demo/<term-c01>/shaders/pn_stage.glsl)
+                ${CMAKE_SOURCE_DIR}/demo/pn_surface/shaders/pn_ray_common.glsl
+                ${CMAKE_SOURCE_DIR}/demo/pn_surface/shaders/pn_ray_distance.glsl
+                ${CMAKE_SOURCE_DIR}/demo/pn_surface/shaders/pn_stage.glsl)
         endif()
         add_custom_command(
             OUTPUT ${SPIRV_OUT}
@@ -757,8 +757,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     if(TARGET pictor_fbx_viewer)
         add_dependencies(pictor_fbx_viewer pictor_shaders)
     endif()
-    if(TARGET pictor_<term-c01>_demo)
-        add_dependencies(pictor_<term-c01>_demo pictor_shaders)
+    if(TARGET pictor_pn_demo)
+        add_dependencies(pictor_pn_demo pictor_shaders)
     endif()
     if(TARGET pictor_sharc_demo)
         add_dependencies(pictor_sharc_demo pictor_shaders)

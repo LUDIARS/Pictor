@@ -39,7 +39,7 @@ cmake --build build --config Release --target pictor
 | WebGL2 (ブラウザ) バックエンド | `-DPICTOR_BUILD_WEBGL=ON` (Emscripten) | [`build-options.md`](build-options.md) §WebGL |
 | 開発者ツール (feature-selector) を開きたい | `-DPICTOR_BUILD_TOOLS=ON` | [`build-options.md`](build-options.md) |
 | ヘッドレステストを回したい | `-DPICTOR_BUILD_TESTS=ON` (既定) → `ctest` | [`build.md`](build.md) §テスト |
-| consumer (KS 等) に組み込みたい | `add_subdirectory(Pictor)` + `target_link_libraries(... pictor)` | [`integration.md`](integration.md) |
+| consumer (PrivateGame 等) に組み込みたい | `add_subdirectory(Pictor)` + `target_link_libraries(... pictor)` | [`integration.md`](integration.md) |
 | Android NDK / iOS でクロスビルド | `PICTOR_MOBILE` 分岐 (GLFW 無効化、NDK Vulkan) | [`../../docs/android-build.md`](../../docs/android-build.md) |
 
 ## 関連設計

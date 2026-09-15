@@ -1042,7 +1042,7 @@ PostProcessChain build_post_process_chain(const PostProcessConfig& cfg,
         chain.passes.push_back(std::move(p));
     }
 
-    // ── 任意追加 pass (ホスト定義)。 現状 KS は空で呼ぶ ──────────────────
+    // ── 任意追加 pass (ホスト定義)。 現状 PrivateGame は空で呼ぶ ──────────────────
     for (const auto& e : extra) chain.passes.push_back(e);
 
     // 中間ターゲット (予約名を除く) を pass の入出力から収集する。

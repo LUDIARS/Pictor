@@ -16,7 +16,7 @@ BitmapTextRenderer::~BitmapTextRenderer() {
     if (initialized_) shutdown();
 }
 
-/// @implements SPEC-PC-<term-c01>-RAYMARCH
+/// @implements SPEC-PC-PN-RAYMARCH
 bool BitmapTextRenderer::initialize(VulkanContext& vk_ctx, const char* shader_dir, VkRenderPass render_pass) {
     if (device_) return false;
     vk_ctx_ = &vk_ctx;
@@ -33,7 +33,7 @@ bool BitmapTextRenderer::initialize(VulkanContext& vk_ctx, const char* shader_di
     return true;
 }
 
-/// @implements SPEC-PC-<term-c01>-RAYMARCH
+/// @implements SPEC-PC-PN-RAYMARCH
 void BitmapTextRenderer::shutdown() {
     if (!device_) return;
     vkDeviceWaitIdle(device_);
@@ -306,7 +306,7 @@ VkShaderModule BitmapTextRenderer::load_shader(const char* path) {
     return mod;
 }
 
-/// @implements SPEC-PC-<term-c01>-RAYMARCH
+/// @implements SPEC-PC-PN-RAYMARCH
 bool BitmapTextRenderer::create_pipeline(const char* shader_dir) {
     std::string vert_path = std::string(shader_dir) + "/text_overlay.vert.spv";
     std::string frag_path = std::string(shader_dir) + "/text_overlay.frag.spv";

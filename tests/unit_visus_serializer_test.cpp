@@ -15,9 +15,9 @@ namespace {
 
 VisusDesc make_sample() {
     VisusDesc d;
-    d.name  = "<term-c01>";
+    d.name  = "hero";
     d.kind  = VisusKind::MODEL;
-    d.asset = "../../<term-c05>/Assets/3D/Characters/ch_<term-c01>_00/ch_<term-c01>_0000.fbx";
+    d.asset = "../../GameProject/Assets/3D/Characters/ch_Hero_00/ch_Hero_0000.fbx";
 
     VisusPart cloak;
     cloak.part   = "T_Cloak_bsc";
@@ -37,7 +37,7 @@ VisusDesc make_sample() {
     d.parts.push_back(rest);
 
     VisusChildRef facial;
-    facial.visus       = "<term-c01>_facial";
+    facial.visus       = "hero_facial";
     facial.attach.bone = "Head";
     facial.attach.offset[1] = 0.02f;
     facial.attach.offset[2] = 0.05f;
@@ -177,14 +177,14 @@ void test_custom_kind_shader_in_metadata() {
     PT_ASSERT(vl && vl->get_number("stride").value_or(0) == 32.0, "vertex layout kept as metadata");
 }
 
-// v1 (KS data/visus/knife_rabbit.visus.json 相当) -> v2 変換。
+// v1 (PrivateGame data/visus/rabbit_character.visus.json 相当) -> v2 変換。
 void test_v1_conversion_model() {
     const char* v1 = R"({
       "version": 1,
-      "name": "knife_rabbit",
+      "name": "rabbit_character",
       "geometry": {
         "kind": "model",
-        "asset": { "local_path": "../../<term-c05>/Assets/3D/Characters/ch_<term-c07>/<term-c08>.fbx",
+        "asset": { "local_path": "../../GameProject/Assets/3D/Characters/ch_Rabbit/Rabbit.fbx",
                    "remote_url": "", "sha256": "", "size_bytes": 0, "fetch_policy": "cache_first", "headers": [] },
         "rive_artboard": "", "text_default": "",
         "mesh": "none", "model": "handle:5", "shader": "none", "generic_handle": 0
@@ -194,7 +194,7 @@ void test_v1_conversion_model() {
       ],
       "textures": [
         { "slot": "diffuse", "texture": "none",
-          "resource": { "local_path": "../../<term-c05>/Assets/3D/Characters/ch_<term-c07>/T_<term-c08>_Albedo.png" } }
+          "resource": { "local_path": "../../GameProject/Assets/3D/Characters/ch_Rabbit/T_Rabbit_Albedo.png" } }
       ],
       "flags": { "default_flags": 2, "layer": 1, "pool_hint": "dynamic", "initial_lod": 0 },
       "animation_default": { "kind": "clip", "name": "Idle", "loop": true, "speed": 1 },
@@ -206,12 +206,12 @@ void test_v1_conversion_model() {
     PT_ASSERT(from_visus_json(v1, d, &err, &warnings), "v1 parse succeeds");
     PT_ASSERT(has_warning(warnings, "v1 converted"), "warns v1 converted");
     PT_ASSERT(has_warning(warnings, "handle dropped"), "warns about dropped handle");
-    PT_ASSERT(d.name == "knife_rabbit" && d.kind == VisusKind::MODEL, "identity + kind");
-    PT_ASSERT(d.asset.find("<term-c08>.fbx") != std::string::npos, "asset from local_path");
+    PT_ASSERT(d.name == "rabbit_character" && d.kind == VisusKind::MODEL, "identity + kind");
+    PT_ASSERT(d.asset.find("Rabbit.fbx") != std::string::npos, "asset from local_path");
     PT_ASSERT_OP(d.parts.size(), ==, size_t{1}, "materials[] -> parts[]");
     PT_ASSERT(d.parts[0].part == "body" && d.parts[0].shader.is_default_builtin(), "slot -> part, builtin:pbr");
     PT_ASSERT(d.parts[0].metadata.get_string("material").value_or("") == "materials/body.mat.json", "material path kept");
-    PT_ASSERT(d.metadata.get_string("texture.diffuse").value_or("").find("T_<term-c08>_Albedo.png") != std::string::npos,
+    PT_ASSERT(d.metadata.get_string("texture.diffuse").value_or("").find("T_Rabbit_Albedo.png") != std::string::npos,
               "textures[] -> texture.<slot>");
     PT_ASSERT(d.metadata.get_number(visus_keys::kRenderFlags).value_or(0) == 2.0, "flags -> render.flags");
     PT_ASSERT(d.metadata.get_number(visus_keys::kRenderLayer).value_or(0) == 1.0, "layer -> render.layer");
@@ -226,10 +226,10 @@ void test_v1_conversion_model() {
     PT_ASSERT(out.find("handle:") == std::string::npos, "no handles after migration");
 }
 
-// v1 CUSTOM kind (KS kuzu_custom_demo 相当) -> metadata["shader"] STAGES。
+// v1 CUSTOM kind (PrivateGame game_custom_demo 相当) -> metadata["shader"] STAGES。
 void test_v1_conversion_custom() {
     const char* v1 = R"({
-      "version": 1, "name": "kuzu_custom_demo",
+      "version": 1, "name": "game_custom_demo",
       "geometry": {
         "kind": "custom",
         "asset": { "local_path": "" },

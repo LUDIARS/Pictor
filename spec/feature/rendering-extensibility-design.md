@@ -12,7 +12,7 @@ Pictor のレンダリングは **2 系統に分断**されている（`pipeline
 | 系統A | `PipelineProfileDef`（宣言データ） | JSON で外部化済み (`*.profile.json`)、ツール編集可 |
 | 系統B | 実 `VkRenderPass` チェーン (`vulkan_context.cpp` / `postprocess_pipeline.cpp`) | 完全ハードコード、系統A と未配線 |
 
-KS の C++ 移植レビューで挙がった Pictor 側の不足:
+PrivateGame の C++ 移植レビューで挙がった Pictor 側の不足:
 - **カスタムシェーダ機構が無い** — マテリアルは固定 PBR、任意フラグメントシェーダの差し込み口が無い。
 - **post-process がツール設定できない** — 編集 UI はあるがパラメータが C++ に届かず、実チェーンはハードコード。
 - **パイプラインの可視化が DAG のみ** — 流れ（実行順）が直感的でない。
@@ -60,7 +60,7 @@ KS の C++ 移植レビューで挙がった Pictor 側の不足:
 | instantiate_visus 伝播 | CUSTOM kind かつ `desc.shader != INVALID_SHADER` のとき `customShader` 設定 + `ShaderKey::with_custom_shader` で `shaderKey` 上位ビットへ畳み込み | ✅ |
 | 描画配線 | `shaderKey` 経由で `RenderBatch` → `DrawCommand::shader_key` まで自動伝播。ホストの記録ループは `ShaderKey::is_custom()` で判定し `ShaderRegistry::pipeline()` を引いて PBR pipeline の代わりにバインドする | ✅（データ経路完了。実 `vkCmdBindPipeline` はホスト責務） |
 
-**ホスト側配線 (2026-05-22, PrivateGame `feat/render-config-wiring`)**: KS は実描画に Pictor の `DrawCommand` 経路ではなく自前の `SkinnedRenderer` (固定 PBR pipeline) を使う。配線は KS 側の `SkinnedRenderer` が `ShaderRegistry` を所有し、`SkinnedLayer` が起動時に `data/visus/*.visus.json` の CUSTOM kind を走査・登録 → `build_pipelines`、`SkinnedDraw::shader_key` を持たせて `record()` の `vkCmdBindPipeline` 直前で `ShaderKey::is_custom()` を判定しカスタム pipeline へ切替える。カスタム pipeline は `SkinnedRenderer` の `pipeline_layout_` を流用するため descriptor set はそのまま有効。詳細は KS `spec/rendering_overview.md`「レンダリング設定の配線」。
+**ホスト側配線 (2026-05-22, PrivateGame `feat/render-config-wiring`)**: PrivateGame は実描画に Pictor の `DrawCommand` 経路ではなく自前の `SkinnedRenderer` (固定 PBR pipeline) を使う。配線は PrivateGame 側の `SkinnedRenderer` が `ShaderRegistry` を所有し、`SkinnedLayer` が起動時に `data/visus/*.visus.json` の CUSTOM kind を走査・登録 → `build_pipelines`、`SkinnedDraw::shader_key` を持たせて `record()` の `vkCmdBindPipeline` 直前で `ShaderKey::is_custom()` を判定しカスタム pipeline へ切替える。カスタム pipeline は `SkinnedRenderer` の `pipeline_layout_` を流用するため descriptor set はそのまま有効。詳細は PrivateGame `spec/rendering_overview.md`「レンダリング設定の配線」。
 
 `ShaderKey` ヘルパー（`core/types.h`）: `shaderKey` の bit 63 を CUSTOM フラグ、bit 32-62 を `ShaderHandle` に割当て、SoA stream を増やさずカスタムシェーダ識別を運ぶ。バッチビルダの sort key（`shader_keys >> 48`）は CUSTOM object を自然にグループ化する。
 
@@ -79,7 +79,7 @@ KS の C++ 移植レビューで挙がった Pictor 側の不足:
 
 ### phase 1 ホスト側配線（2026-05-22, PrivateGame `feat/render-config-wiring`）
 
-KS の `PostProcessLayer::initialize` は `PostProcessConfig` をハードコードしていた。これを `data/render/<term-c12>.json`（pipeline profile = 系統A）を `load_pipeline_profile_file()` でロードし、`build_post_process_config()`（`postprocess_config_bridge.h`）で `PostProcessConfig`（系統B）へ畳み込む経路へ差し替えた。プロファイル不在/破損時はハードコード既定にフォールバックして常にブート可能を保つ。起動後の `PostProcessTuner`（`data/postprocess.json` のライブ編集）はそのまま — プロファイルが「初期設定」、tuner が「実行時チューニング」の二層。詳細は KS `spec/rendering_overview.md`「レンダリング設定の配線」。
+PrivateGame の `PostProcessLayer::initialize` は `PostProcessConfig` をハードコードしていた。これを `data/render/game.profile.json`（pipeline profile = 系統A）を `load_pipeline_profile_file()` でロードし、`build_post_process_config()`（`postprocess_config_bridge.h`）で `PostProcessConfig`（系統B）へ畳み込む経路へ差し替えた。プロファイル不在/破損時はハードコード既定にフォールバックして常にブート可能を保つ。起動後の `PostProcessTuner`（`data/postprocess.json` のライブ編集）はそのまま — プロファイルが「初期設定」、tuner が「実行時チューニング」の二層。詳細は PrivateGame `spec/rendering_overview.md`「レンダリング設定の配線」。
 
 ## 4. 方針3 — パイプライン/パスのタイムライン表示（実装済み 2026-05-22）
 
@@ -92,8 +92,8 @@ render_pipeline プラグインに 3 つ目のモード **Timeline** を追加�
 | 順 | 方針 | 状態 | リポジトリ |
 |---|---|---|---|
 | 1 | 方針3 タイムライン | ✅ 実装済み（`feat/render-pipeline-timeline`） | Ergo |
-| 2 | 方針2 post-process 設定化（phase 1） | ✅ Pictor 機能実装（`feat/postprocess-config`）+ KS 側配線完了（`feat/render-config-wiring`） | Pictor + KS |
-| 3 | 方針1 カスタムシェーダ（phase 1） | ✅ Pictor 機能実装（`feat/visus-custom-shader`）+ KS 側配線完了（`feat/render-config-wiring`） | Pictor + KS |
+| 2 | 方針2 post-process 設定化（phase 1） | ✅ Pictor 機能実装（`feat/postprocess-config`）+ PrivateGame 側配線完了（`feat/render-config-wiring`） | Pictor + PrivateGame |
+| 3 | 方針1 カスタムシェーダ（phase 1） | ✅ Pictor 機能実装（`feat/visus-custom-shader`）+ PrivateGame 側配線完了（`feat/render-config-wiring`） | Pictor + PrivateGame |
 
 - 方針2 を先に行う理由: 系統A↔B 接続の最初の実例になり、方針2 で作る「シェーダ/パイプライン生成経路」を方針1 が再利用できる。
 - **phase 2（系統B のハードコード解体）は全方針で別タスク**。本フェーズは「既存の選択・設定」に限定し、`PostProcessPipeline` / pipeline 生成のハードコード構造の解体は含まない。
@@ -104,7 +104,7 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 
 ### 6.1 項目3 — GPU timestamp relay（実装済み 2026-05-22, `feat/gpu-timestamp`）
 - **旧現状**: `GpuTimerManager`（`profiler/gpu_timer.*`）は完全な CPU シミュレーション（`vkCmdWriteTimestamp` / `VkQueryPool` が一切無く、コメントのみ。`value` 常に 0）。Ergo render_pipeline の timing UI（`app.js` の `injectTiming` / `applyTimingMessage`）は配線済み、`index.ts` の relay と Pictor の実装が残っていた。
-- **設計**: `GpuTimerManager` を実 Vulkan 実装へ置換（`VkQueryPool` 作成 / `vkCmdWriteTimestamp` / `vkGetQueryPoolResults` / `timestampPeriod` 取得）。インタフェースと `flight_count` バッファリング枠は現状のまま中身差し替え。計測点は KS 側。timing を WS push する小経路を KS 側に新設。Ergo `index.ts` の `onUpgrade` に `{op:"timing"}` の `broadcast` を 1 行。pass ID は scanner の `PASS_DAG`（scene_hdr / decal_compose / postprocess / hud_load）に合わせる。
+- **設計**: `GpuTimerManager` を実 Vulkan 実装へ置換（`VkQueryPool` 作成 / `vkCmdWriteTimestamp` / `vkGetQueryPoolResults` / `timestampPeriod` 取得）。インタフェースと `flight_count` バッファリング枠は現状のまま中身差し替え。計測点は PrivateGame 側。timing を WS push する小経路を PrivateGame 側に新設。Ergo `index.ts` の `onUpgrade` に `{op:"timing"}` の `broadcast` を 1 行。pass ID は scanner の `PASS_DAG`（scene_hdr / decal_compose / postprocess / hud_load）に合わせる。
 - 規模: 中、リスク: 低〜中（観測のみ、描画構造を壊さない）。
 
 #### 実装内訳
@@ -112,14 +112,14 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 | 項目 | 実体 | 状態 |
 |---|---|---|
 | `GpuTimerManager` 実 Vulkan 化 | `profiler/gpu_timer.{h,cpp}`。`initialize_vulkan()` が `flight_count` 枚の `VkQueryPool`（TIMESTAMP）を生成、`VkPhysicalDeviceProperties::limits.timestampPeriod` を取得。`begin_region`/`end_region`/`write_timestamp` に `VkCommandBuffer` 付きオーバーロード追加（`vkCmdWriteTimestamp`）。`reset_pool()` が `vkCmdResetQueryPool`。`collect_results()` が flight 遅延で `vkGetQueryPoolResults`（WAIT なし＝非ブロッキング、NOT_READY は据え置き）。`resolved_regions_` に確定結果を保持し `begin_frame` の clear に耐える。timestamp 非対応 GPU はシミュレーション経路へフォールバックしブート継続 | ✅ |
-| 計測点（KS） | `GameRenderer` が `pictor::GpuTimerManager` を `<term-c11>::gpu_timer` に所有。FrameComposer の `pre_pass_hook(0)`（frame begin）で `collect_results`→`begin_frame`→`reset_pool`→`begin_region("scene_hdr")`、`pre_pass_hook(1)`（HUD パス前）で scene_hdr 終了 + `decal_compose`/`postprocess` を実合成コマンドの前後で計測 + `hud_load` 開始、`HudLayer::record` 末尾で `hud_load`（route B は `scene_hdr`）終了。`FrameComposer` は無改変 | ✅ |
-| timing WS push（KS） | `diagnostics/timing_relay.{h,cpp}`。`rive_player_ws_client`（既存 WS クライアント）を再利用し `ws://127.0.0.1:5170/render_pipeline/ws` へ `{op:"timing", frame, passes:[{id,us}]}` を `post_present` hook で push。未接続でも自動再接続、結果未回収（全 0）フレームは送らない | ✅ |
+| 計測点（PrivateGame） | `GameRenderer` が `pictor::GpuTimerManager` を `GameRenderContext::gpu_timer` に所有。FrameComposer の `pre_pass_hook(0)`（frame begin）で `collect_results`→`begin_frame`→`reset_pool`→`begin_region("scene_hdr")`、`pre_pass_hook(1)`（HUD パス前）で scene_hdr 終了 + `decal_compose`/`postprocess` を実合成コマンドの前後で計測 + `hud_load` 開始、`HudLayer::record` 末尾で `hud_load`（route B は `scene_hdr`）終了。`FrameComposer` は無改変 | ✅ |
+| timing WS push（PrivateGame） | `diagnostics/timing_relay.{h,cpp}`。`rive_player_ws_client`（既存 WS クライアント）を再利用し `ws://127.0.0.1:5170/render_pipeline/ws` へ `{op:"timing", frame, passes:[{id,us}]}` を `post_present` hook で push。未接続でも自動再接続、結果未回収（全 0）フレームは送らない | ✅ |
 | Ergo relay | `render_pipeline/index.ts` の `onUpgrade` が `{op:"timing"}` を全 UI クライアントへ `broadcast` | ✅ |
 
 **phase 2 に残した範囲**: route B（post-process 無効・単一 swapchain パス）は `decal_compose`/`postprocess` パスが構造的に存在しないため `scene_hdr` 1 本のみ計測（HUD 含む全体）。サブパス単位（post-process チェーン内の extract/blur/grade）の細分計測は項目1（任意 post-process pass 挿入）の解体と同時に行う。
 
 ### 6.2 項目2 — mesh 駆動の頂点入力レイアウト（実装済み 2026-05-22, `feat/mesh-vertex-layout`）
-- **旧現状**: `ShaderRegistry::build_pipelines` が頂点入力空（`gl_VertexIndex` 前提）。カスタムシェーダがメッシュ頂点バッファを読めなかった。KS の `SkinnedRenderer::create_pipeline_` は `TexturedSkinnedVertex` をベタ書きしていた。
+- **旧現状**: `ShaderRegistry::build_pipelines` が頂点入力空（`gl_VertexIndex` 前提）。カスタムシェーダがメッシュ頂点バッファを読めなかった。PrivateGame の `SkinnedRenderer::create_pipeline_` は `TexturedSkinnedVertex` をベタ書きしていた。
 - **設計**: `VertexLayout`（`VertexAttribute[]` + stride）+ `→ VkVertexInput*Description` 変換ヘルパー。`CustomShaderDef` に `VertexLayout` フィールド追加。`build_pipelines` の `vi` 構築を実装。空レイアウト（phase 1 の `gl_VertexIndex`）をフォールバックで残す。Visus serializer に頂点レイアウト記述を追加。
 - 規模: 中、リスク: 中（`layout(location=N)` 不一致は validation でしか出ない → まずは「def に明示記述・突き合わせは検証のみ」、SPIR-V reflection は将来）。phase 1 資産の再利用率が最も高い。
 
@@ -132,7 +132,7 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 | `CustomShaderDef` 拡張 | `shader/shader_registry.h` の `CustomShaderDef` に `VertexLayout vertex_layout` を追加 | ✅ |
 | `build_pipelines` 配線 | `src/shader/shader_registry.cpp` の `VkPipelineVertexInputStateCreateInfo{}` 空構築を `to_vk_vertex_input(def.vertex_layout)` ＋ `make_create_info()` へ置換。 空 `vertex_layout` のとき頂点入力空＝`gl_VertexIndex` 駆動のフォールバックを維持 | ✅ |
 | Visus serializer | `VisusShaderStages` に `VertexLayout vertex_layout` を追加。 `visus_serializer.cpp` の `shader_stages` ブロックに `vertex_layout`（`stride` + `attributes[]`、 各 `{semantic,type,offset}`）を emit / parse 追加（JSON round-trip）。 `VertexSemantic`/`VertexAttributeType` の enum ↔ 文字列変換も追加 | ✅ |
-| KS 統合 | `SkinnedLayer::register_custom_shaders_` が `desc.shader_stages.vertex_layout` を `CustomShaderDef` へ伝播。 `SkinnedRenderer` の `TexturedSkinnedVertex` レイアウトを `textured_skinned_vertex_layout()`（`VertexLayout`）で表現し直し、 `create_pipeline_` のベタ書きを `to_vk_vertex_input` 経由に統合（PBR pipeline と ShaderRegistry が同一の頂点入力構築経路） | ✅ |
+| PrivateGame 統合 | `SkinnedLayer::register_custom_shaders_` が `desc.shader_stages.vertex_layout` を `CustomShaderDef` へ伝播。 `SkinnedRenderer` の `TexturedSkinnedVertex` レイアウトを `textured_skinned_vertex_layout()`（`VertexLayout`）で表現し直し、 `create_pipeline_` のベタ書きを `to_vk_vertex_input` 経由に統合（PBR pipeline と ShaderRegistry が同一の頂点入力構築経路） | ✅ |
 
 **phase 2 に残した範囲**: SPIR-V reflection による `layout(location=N)` 自動突き合わせ（現状は def に明示記述、 不一致は validation layer 任せ）。 複数頂点バッファ / instance input rate（現状は単一 binding=0 / per-vertex のみ）。
 
@@ -151,7 +151,7 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 | 固定構造の解体 | `src/postprocess/postprocess_pipeline.cpp`。 固定 3 render pass を「scene + 共有 inter（HDR）+ 共有 output（swapchain）」へ。 固定 3 ターゲット（scene/ping/pong）を `std::vector<RenderTarget>` + `unordered_map<name,index>` へ。 固定 2 descriptor レイアウトを「入力数→`VkDescriptorSetLayout`」のキャッシュへ。 固定 4-pass ベタ書きの `record()` を `CompiledPass[]` の挿入順イテレートへ。 subpass dependency は inter/output render pass の EXTERNAL↔0 依存で挿入順の RAW/WAR を保証 | ✅ |
 | pipeline ビルダ統合（項目6） | `include/pictor/shader/graphics_pipeline_builder.h`。 `ShaderRegistry::build_pipelines` と `PostProcessPipeline::create_pipelines_` がベタ書きしていた `VkGraphicsPipelineCreateInfo` 構築を共通 `build_graphics_pipeline()` に統合。 差分（cull mode / depth test / 頂点入力レイアウト）は `GraphicsPipelineDesc` で表現。 両 call site を置換 | ✅ |
 | 挙動保存の検証 | `tests/unit_postprocess_chain_test.cpp`（CTest）。 組み込みチェーンが厳密に 4 pass であること、入出力ターゲット配線が旧固定 4-pass と一致すること、有効/無効エフェクトの push constant バイト列が旧 `record()` と一致すること、`refresh` が pass 構造を変えず push のみ更新すること、extra pass が末尾に追加されることをバイト単位で検証 | ✅ |
-| KS 側互換 | `PostProcessPipeline::initialize_vulkan` / `record` / `scene_render_pass()` 等の signature を完全維持。 KS `PostProcessLayer` は無改変で組み込みチェーン経路を使う（`initialize_vulkan` が内部で `build_post_process_chain()` を呼ぶ）。 任意 pass を挿むホストは新 `initialize_chain()` を使う | ✅ |
+| PrivateGame 側互換 | `PostProcessPipeline::initialize_vulkan` / `record` / `scene_render_pass()` 等の signature を完全維持。 PrivateGame `PostProcessLayer` は無改変で組み込みチェーン経路を使う（`initialize_vulkan` が内部で `build_post_process_chain()` を呼ぶ）。 任意 pass を挿むホストは新 `initialize_chain()` を使う | ✅ |
 
 **phase 2 に残した範囲**: TAA 等の history buffer（ターゲットライフタイム >1 フレーム、現 resize ロジックは毎フレーム中間ターゲットを破棄するため非互換）。 SSAO 等が要する深度/法線入力の汎用配線（現状 `__scene__` color と中間 HDR ターゲットのみ）。 compute pass（現状 graphics fullscreen pass のみ）。 `PostProcessDef`（系統A JSON）→ `build_post_process_chain()` の直結（現状は `build_post_process_config()` 経由で `PostProcessConfig` を挟む — `UNKNOWN` kind を JSON から汎用 pass へ落とすには `PostProcessDef` にシェーダ参照フィールドの追加が要る）。
 
@@ -160,6 +160,6 @@ Phase 1 は系統A↔B の「選択・パラメータ橋渡し」（`ShaderRegis
 
 | 順 | 項目 | 状態 | リポジトリ |
 |---|---|---|---|
-| 1 | 6.1 GPU timestamp relay | ✅ 実装済み（`feat/gpu-timestamp`） | Pictor + KS + Ergo |
-| 2 | 6.2 mesh 駆動の頂点入力レイアウト | ✅ 実装済み（`feat/mesh-vertex-layout`） | Pictor + KS |
-| 3 | 6.3 任意 post-process pass 挿入 | ✅ 実装済み（`feat/postprocess-chain`） | Pictor + KS |
+| 1 | 6.1 GPU timestamp relay | ✅ 実装済み（`feat/gpu-timestamp`） | Pictor + PrivateGame + Ergo |
+| 2 | 6.2 mesh 駆動の頂点入力レイアウト | ✅ 実装済み（`feat/mesh-vertex-layout`） | Pictor + PrivateGame |
+| 3 | 6.3 任意 post-process pass 挿入 | ✅ 実装済み（`feat/postprocess-chain`） | Pictor + PrivateGame |

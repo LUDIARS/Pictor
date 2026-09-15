@@ -25,7 +25,7 @@
  * Tuning: if a rule floods with violations it is either real architectural debt
  * worth seeing, or the model is too strict — adjust the tier order / patterns here
  * and re-analyze. This file is the single source of truth for Pictor's
- * machine-checked architecture. See [[project_pictor]] / the KS counterpart
+ * machine-checked architecture. See [[project_pictor]] / the PrivateGame counterpart
  * spec/anatomia/domains/ks-architecture.mjs for the same pattern.
  */
 

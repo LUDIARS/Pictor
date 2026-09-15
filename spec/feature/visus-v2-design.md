@@ -1,24 +1,24 @@
 # Visus v2 — メタデータ駆動の描画定義 (fbx + パーツ別シェーダ / 入れ子)
 
-起草: 2026-08-20 (neco 方針)。対象: Pictor `include/pictor/visus/*`、<term-c03> `data/visus/` + `SkinnedLayer`、<term-c06> `/visus/` エディタ。
-関連: `rendering-extensibility-design.md` §2 (方針1 CUSTOM シェーダ)、KS `spec/visus_preview.md`。
+起草: 2026-08-20 (neco 方針)。対象: Pictor `include/pictor/visus/*`、PrivateGame `data/visus/` + `SkinnedLayer`、private-game-web `/visus/` エディタ。
+関連: `rendering-extensibility-design.md` §2 (方針1 CUSTOM シェーダ)、PrivateGame `spec/visus_preview.md`。
 
 ## 0. neco 方針 (2026-08-19) と本書の解釈
 
 | neco の言葉 | 解釈 |
 |---|---|
 | 今は不要なパラメータが多い | v1 `VisusDesc` の typed フィールド群 (ResourceRef の remote/sha256/size/fetch_policy/headers、materials/textures スロット、flags/layer/pool_hint/lod、animation_default、shader_key_override、解決済み handle) は**構造体から外す** |
-| Visus は全てのオブジェクトの同一性が取れないのでパラメータは全てメタデータとする | Visus は「ファイル上の定義」であり、Pictor 内の handle (Mesh/Model/Shader/Texture) や Ergo/KS 側のオブジェクトと**同一性を保証できない**。よって Visus が持てる唯一の identity は `name`。それ以外の値は `metadata` (文字列 key → JSON 値) として **解釈をホストに委ねる**。Pictor は構造を検証せず、key 規約だけ文書化する |
-| モデル表示の場合 fbx とその中にある各パーツのシェーダを定義する | `kind: model` は `fbx` (パス) + `parts[]` を持つ。part は fbx 内部のパーツ名 (KS `ModelDrawPart::name` = マテリアル diffuse basename / Pictor `ModelDescriptor::material_slots`) で指定し、part ごとに `shader` を定義する |
-| Visus は入れ子に出来る。Facial の Visus を <term-c01> が持てる | `children[]` で別 Visus を**名前参照**で保持し、アタッチ先 (bone 等) と metadata を添える。子は独立した Visus ファイルで、親から handle ではなく name で引く |
+| Visus は全てのオブジェクトの同一性が取れないのでパラメータは全てメタデータとする | Visus は「ファイル上の定義」であり、Pictor 内の handle (Mesh/Model/Shader/Texture) や Ergo/PrivateGame 側のオブジェクトと**同一性を保証できない**。よって Visus が持てる唯一の identity は `name`。それ以外の値は `metadata` (文字列 key → JSON 値) として **解釈をホストに委ねる**。Pictor は構造を検証せず、key 規約だけ文書化する |
+| モデル表示の場合 fbx とその中にある各パーツのシェーダを定義する | `kind: model` は `fbx` (パス) + `parts[]` を持つ。part は fbx 内部のパーツ名 (PrivateGame `ModelDrawPart::name` = マテリアル diffuse basename / Pictor `ModelDescriptor::material_slots`) で指定し、part ごとに `shader` を定義する |
+| Visus は入れ子に出来る。Facial の Visus を Hero が持てる | `children[]` で別 Visus を**名前参照**で保持し、アタッチ先 (bone 等) と metadata を添える。子は独立した Visus ファイルで、親から handle ではなく name で引く |
 
 ## 1. v1 の問題 (現状)
 
-- `VisusDesc` (v1) は 20 超のフィールド。KS `data/visus/*.visus.json` 9 本のうち実際に読まれているのは `geometry.kind` / `asset.local_path` / `shader_stages` / `shader_key_override` のみ。materials/textures/flags/animation_default は KS 側で無視され、モデル登録は `SkinnedLayer` のハードコード (`register_model("Player", ...fbx...)`) で行われている。**Visus は描画を駆動していない**。
+- `VisusDesc` (v1) は 20 超のフィールド。PrivateGame `data/visus/*.visus.json` 9 本のうち実際に読まれているのは `geometry.kind` / `asset.local_path` / `shader_stages` / `shader_key_override` のみ。materials/textures/flags/animation_default は PrivateGame 側で無視され、モデル登録は `SkinnedLayer` のハードコード (`register_model("Player", ...fbx...)`) で行われている。**Visus は描画を駆動していない**。
 - JSON に `"mesh": "handle:5"` 等の**解決済み handle を焼いている**。handle はプロセス内連番で、別プロセス・別起動では別物を指す。同一性を表現できないものを永続化している。
 - `ResourceRef` の remote 取得設定 (url/sha256/size/policy/headers) は実装 (`FileSystemResourceLoader`) が local しか見ず、使われていない。
 - パーツ単位のシェーダ指定が無い (CUSTOM kind は Visus 全体を 1 シェーダに置換するだけ)。
-- 入れ子 (Facial を <term-c01> に付ける) を表現できず、`instantiate_visus` も「親子・コンポジションは作らない」と明記している。
+- 入れ子 (Facial を Hero に付ける) を表現できず、`instantiate_visus` も「親子・コンポジションは作らない」と明記している。
 
 ## 2. v2 データモデル
 
@@ -27,27 +27,27 @@
 ```jsonc
 {
   "version": 2,
-  "name": "<term-c01>",                       // 唯一の identity。ファイル名 (<name>.visus.json) と一致させる
+  "name": "hero",                       // 唯一の identity。ファイル名 (<name>.visus.json) と一致させる
   "kind": "model",                        // model | rive | primitive | custom | ui | particle | text | group
-  "asset": "../../<term-c05>/Assets/3D/Characters/ch_<term-c01>_00/ch_<term-c01>_0000.fbx",
+  "asset": "../../GameProject/Assets/3D/Characters/ch_Hero_00/ch_Hero_0000.fbx",
                                           // kind に応じた主アセット (visus ファイル起点の相対 or 絶対)。group は空
   "parts": [                              // kind=model のみ。fbx 内パーツ → シェーダ
     { "part": "T_Cloak_bsc",              // ModelDrawPart::name / material_slot 名。"*" = 既定 (未列挙パーツ)
       "shader": "builtin:pbr",            // 下記 §2.3 のシェーダ参照
-      "metadata": { "texture.diffuse": "../../<term-c05>/Assets/3D/Characters/ch_<term-c01>_00/Materials/TEX/T_Cloak_bsc.png" } },
+      "metadata": { "texture.diffuse": "../../GameProject/Assets/3D/Characters/ch_Hero_00/Materials/TEX/T_Cloak_bsc.png" } },
     { "part": "T_Face_bsc",
       "shader": { "vert": "../../shaders/face.vert.spv", "frag": "../../shaders/face.frag.spv" },
       "metadata": { "cull": "none" } }
   ],
   "children": [                           // 入れ子 Visus (名前参照)
-    { "visus": "<term-c01>_facial",           // 子 Visus 名 (同カタログ内)。パスも可 ("./facial/<term-c01>_facial.visus.json")
+    { "visus": "hero_facial",           // 子 Visus 名 (同カタログ内)。パスも可 ("./facial/hero_facial.visus.json")
       "attach": { "bone": "Head", "offset": [0, 0.02, 0.05] },   // 任意。無ければ親 transform そのまま
       "metadata": { "layer": "overlay" } }
   ],
   "metadata": {                           // Visus 自身の付帯情報。Pictor は解釈しない (§2.2 の規約 key のみ文書化)
     "animation.default": "Idle",
     "animation.loop": true,
-    "animation.clips": ["Animations/<term-c01>_performance_loop_ver1.fbx", "Animations/<term-c01>_run_ver1.fbx"],
+    "animation.clips": ["Animations/Hero_performance_loop_ver1.fbx", "Animations/Hero_run_ver1.fbx"],
     "render.flags": 2,
     "render.layer": 0,
     "scale.target_height": 1.6
@@ -60,7 +60,7 @@
 - `kind=custom` のシェーダ参照は `metadata["shader"]` に置く。この値は §2.3 の 3 形式のいずれかとし、`metadata["shader.vertex_layout"]` と同様にランタイムが解釈する。これにより `VisusDesc` の typed フィールドは 6 個のままにする。
 - **handle は一切書かない**。resolved handle は実行時の side-table (`VisusRuntime`、§3.2) のみ。
 - **ResourceRef は廃止**し、`asset` / shader stage / `texture.*` はすべて**パス文字列**。remote 取得が要るホストは `IResourceLoader` 実装側で URL 変換する (Pictor は持たない)。同梱の `FileSystemResourceLoader` は configured root の containment を OS の handle / directory fd で検証して symlink 差し替え競合も拒否し、割当て前の configurable size limit (既定 512 MiB) を適用する。
-- `kind=group` を追加: asset 無し、children だけを束ねる Visus (例: `<term-c01>_full` = <term-c01> + 武器 + エフェクト)。
+- `kind=group` を追加: asset 無し、children だけを束ねる Visus (例: `hero_full` = hero + 武器 + エフェクト)。
 
 ### 2.2 規約 key (ホスト側の読み合わせ用、Pictor は強制しない)
 
@@ -68,7 +68,7 @@
 |---|---|---|---|
 | `animation.default` / `animation.loop` / `animation.speed` | string / bool / number | `animation_default.{name,loop,speed}` | 起動時に流すクリップ |
 | `animation.kind` | string | `animation_default.kind` | `clip` / `state_machine` / `rive_animation` / `rive_state_machine` |
-| `animation.clips` | string[] | (KS ハードコード `player_anims`) | 追加アニメ fbx (visus 起点パス) |
+| `animation.clips` | string[] | (PrivateGame ハードコード `player_anims`) | 追加アニメ fbx (visus 起点パス) |
 | `render.flags` / `render.layer` / `render.pool` / `render.lod` | number / number / string / number | `flags.*` | `ObjectFlags` / layer / pool hint / 初期 LOD |
 | `shader.key_override` | number | `shader_key_override` | CUSTOM kind の shaderKey 下位ビット |
 | `shader` | string / object | `shader_stages` | CUSTOM kind のシェーダ参照 (§2.3 の 3 形式) |
@@ -76,7 +76,7 @@
 | `material.<slot>` | string | 非 model の `materials[].{slot,resource}` | v1 読込互換用。空 slot は `material` |
 | `texture.<slot>` | string | `textures[].{slot,resource}` | part または visus 直下のテクスチャ (slot = uniform 名) |
 | `rive.artboard` / `text.default` | string | `rive_artboard` / `text_default` | kind 固有 |
-| `scale.target_height` | number | (KS `register_model` 第 5 引数) | モデル正規化高さ |
+| `scale.target_height` | number | (PrivateGame `register_model` 第 5 引数) | モデル正規化高さ |
 
 ### 2.3 シェーダ参照 (`parts[].shader` / kind=custom の `metadata["shader"]`)
 
@@ -92,7 +92,7 @@ part が列挙されていない fbx パーツは `"part": "*"` のエントリ�
 
 - `children[].visus` は **同じ VisusCatalog 内の name** (or visus ファイル相対パス)。循環参照は load 時に検出してエラー (`visus cycle: a -> b -> a`)。
 - `attach.bone` は親が kind=model のときだけ有効。子 instance の transform = 親 transform × bone world × `attach.offset`。bone が無い/親が model でない場合は親 transform そのまま (警告ログ)。
-- 子は**独立した Visus** として instantiate され、親の ObjectId 群とは別に返る (`VisusInstance::children`)。親を消すとき子も消す責務はホスト (KS) 側。
+- 子は**独立した Visus** として instantiate され、親の ObjectId 群とは別に返る (`VisusInstance::children`)。親を消すとき子も消す責務はホスト (PrivateGame) 側。
 - 深さ制限 8 (DoS 対策、`unit_parser_dos_test` と同じ方針)。
 
 ### 2.5 シェーダーパッケージ (neco 方針 2026-08-20)
@@ -136,7 +136,7 @@ part が列挙されていない fbx パーツは `"part": "*"` のエントリ�
 
 ```jsonc
 {
-  "version": 2, "name": "<term-c01>", "kind": "model",
+  "version": 2, "name": "hero", "kind": "model",
   "shader_packages": [                    // ★Visus 直下 = 全パーツへ重ね掛け。配列順 = 描画順
     "toon",
     { "package": "outline", "params": { "width": 0.02 } }
@@ -262,19 +262,19 @@ struct VisusDesc {
 
 - `to_visus_json` は **v2 のみ**出力。
 - `from_visus_json` は `version: 1` を受けたら §2.2 の表で v2 に**変換して読む** (model の materials → `parts`、非 model の materials → `material.*` metadata、textures → `texture.*` metadata、handle 文字列は捨てる、`shader_stages` → kind=custom の `metadata["shader"]` STAGES)。変換時は `error` ではなく `warnings` (新 out パラメータ) に `"v1 converted"` を積む。
-- `tools/visus_migrate` (小 CLI): ディレクトリ内の v1 を v2 へ書き戻す。KS `data/visus/` 9 本の移行に使う。
+- `tools/visus_migrate` (小 CLI): ディレクトリ内の v1 を v2 へ書き戻す。PrivateGame `data/visus/` 9 本の移行に使う。
 - 手書きパーサ方針は維持 (外部依存なし)。`unit_parser_dos_test` に深さ/サイズ上限を v2 の `metadata` 再帰にも適用する。
 
-## 4. ホスト配線 (<term-c03>) — 別タスク
+## 4. ホスト配線 (PrivateGame) — 別タスク
 
 - `SkinnedLayer` のハードコード `register_model(...)` を **VisusCatalog 駆動**へ: `data/visus/*.visus.json` の kind=model を走査し、`asset` + `metadata["animation.clips"]` + part の `texture.diffuse` + `scale.target_height` で `ModelLibrary::register_model` 相当を組む。`enemy_variation.json` の `visus` キーと `player_base.json` の visus 名で引く。
 - `ModelDrawPart::name` と `parts[].part` を突き合わせ、part ごとに `SkinnedDraw::shader_key` を決める (現状は visus 全体 1 本)。`SkinnedRenderer::record()` は既に `ShaderKey::is_custom()` で pipeline を切り替えられる。
-- `children`: `<term-c01>.visus.json` に `<term-c01>_facial` (kind=rive or model、顔パーツ) を `attach.bone = "Head"` で持たせ、SkinnedLayer がアクターごとに子を instantiate して bone 追従させる。これが「Facial の Visus を <term-c01> が持てる」の実証。
+- `children`: `hero.visus.json` に `hero_facial` (kind=rive or model、顔パーツ) を `attach.bone = "Head"` で持たせ、SkinnedLayer がアクターごとに子を instantiate して bone 追従させる。これが「Facial の Visus を Hero が持てる」の実証。
 - **シェーダーパッケージ (§2.5)**: `data/shaderpkg/*.shaderpkg.json` を `VisusPackageCatalog` で読み、
   `VisusRuntime::resolve(..., &packages)` に渡す。`SkinnedRenderer` は `VisusInstance::bindings` の
   ObjectId を重ね掛けパスとして描き、`params` を uniform へ流す (`params_revision` が変わったときだけ
   再アップロード)。ゲーム中の値変更 (被弾フラッシュ・輪郭の太さ等) はこの経路。
-- <term-c06> `/visus/` エディタ: 生 JSON 編集から、`metadata` の key/value 表 + `parts` 表 (fbx からパーツ名を列挙) + `children` ツリーの 3 ペインへ。`kuzu_visus_preview` は v2 ローダで起動。
+- private-game-web `/visus/` エディタ: 生 JSON 編集から、`metadata` の key/value 表 + `parts` 表 (fbx からパーツ名を列挙) + `children` ツリーの 3 ペインへ。`game_visus_preview` は v2 ローダで起動。
 
 ## 5. 互換と移行順
 
@@ -289,8 +289,8 @@ Pictor C API はこれらの Visus C++ 型を公開していないため `PICTOR
 1. Pictor: 型 + シリアライザ (v1 読込互換) + カタログ + テスト (task 1)。
 2. Pictor: instantiate v2 (parts / children) + runtime + migrate CLI (task 2)。
 3. Pictor: シェーダーパッケージ (§2.5) の型 / カタログ / runtime / instantiate + テスト (task 3)。
-4. KS: `data/visus/` を v2 へ migrate、SkinnedLayer を Visus 駆動化、Facial 子 Visus を 1 本追加、<term-c06> エディタ v2 (KS リポの task)。
-5. v1 読込互換は KS 移行完了後の次リリースで削除。
+4. PrivateGame: `data/visus/` を v2 へ migrate、SkinnedLayer を Visus 駆動化、Facial 子 Visus を 1 本追加、private-game-web エディタ v2 (PrivateGame リポの task)。
+5. v1 読込互換は PrivateGame 移行完了後の次リリースで削除。
 
 ## 6. 非ゴール
 

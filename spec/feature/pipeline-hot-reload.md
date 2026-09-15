@@ -60,8 +60,8 @@ hot.poll();
 
 ## 2. ホスト側の配線 (別タスク)
 
-- KS `kuzu_visus_preview`: 既に visus JSON の mtime watch (ライブリロード) を自前実装している。`PipelineHotReload` に寄せて profile / shader も監視: `--pipeline` で渡した profile file + `shaders/` + visus の shader stages。
-- KS 本体 (`GameRenderer`): `data/render/*.profile.json` と `shaders/*.spv` を watch、シェーダ変更で `SkinnedRenderer` の custom pipeline rebuild + `PostProcessPipeline::rebuild_chain()`。
+- PrivateGame `game_visus_preview`: 既に visus JSON の mtime watch (ライブリロード) を自前実装している。`PipelineHotReload` に寄せて profile / shader も監視: `--pipeline` で渡した profile file + `shaders/` + visus の shader stages。
+- PrivateGame 本体 (`GameRenderer`): `data/render/*.profile.json` と `shaders/*.spv` を watch、シェーダ変更で `SkinnedRenderer` の custom pipeline rebuild + `PostProcessPipeline::rebuild_chain()`。
 - Ergo render_pipeline プラグイン (可視化): Profile Editor の保存 → ファイル → 各ホストが自動反映、の経路が成立する。値スライダは従来どおり WS で `set_config` 系に流す (ホットリロード非対象)。
 
 ## 3. 非ゴール

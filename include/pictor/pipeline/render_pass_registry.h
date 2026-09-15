@@ -61,7 +61,7 @@ public:
 
     /// Replace a pass's VkRenderPass with a caller-owned external handle.
     /// 既に build_one_ で確保済みだった内部 VkRenderPass は解放してから
-    /// external に差替える。 KS の Phase 4 で `PostProcessPipeline` 内部の
+    /// external に差替える。 PrivateGame の Phase 4 で `PostProcessPipeline` 内部の
     /// scene_render_pass を CompiledGraph に reuse させるために使う。
     ///
     /// 必ず `initialize_vulkan()` の **後** に呼ぶこと (内部 handle の

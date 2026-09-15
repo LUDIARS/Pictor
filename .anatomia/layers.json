@@ -8,7 +8,7 @@
     { "glob": "demo/fbx/*", "layer": "presentation" },
     { "glob": "demo/graph/*", "layer": "presentation" },
     { "glob": "demo/graphics/*", "layer": "presentation" },
-    { "glob": "demo/<term-c01>/*", "layer": "presentation" },
+    { "glob": "demo/pn_surface/*", "layer": "presentation" },
     { "glob": "demo/material_serializer/*", "layer": "presentation" },
     { "glob": "demo/mobile/*", "layer": "presentation" },
     { "glob": "demo/ocean/*", "layer": "presentation" },

@@ -25,7 +25,7 @@ public:
     BitmapTextRenderer(const BitmapTextRenderer&) = delete;
     BitmapTextRenderer& operator=(const BitmapTextRenderer&) = delete;
 
-    /// @implements SPEC-PC-<term-c01>-RAYMARCH
+    /// @implements SPEC-PC-PN-RAYMARCH
     bool initialize(VulkanContext& vk_ctx, const char* shader_dir,
                     VkRenderPass render_pass = VK_NULL_HANDLE);
     void shutdown();

@@ -23,12 +23,12 @@
 
 ## 非ゴール
 
-- uniform への実バインド / パイプライン state (blend・深度) の解釈 — ホスト (KS) 側 §4
+- uniform への実バインド / パイプライン state (blend・深度) の解釈 — ホスト (PrivateGame) 側 §4
 - `params` のホットリロード — 値変更はプログラム経路 (#736 と同方針)
 - パッケージのインライン定義 — 常に名前を持つ再利用資源とする
 
-## 次 (<term-c03>)
+## 次 (PrivateGame)
 
 - `data/shaderpkg/` を作り `VisusPackageCatalog` を `SkinnedLayer` に配線
 - `SkinnedRenderer` が `bindings` の ObjectId を重ね掛けパスとして描き、`params_revision` を見て uniform 更新
-- <term-c06> `/visus/` エディタにパッケージ表 (アサイン順 / enabled / params 上書き) を追加
+- private-game-web `/visus/` エディタにパッケージ表 (アサイン順 / enabled / params 上書き) を追加

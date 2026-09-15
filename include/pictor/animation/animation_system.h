@@ -207,7 +207,7 @@ public:
     /// メタデータを直接書き換える必要があるケース向け。 host が同じ instance を
     /// 同時並行で書き換えないこと (single-thread per state を期待)。
     /// 互換: 既存の `get_instance()` を `const_cast<AnimationInstance*>(get_instance(h))`
-    /// で代用していたコード (MontagePlayer, KS LocomotionBlend) は本 API に
+    /// で代用していたコード (MontagePlayer, PrivateGame LocomotionBlend) は本 API に
     /// 段階的に移行する。
     AnimationInstance* get_instance_mutable(AnimationStateHandle handle);
 

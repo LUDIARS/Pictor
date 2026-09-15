@@ -1,7 +1,7 @@
 // unit_pipeline_registries_test — Phase 3 Step B の Vulkan 非依存部分を確認。
 //
 // Vulkan の VkImage / VkRenderPass / VkFramebuffer 生成は実 GPU が要るため
-// 単体テストでは対象外 (KS / Custos の統合テストでカバー)。 ここでは:
+// 単体テストでは対象外 (PrivateGame / Custos の統合テストでカバー)。 ここでは:
 //
 // 1. AttachmentRegistry::set_defs / index_of / count / def / defs が
 //    名前→index 解決と def 配列保持を正しく行う

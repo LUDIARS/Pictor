@@ -2,8 +2,8 @@
 
 // version 1 (typed スキーマ) の Visus JSON を v2 `VisusDesc` へ変換する
 // (内部ヘッダ)。 `spec/feature/visus-v2-design.md` §2.2 の移行表に従う。
-// KS `data/visus/` 既存 9 本の読込互換と `visus_migrate` (task 2) が使う。
-// KS 移行完了後の次リリースで削除予定 (§5)。
+// PrivateGame `data/visus/` 既存 9 本の読込互換と `visus_migrate` (task 2) が使う。
+// PrivateGame 移行完了後の次リリースで削除予定 (§5)。
 
 #include "pictor/visus/visus.h"
 

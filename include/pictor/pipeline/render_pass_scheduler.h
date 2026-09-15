@@ -99,7 +99,7 @@ public:
         return g;
     }
 
-    /// Read-only access to the installed graph (for diagnostics / KS-side
+    /// Read-only access to the installed graph (for diagnostics / PrivateGame-side
     /// custom recording).
     const CompiledGraph& compiled_graph() const { return compiled_; }
 

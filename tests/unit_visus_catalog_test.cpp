@@ -59,14 +59,14 @@ void test_add_find_duplicate() {
 
 void test_children_resolution_and_validate() {
     VisusCatalog cat;
-    cat.add(make("<term-c01>", VisusKind::MODEL, {"<term-c01>_facial", "katana"}));
-    cat.add(make("<term-c01>_facial", VisusKind::RIVE));
+    cat.add(make("hero", VisusKind::MODEL, {"hero_facial", "katana"}));
+    cat.add(make("hero_facial", VisusKind::RIVE));
     cat.add(make("katana", VisusKind::MODEL));
     PT_ASSERT(cat.validate().empty(), "healthy tree validates clean");
 
     std::string err;
-    const VisusDesc* child = cat.resolve_child(*cat.find("<term-c01>"), cat.find("<term-c01>")->children[0], &err);
-    PT_ASSERT(child && child->name == "<term-c01>_facial", "name reference resolves");
+    const VisusDesc* child = cat.resolve_child(*cat.find("hero"), cat.find("hero")->children[0], &err);
+    PT_ASSERT(child && child->name == "hero_facial", "name reference resolves");
 
     cat.add(make("broken", VisusKind::GROUP, {"missing_child"}));
     const auto issues = cat.validate();
@@ -172,10 +172,10 @@ void test_load_directory_and_path_refs() {
         f << to_visus_json(d);
     };
     {
-        VisusDesc k = make("<term-c01>", VisusKind::MODEL, {"<term-c01>_facial", "weapons/katana.visus.json"});
-        k.asset = "../models/<term-c01>.fbx";
-        write(dir / "<term-c01>.visus.json", k);
-        write(dir / "<term-c01>_facial.visus.json", make("<term-c01>_facial", VisusKind::RIVE));
+        VisusDesc k = make("hero", VisusKind::MODEL, {"hero_facial", "weapons/katana.visus.json"});
+        k.asset = "../models/hero.fbx";
+        write(dir / "hero.visus.json", k);
+        write(dir / "hero_facial.visus.json", make("hero_facial", VisusKind::RIVE));
         write(dir / "weapons" / "katana.visus.json", make("katana", VisusKind::MODEL));
         // name がファイル名と違う → warning
         write(dir / "misnamed.visus.json", make("other_name", VisusKind::UI));
@@ -200,8 +200,8 @@ void test_load_directory_and_path_refs() {
     PT_ASSERT(!cat.contains("katana"), "subdirectory not loaded by load_directory");
 
     // resolve_path は visus ファイル起点
-    const std::string asset = cat.resolve_path(*cat.find("<term-c01>"), cat.find("<term-c01>")->asset);
-    PT_ASSERT(asset.find("/models/<term-c01>.fbx") != std::string::npos &&
+    const std::string asset = cat.resolve_path(*cat.find("hero"), cat.find("hero")->asset);
+    PT_ASSERT(asset.find("/models/hero.fbx") != std::string::npos &&
               asset.find("pictor_unit_visus_catalog/models") == std::string::npos,
               "relative asset resolved against visus dir (../ applied)");
 
@@ -211,13 +211,13 @@ void test_load_directory_and_path_refs() {
     // 子ファイルを読んだら解決できる
     std::string err;
     PT_ASSERT(cat.load_file((dir / "weapons" / "katana.visus.json").generic_string(), &err), "load child file");
-    const VisusDesc* katana = cat.resolve_child(*cat.find("<term-c01>"), cat.find("<term-c01>")->children[1], &err);
+    const VisusDesc* katana = cat.resolve_child(*cat.find("hero"), cat.find("hero")->children[1], &err);
     PT_ASSERT(katana && katana->name == "katana", "path reference resolves by source_path");
     PT_ASSERT(cat.validate().empty(), "all resolved after loading child");
 
     const fs::path linked = dir / "linked.visus.json";
     ec.clear();
-    fs::create_symlink(dir / "<term-c01>.visus.json", linked, ec);
+    fs::create_symlink(dir / "hero.visus.json", linked, ec);
     if (!ec) {
         PT_ASSERT(!cat.load_file(linked.generic_string(), &err),
                   "direct catalog load refuses symbolic links");

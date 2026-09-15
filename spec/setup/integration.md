@@ -21,7 +21,7 @@ target_link_libraries(your_app PRIVATE pictor)
 別ディレクトリにある Pictor を `add_subdirectory` で取り込み、オプションを consumer 側で固定する実パターン (`../../../PrivateGame/CMakeLists.txt`):
 
 ```cmake
-set(KUZU_PICTOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Pictor" CACHE PATH "Path to Pictor source")
+set(GAME_PICTOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Pictor" CACHE PATH "Path to Pictor source")
 
 # consumer 側で Pictor のオプションを固定 (FORCE で上書き)
 set(PICTOR_BUILD_DEMO      OFF CACHE BOOL "" FORCE)
@@ -29,7 +29,7 @@ set(PICTOR_ENABLE_PROFILER ON  CACHE BOOL "" FORCE)
 set(PICTOR_ENABLE_RIVE     ON  CACHE BOOL "Rive Renderer 統合")
 set(PICTOR_RIVE_DIR        "${CMAKE_CURRENT_SOURCE_DIR}/../rive-runtime" CACHE PATH "rive-runtime のクローンパス")
 
-add_subdirectory(${KUZU_PICTOR_DIR} ${CMAKE_BINARY_DIR}/_pictor)
+add_subdirectory(${GAME_PICTOR_DIR} ${CMAKE_BINARY_DIR}/_pictor)
 target_link_libraries(your_app PRIVATE pictor)
 ```
 
@@ -48,7 +48,7 @@ target_link_libraries(your_app PRIVATE pictor)
 
 ## 3. 必要な define / リンク設定
 
-`pictor` の **PUBLIC** define は consumer に自動伝播する (`../../CMakeLists.txt`)。consumer 側で改めて立てる必要は基本無いが、Vulkan を使う consumer 自身のソースが Vulkan プラットフォームマクロを必要とする場合は併せて指定する。KS の実例では consumer ターゲットにも `PICTOR_HAS_VULKAN` を付けている (`../../../PrivateGame/CMakeLists.txt:288`)。
+`pictor` の **PUBLIC** define は consumer に自動伝播する (`../../CMakeLists.txt`)。consumer 側で改めて立てる必要は基本無いが、Vulkan を使う consumer 自身のソースが Vulkan プラットフォームマクロを必要とする場合は併せて指定する。PrivateGame の実例では consumer ターゲットにも `PICTOR_HAS_VULKAN` を付けている (`../../../PrivateGame/CMakeLists.txt:288`)。
 
 | 項目 | 必要なとき | 対応 |
 |---|---|---|
@@ -70,7 +70,7 @@ endif()
 
 ## 5. シェーダ / アセットの扱い
 
-Pictor のデモシェーダや postprocess シェーダを consumer が流用する場合、consumer 側で SPIR-V を焼く。KS は `${KUZU_PICTOR_DIR}/demo/shaders/` や `${KUZU_PICTOR_DIR}/shaders/postprocess/` を参照してコンパイルする (`../../../PrivateGame/CMakeLists.txt:334-356`)。`PICTOR_BUILD_DEMO=OFF` で取り込んでいても、ソースツリー上のシェーダファイル自体は参照できる。
+Pictor のデモシェーダや postprocess シェーダを consumer が流用する場合、consumer 側で SPIR-V を焼く。PrivateGame は `${GAME_PICTOR_DIR}/demo/shaders/` や `${GAME_PICTOR_DIR}/shaders/postprocess/` を参照してコンパイルする (`../../../PrivateGame/CMakeLists.txt:334-356`)。`PICTOR_BUILD_DEMO=OFF` で取り込んでいても、ソースツリー上のシェーダファイル自体は参照できる。
 
 ## 6. GI 経路への移行 (phase 2 — opt-in)
 

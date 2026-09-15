@@ -77,7 +77,7 @@ VkRenderPass は `rps.index_of(pd.pass_name)` の名前解決なのに、framebu
 
 ## Low
 
-- **L-1**: 上位ライブラリ名 (PrivateGame / ergo_ui_kit / <term-c12>.json) のコメント・文字列が前回から**増加** (`pictor_renderer.cpp:97`, `compiled_graph.h:76`, `tests/unit_visus_serializer_test.cpp:14` 等)。実依存ゼロは維持。「host」「上位エディタ」への言い換え推奨。
+- **L-1**: 上位ライブラリ名 (PrivateGame / ergo_ui_kit / game.profile.json) のコメント・文字列が前回から**増加** (`pictor_renderer.cpp:97`, `compiled_graph.h:76`, `tests/unit_visus_serializer_test.cpp:14` 等)。実依存ゼロは維持。「host」「上位エディタ」への言い換え推奨。
 - **L-2**: `object_pool.h:6` の `#include <unordered_map>` 未使用 (id_map 移動済みの残骸)。
 - **L-3**: `src/c_api/c_api.cpp:37-38` — `unordered_map` + mutex の per-call 台帳だが `pictor_render_frame` は no-op で SceneRegistry 未接続。Phase 2 で二重台帳を作らないこと。なお **c_api.cpp はどのビルドターゲットにも含まれていない** (REVIEW_QUALITY.md 参照)。
 - **L-4**: `command_encoder.cpp:5-7` — `encode()` の `FrameAllocator&` 引数が未使用。

@@ -15,9 +15,9 @@ namespace pictor {
 // JSON layout (version 2、 `spec/feature/visus-v2-design.md` §2.1):
 //   {
 //     "version": 2,
-//     "name":    "<term-c01>",                 // 唯一の identity
+//     "name":    "hero",                 // 唯一の identity
 //     "kind":    "model",                  // none|model|rive|primitive|custom|ui|particle|text|group
-//     "asset":   "../../models/<term-c01>.fbx",// visus ファイル起点の相対 or 絶対
+//     "asset":   "../../models/hero.fbx",// visus ファイル起点の相対 or 絶対
 //     "parts": [                           // kind=model: fbx 内パーツ → シェーダ
 //       { "part": "T_Cloak_bsc", "shader": "builtin:pbr",
 //         "metadata": { "texture.diffuse": "../tex/T_Cloak_bsc.png" } },
@@ -25,7 +25,7 @@ namespace pictor {
 //         "shader": { "vert": "../shaders/face.vert.spv", "frag": "../shaders/face.frag.spv" } }
 //     ],
 //     "children": [                        // 入れ子 Visus (名前参照)
-//       { "visus": "<term-c01>_facial",
+//       { "visus": "hero_facial",
 //         "attach": { "bone": "Head", "offset": [0, 0.02, 0.05] },
 //         "metadata": { "layer": "overlay" } }
 //     ],

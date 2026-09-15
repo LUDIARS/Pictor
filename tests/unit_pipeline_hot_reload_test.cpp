@@ -45,8 +45,8 @@ void test_groups_and_interval() {
     fs::remove_all(dir, ec);
     fs::create_directories(dir / "shaders", ec);
 
-    const fs::path profile = dir / "<term-c12>.json";
-    write_file(profile, "{\"profile_name\":\"Kuzu\"}");
+    const fs::path profile = dir / "game.profile.json";
+    write_file(profile, "{\"profile_name\":\"Game\"}");
     write_file(dir / "shaders" / "a.vert.spv", "aa");
     write_file(dir / "shaders" / "a.frag.spv", "bb");
     write_file(dir / "shaders" / "notes.txt", "not a shader");

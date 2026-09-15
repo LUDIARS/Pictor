@@ -35,7 +35,7 @@ native backendは必要なモジュール単位で対応する。全機能統合
 
 ## PR #1653の審査失敗への対応
 
-Revisorの対象main `1380400ea95c`では、共通shader生成末尾に<term-c01> demoの依存が追加されていた。
+Revisorの対象main `1380400ea95c`では、共通shader生成末尾にPN surface demoの依存が追加されていた。
 同じ箇所のSHaRC demo依存ブロック削除が競合したため、その既存ブロックを維持する。
 共通shader一覧からのSHaRC除外と、ライブラリ専用shader targetの分離は維持される。
 SHaRC全体OFF時はdemo target自体が存在しないため、復元した条件付き依存も発生しない。

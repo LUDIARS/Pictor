@@ -66,4 +66,4 @@ unnecessary. Pictor's upper-library dependency rule remains intact.
 Validation for the Fg consumer: build the SDK, build the upper demo, stage its
 exe/model/shaders under Pictor's main folder, claim testing in Cc and launch via
 Excubitor. The dedicated video service records real raymarched hair deformation.
-This extends SPEC-PC-<term-c01>-RAYMARCH; its numerical/error limitations still apply.
+This extends SPEC-PC-PN-RAYMARCH; its numerical/error limitations still apply.

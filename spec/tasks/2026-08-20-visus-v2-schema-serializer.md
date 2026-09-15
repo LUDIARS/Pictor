@@ -30,7 +30,7 @@ handle・ResourceRef・typed スロットは構造体から消す。同一性は
 - v1 名に言及している `include/pictor/shader/shader_registry.h` / `include/pictor/core/types.h` の doc コメント差し替えのみ (`pipeline_profile_serializer` は手書きパーサ方針を共有するだけで Visus 型に依存していないため対象外)
 
 ## 非スコープ
-- instantiate / runtime / migrate CLI (task 2)、KS 側配線 (KS リポ task)
+- instantiate / runtime / migrate CLI (task 2)、PrivateGame 側配線 (PrivateGame リポ task)
 
 ## 実装メモ (2026-08-20)
 - 追加: `visus_metadata.{h,cpp}` (`VisusValue` / `VisusMetadata`)、 `visus_types.cpp` (kind / `VisusShaderRef` ↔ 値)、 `src/visus/visus_json.{h,cpp}` (内部 JSON パーサ・エミッタ、 深さ上限共有)、 `src/visus/visus_v1_compat.{h,cpp}` (v1 → v2 変換)、 `visus_catalog.{h,cpp}`、 `tests/unit_visus_metadata_test.cpp` / `tests/unit_visus_catalog_test.cpp`。

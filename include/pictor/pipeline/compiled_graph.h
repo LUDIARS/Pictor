@@ -79,8 +79,8 @@ struct CompiledPass {
     /// host_recorded: execute_compiled は Begin/End render pass / pipeline bind を
     /// 一切発行せず、 PassRecordFn 内で host が完全に command 記録を行う。
     /// PostProcessPipeline のように内部で複数 sub-render-pass を持つ chain を
-    /// 単一 CompiledGraph entry として表現するための逃げ口。 KS の
-    /// `<term-c12>.json` PostProcess pass で使う。 compute pass と類似
+    /// 単一 CompiledGraph entry として表現するための逃げ口。 PrivateGame の
+    /// `game.profile.json` PostProcess pass で使う。 compute pass と類似
     /// (Begin/End 不要)、 ただし graphics queue で動く点が違うので別 flag。
     static constexpr uint8_t FLAG_IS_HOST_RECORDED = 1u << 2;
     static constexpr uint16_t INVALID_PASS_ID       = 0xFFFFu;

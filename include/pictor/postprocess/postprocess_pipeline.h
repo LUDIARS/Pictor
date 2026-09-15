@@ -40,7 +40,7 @@ class VulkanContext;
 ///   として同じ汎用チェーンへ畳み込まれ、 SSAO / FXAA 等の任意 pass を
 ///   挿入できる。
 ///
-/// 既定 (= KS が使う組み込みチェーン) の流れは旧実装と同一:
+/// 既定 (= PrivateGame が使う組み込みチェーン) の流れは旧実装と同一:
 ///   scene(HDR) → bloom extract → blur H → blur V
 ///              → final composite (bloom + tonemap + LUT + vignette) → output
 ///
@@ -112,7 +112,7 @@ public:
     /// scene render pass は color(0) / velocity(1) / depth(2) の MRT になり、
     /// ホストの clearValueCount は 3 (velocity のクリアは {0,0})。
     VkImageView   scene_velocity_view() const;
-    /// シーンカラー HDR の VkImage (RGBA16F)。 KS の Phase 4 wiring が
+    /// シーンカラー HDR の VkImage (RGBA16F)。 PrivateGame の Phase 4 wiring が
     /// `AttachmentRegistry::set_external_attachment` で external attachment
     /// として再 expose する用。
     VkImage       scene_color_image() const;

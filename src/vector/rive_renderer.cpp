@@ -554,7 +554,7 @@ bool RiveRenderer::render(VkCommandBuffer cmd,
 // PR #53 (pipeline external config) brought back the declarations in
 // rive_renderer.h but the cpp side was overwritten during merge conflict
 // resolution by main's RIVE_DBG refactor, leaving these symbols undefined.
-// KS の rive_s3_array.cpp / rive_player_main.cpp が依存する。
+// PrivateGame の rive_s3_array.cpp / rive_player_main.cpp が依存する。
 // ===========================================================================
 
 bool RiveRenderer::artboard_size(float& width, float& height) const {

@@ -20,7 +20,7 @@ post-process 側の系統B は Phase 2 §6.3 (`feat/postprocess-chain`) で既�
 ### 1.2 非スコープ (Phase 3 で触らない)
 
 - post-process 側系統B (Phase 2 §6.3 で完了)
-- draw 記録の中身そのもの (どのメッシュをどの順に描くか — `RenderBatch` 構築は KS の責務、Pictor 側は順序保証だけ)
+- draw 記録の中身そのもの (どのメッシュをどの順に描くか — `RenderBatch` 構築は PrivateGame の責務、Pictor 側は順序保証だけ)
 - SPIR-V reflection / シェーダ自動 introspection (`layout(location=N)` 不一致は validation layer 任せ、Phase 2 §6.2 同様)
 - dynamic rendering (`VK_KHR_dynamic_rendering`) への移行 — 現実装は VkRenderPass + Framebuffer ベース。将来別タスク
 - TAA history (Phase 2 §6.3 の積み残しと同じ — フレーム間生存 attachment の汎用化)
@@ -309,7 +309,7 @@ public:
 - 既存 `scene_render_pass_` は AttachmentRegistry が **空でも** 作成できるよう、profile に attachments がない場合は既定 (`scene_hdr_color` + `scene_depth` + `swapchain`) を C++ 側でハードコード fallback
 - `PipelineProfileBuilder` が `AttachmentDef[]` ビルダーを提供
 
-検証: 既存 KS が無改変で起動できる。`*.profile.json` に attachments を書かなくても従来通り動く。
+検証: 既存 PrivateGame が無改変で起動できる。`*.profile.json` に attachments を書かなくても従来通り動く。
 
 ### 4.2 ステップ B: RenderPassRegistry / FramebufferRegistry を導入
 
@@ -317,7 +317,7 @@ public:
 - 既存 `create_framebuffers()` を `FramebufferRegistry::initialize()` に移植
 - profile に `render_passes[]` がない場合のフォールバックとして「Scene HDR」「Swapchain Composite」 2 件を C++ 側で自動生成
 
-検証: 既存 KS が無改変で起動できる。プロファイルに `render_passes[]` を書くと、その通りの順序で VkRenderPass が生成される。
+検証: 既存 PrivateGame が無改変で起動できる。プロファイルに `render_passes[]` を書くと、その通りの順序で VkRenderPass が生成される。
 
 ### 4.3 ステップ C: PipelineCompiler + RenderPassScheduler::execute() を実描画化
 
@@ -341,7 +341,7 @@ public:
 - `input_textures[]` は compile 時に **per-flight VkDescriptorSet を一括 build**。 hot path は `cp.input_sets[flight]` を bind するだけ。 layout は 1 種類 (sampled image 0..N) を共有
 - `shader_override` は compile 時に `ShaderRegistry::pipeline(handle)` 解決 → `cp.pipeline` に直値
 
-検証: KS が無改変で起動でき、 フレーム出力が従来と pixel-equivalent。 プロファイル切替で compile が走り直して flat graph が差し替わる。 hot path に string lookup が 0 個であること (perfetto trace で `std::string`/`unordered_map` シンボルが per-frame に出ないことを確認)。
+検証: PrivateGame が無改変で起動でき、 フレーム出力が従来と pixel-equivalent。 プロファイル切替で compile が走り直して flat graph が差し替わる。 hot path に string lookup が 0 個であること (perfetto trace で `std::string`/`unordered_map` シンボルが per-frame に出ないことを確認)。
 
 #### ステップ C 配線状況 (2026-07-02, `fix/render-compiled-path-wiring`)
 
@@ -353,14 +353,14 @@ public:
 | 旧 managed `execute()` | custom pass 実行のみに縮退。 built-in pass は compiled graph 未設置なら 1 回だけ明示 warn (D-2 のサイレント no-op を解消)。 `remap_batches_for_pass` (M-2 per-frame alloc) は削除 | ✅ |
 | draw call / triangle 統計 | recorder の実測値を `render_compiled()` が profiler へ集計。 GPUDrivenPipeline の placeholder 統計 (visible=count / draw_calls=1) は「未計測 = 0」へ是正 | ✅ |
 | headless 統合テスト | `tests/unit_compiled_graph_wiring_test.cpp` — headless compile (device=NULL) の graph 構造 / execute_compiled の record 順序 / driver ライフサイクル / recorder 統計 / プロファイル切替再 compile | ✅ |
-| KS 側配線 | `<term-c12>.json` + registries 構築 → `compile_render_graph()` 呼び出し | 未 (KS 側 PR、 §9) |
+| PrivateGame 側配線 | `game.profile.json` + registries 構築 → `compile_render_graph()` 呼び出し | 未 (PrivateGame 側 PR、 §9) |
 
 ### 4.4 ステップ D: 既存呼び出し側の整理
 
 - `FrameComposer` を `RenderPassScheduler::execute()` 経由に統合 (HUD レイヤーは pass として scheduler 内に置く / または "post-scheduler hook" として残す)
-- KS の `GameRenderer` / `SkinnedLayer` / `PostProcessLayer` / `HudLayer` を pass 単位に整理 (大改修になるので KS 側は別 PR に分ける可能性)
+- PrivateGame の `GameRenderer` / `SkinnedLayer` / `PostProcessLayer` / `HudLayer` を pass 単位に整理 (大改修になるので PrivateGame 側は別 PR に分ける可能性)
 
-検証: KS 起動 + プロファイル差し替えでフレーム構成が変わる。
+検証: PrivateGame 起動 + プロファイル差し替えでフレーム構成が変わる。
 
 ## 5. JSON スキーマバージョン
 
@@ -374,7 +374,7 @@ public:
 |--------|------|----------------|
 | attachment 名typo で resolve 失敗 | `RenderPassRegistry::initialize()` で fatal log + 既定 attachments で起動継続 | "scene_hdr_color" / "scene_depth" / "swapchain" の 3 名を built-in 既定として保持 |
 | `attachment_ops` 不整合 (subpass dep 違反) | validation layer エラー | デフォルト推論 (CLEAR/STORE + SHADER_READ_ONLY 最終) にフォールバック |
-| ステップ C の draw 記録パスが従来と差分 | KS で目視 + screenshot 比較 (Custos 連携) | ステップ B で stop、`feat/pipeline-system-b` を merge せず差分原因特定 |
+| ステップ C の draw 記録パスが従来と差分 | PrivateGame で目視 + screenshot 比較 (Custos 連携) | ステップ B で stop、`feat/pipeline-system-b` を merge せず差分原因特定 |
 | 既存プロファイル (v1, attachments 未宣言) の互換切れ | loader が version 検出して既定補完 | v1 互換シム (4.1, 4.2 のフォールバック) |
 | resize で attachment 取りこぼし | swapchain recreate 時に AttachmentRegistry::resize → 全 framebuffer rebuild | C++ assertion で resize 失敗時は古い framebuffer を破棄しない (フレーム skip) |
 
@@ -382,7 +382,7 @@ public:
 
 - **CTest 単体**: `tests/unit_attachment_registry_test.cpp` (alloc / resize / swapchain inject)、`tests/unit_render_pass_registry_test.cpp` (config から VkRenderPass 生成、load/store op 反映)、`tests/unit_framebuffer_registry_test.cpp`、`tests/unit_pipeline_profile_serializer_test.cpp` 拡張 (v2 round-trip + v1 後方互換)
 - **統合**: 既存 `tests/unit_pipeline_profile_round_trip_test.cpp` に attachments[] + attachment_ops[] を含むケース追加
-- **ホスト**: KS が無改変で起動 + Custos でフレーム比較。プロファイル切替 ("standard" → "high" 等) で attachments 差分が反映されることを確認
+- **ホスト**: PrivateGame が無改変で起動 + Custos でフレーム比較。プロファイル切替 ("standard" → "high" 等) で attachments 差分が反映されることを確認
 
 ## 8. Ergo plugin 側の編集 UI
 
@@ -397,20 +397,20 @@ Profile Editor / Timeline / DAG は **単一のグラフエディタ画面に統
 
 詳細は Ergo 側 `spec/tool/render_pipeline_system_b.md` を参照。
 
-## 9. KS 側の対応
+## 9. PrivateGame 側の対応
 
-KS は本書の対象外だが、ステップ D で `data/render/<term-c12>.json` に attachments[] と attachment_ops[] を追加する PR を別建てする。Pictor 側のフォールバック (4.1 / 4.2) があるので KS 側 PR は Pictor merge の後追いで OK。
+PrivateGame は本書の対象外だが、ステップ D で `data/render/game.profile.json` に attachments[] と attachment_ops[] を追加する PR を別建てする。Pictor 側のフォールバック (4.1 / 4.2) があるので PrivateGame 側 PR は Pictor merge の後追いで OK。
 
-`spec/rendering_overview.md` に「Phase 3: scene-side 系統B」を追記 (KS 側 PR の中で)。
+`spec/rendering_overview.md` に「Phase 3: scene-side 系統B」を追記 (PrivateGame 側 PR の中で)。
 
 ## 10. 実装スコープ見積もり
 
 - Pictor 側: 新規ヘッダ 5 (`attachment_def.h` / `attachment_registry.h` / `render_pass_registry.h` / `framebuffer_registry.h` / `pipeline_compiler.h`) + 実装 5 + 既存 `vulkan_context.cpp` / `render_pass_scheduler.cpp` / `pipeline_profile.h` / `pipeline_profile_serializer.cpp` の改修。新規 CTest 5 ファイル (compiler の不変条件テスト含む — hot path に string 系シンボルが出ないことを check)。
 - Ergo 側: scanner 削除 (`scanner/render_pipeline_scan.py` / `scanner/render_pipeline.json`)、 plugin を「単一グラフエディタ」 に再構築 (`profile_schema.ts` を v2 化 + DAG ↔ ノード ↔ Profile の単一データ源)、 アニメ無効化。
-- KS 側: `data/render/<term-c12>.json` の attachments[] 明示化 + `spec/rendering_overview.md` 追記 (別 PR)。
+- PrivateGame 側: `data/render/game.profile.json` の attachments[] 明示化 + `spec/rendering_overview.md` 追記 (別 PR)。
 
 ## 11. ブランチ + PR
 
 - Pictor: `feat/pipeline-system-b` (本書 + Phase 3 実装一式、1 PR)
 - Ergo: `feat/render-pipeline-system-b` (Profile Editor v2 + scanner v2 schema 認識、1 PR)
-- KS: 後追いで別 PR
+- PrivateGame: 後追いで別 PR

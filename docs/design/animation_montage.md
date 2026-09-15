@@ -40,8 +40,8 @@ pictor::MontagePlayParams p;
 p.weight        = 1.0f;
 p.blend_in_time = 0.10f;
 p.blend_out_time= 0.15f;
-p.on_notify     = [](const auto& n){ kuzu::handle_notify(n.name, n.payload); };
-p.on_finish     = []{ kuzu::on_attack_finished(); };
+p.on_notify     = [](const auto& n){ game::handle_notify(n.name, n.payload); };
+p.on_finish     = []{ game::on_attack_finished(); };
 montages.play(inst_handle, m_attack, skel_handle, p);
 
 // 3) 毎フレーム

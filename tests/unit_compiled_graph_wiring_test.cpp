@@ -6,7 +6,7 @@
 // pass_type / flags / clear / debug_name) を決定的に組み、
 // `execute_compiled()` は render_pass / framebuffer が VK_NULL_HANDLE の pass
 // を「record callback のみ」経路で回す — record 内容の検証までを対象とする
-// (vkCmdBeginRenderPass 等の実発行は KS / Custos の統合テスト側)。
+// (vkCmdBeginRenderPass 等の実発行は PrivateGame / Custos の統合テスト側)。
 //
 // 検証対象:
 //   1. PipelineCompiler::compile() の headless 構造 (順序 / flags / clear)
