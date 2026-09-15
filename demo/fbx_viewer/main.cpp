@@ -2336,15 +2336,18 @@ private:
 
         if (show_mesh_ && reconstruction_ && reconstruction_->options().raymarch) {
             raymarch_.bind(cmd,scene_set_,reconstruction_->ray_parameters(ext.width,ext.height));
-            // Patch indices address the immutable source triangles, but the
-            // texture sets were allocated once per submesh of the mesh present
-            // at descriptor-set creation. Only the overlap is safe to bind.
-            const auto& submeshes=reconstruction_->model().source().submeshes;
-            const size_t drawable=std::min(submeshes.size(),submesh_tex_sets_.size());
-            for (size_t i=0;i<drawable;++i)
-                raymarch_.draw(cmd,submesh_tex_sets_[i],submeshes[i].index_start/3,submeshes[i].index_count/3);
-            if (drawable && motion_.extra_count())
-                raymarch_.draw(cmd,submesh_tex_sets_[0],motion_.source_count(),motion_.extra_count());
+            // Texture sets were allocated once per submesh of the mesh present
+            // at descriptor-set creation. Only ranges within that set are safe to bind.
+            if (motion_.enabled()) {
+                for (const auto& range:motion_.draw_ranges())
+                    if (range.submesh<submesh_tex_sets_.size())
+                        raymarch_.draw(cmd,submesh_tex_sets_[range.submesh],range.first_patch,range.count);
+            } else {
+                const auto& submeshes=reconstruction_->model().source().submeshes;
+                const size_t drawable=std::min(submeshes.size(),submesh_tex_sets_.size());
+                for (size_t i=0;i<drawable;++i)
+                    raymarch_.draw(cmd,submesh_tex_sets_[i],submeshes[i].index_start/3,submeshes[i].index_count/3);
+            }
         } else if (show_mesh_) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_,

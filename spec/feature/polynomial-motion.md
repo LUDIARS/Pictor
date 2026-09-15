@@ -9,8 +9,23 @@ or source dependency on the caller's physics library.
 Initialization supplies temporary read-only views of source vertices, skin
 weights, world bind-bone positions, triangle indices and cubic Bernstein patches.
 The provider allocates fixed patch storage and a list of changed indices once.
-It may append at most 65,536 opaque constant-color polynomial patches. Texture
-coordinates and smooth normals remain attached to the source patches.
+Before initialization it receives the source material ranges through
+`describe_submeshes` (first patch, patch count, texture basename).
+
+It may append at most 1,048,576 polynomial patches (`kMaxAppendedPatches`,
+under 300 MiB of mapped storage). Each appended patch either names a source
+`submesh`, carrying its own UVs and normals and using that submesh's texture
+and stage material class, or keeps `kUntexturedSubmesh` with an opaque constant
+color. A textured patch cannot be constant-color. `MotionBridge` validates the
+layout once and records one draw call per contiguous run of equal submesh, at
+most 4,096 runs, so providers group appended patches by material.
+
+`replaces_source()` declares the appended patches a complete replacement
+surface, such as a subdivided character. The source patches then stay in the
+buffer for index stability but are not drawn; a replacement with no appended
+patches is rejected. Otherwise source submesh ranges are drawn first, followed
+by the appended runs. Source patches rewritten through `changed_patches` keep
+their source material class; appended textured patches take their submesh's.
 
 Each frame updates the provider and only changed GPU patches after the previous
 frame fence. The persistently mapped coherent buffer is released by RaymarchPass.

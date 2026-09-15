@@ -13,6 +13,10 @@ struct MotionVertex {
     std::array<float,4> weights{};
 };
 struct MotionBone { std::string name;int32_t parent=-1;float3 position{}; };
+// One source material group. Source patch i belongs to the submesh whose
+// [first_patch, first_patch+patch_count) range contains i.
+struct MotionSubmesh { uint32_t first_patch=0,patch_count=0;std::string texture; };
+inline constexpr int32_t kUntexturedSubmesh=-1;
 struct PolynomialPatch {
     // Bernstein order: 300,030,003,210,120,021,012,102,201,111.
     std::array<float3,10> control{};
@@ -20,6 +24,9 @@ struct PolynomialPatch {
     std::array<std::array<float,2>,3> uv{};
     bool constant_color=false;
     float3 color{1,1,1};
+    // Appended patches only: the source submesh whose texture and material
+    // class this patch uses. kUntexturedSubmesh requires constant_color.
+    int32_t submesh=kUntexturedSubmesh;
 };
 enum class MotionCommand { zero_force,positive_force,negative_force,pause,reset };
 
@@ -28,12 +35,19 @@ enum class MotionCommand { zero_force,positive_force,negative_force,pause,reset 
 class PolynomialMotion {
 public:
     virtual ~PolynomialMotion()=default;
+    // Called once before initialize with the source material ranges. Providers
+    // that refine the surface keep texture assignment through PolynomialPatch::submesh.
+    virtual void describe_submeshes(std::span<const MotionSubmesh> submeshes) { (void)submeshes; }
     virtual void initialize(std::span<const MotionVertex> vertices,
         std::span<const uint32_t> indices,std::span<const MotionBone> bones,
         std::span<const PolynomialPatch> source)=0;
     // Storage and patch count remain fixed after initialize. Additional patches
-    // follow the source patches and use an opaque constant color.
+    // follow the source patches. Contiguous runs of equal submesh are drawn with
+    // that submesh texture; untextured runs use an opaque constant color.
     virtual std::span<const PolynomialPatch> patches() const=0;
+    // True when the appended patches are a complete replacement surface, for
+    // example a subdivided mesh. Source patches are then kept but not drawn.
+    virtual bool replaces_source() const { return false; }
     virtual std::span<const uint32_t> changed_patches() const=0;
     virtual void update(double real_seconds)=0;
     virtual void command(MotionCommand command)=0;

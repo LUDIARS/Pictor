@@ -1,4 +1,5 @@
 #pragma once
+#include "motion_layout.h"
 #include "pn_gpu_data.h"
 #include "raymarch_pass.h"
 #include "pictor/animation/animation_types.h"
@@ -25,8 +26,14 @@ public:
     uint32_t source_count() const { return source_count_; }
     /// @implements SPEC-PC-POLYNOMIAL-MOTION
     bool enabled() const { return motion_!=nullptr; }
+    /// Fixed texture-bound draw ranges for the provider layout; empty without a provider.
+    /// @implements SPEC-PC-POLYNOMIAL-MOTION
+    const std::vector<PatchDrawRange>& draw_ranges() const { return ranges_; }
 private:
     pictor::demo::PolynomialMotion* motion_=nullptr; // borrowed for viewer lifetime
     uint32_t source_count_=0,total_count_=0;
+    std::vector<PatchDrawRange> ranges_;
+    std::vector<float> submesh_kinds_,source_kinds_;
+    float kind_of(uint32_t patch_index) const;
 };
 }
