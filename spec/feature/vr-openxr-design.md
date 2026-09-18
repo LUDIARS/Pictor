@@ -36,6 +36,31 @@ host が得るもの:
 対応 backend は Vulkan のみ。 DX12 / Metal / WebGL では OpenXR 接続と再投影パスは使えない
 (CPU 側の計画とカメラは backend に依らず使える)。
 
+## 構成
+
+| ファイル | 責務 |
+|---|---|
+| `include/pictor/core/camera.h` | 描画カメラの値型 (`pictor_renderer.h` から切り出し) |
+| `transform_math.h` / `transform_math.cpp` | 行列の積・逆行列、 姿勢から剛体変換、 非対称の透視投影 |
+| `frustum_utils.h` / `frustum_culler.cpp` | view-projection から視錐台の 6 平面を取り出す (既存の実装を公開) |
+| `vulkan_device_requirements.h` / `vulkan_context.cpp` | インスタンス/デバイス生成への外部要求の口、 multiview と precise な occlusion query の有効化 |
+| `xr_types.h` | 姿勢・視野・コントローラ・セッション状態の値型 |
+| `xr_session.h` | セッションとフレームループの契約 `IXrSession` |
+| `stereo_output_surface.h` | HMD へ提出する 2 層の描画先の契約 `IStereoOutputSurface` |
+| `stereo_camera.h` / `stereo_camera.cpp` | 両眼の姿勢から左右のカメラとカリング用カメラを組み立てる |
+| `stereo_frustum.h` / `stereo_frustum.cpp` | 両眼の視錐台をまとめて包むカリング用カメラ |
+| `reprojection.h` / `reprojection.cpp` | 再投影の行列と、 2 つの視点の隔たりの計測 |
+| `reprojection_pass.h` / `reprojection_pass.cpp` | 格子メッシュの変形で色と深度を別の視点へ写す Vulkan のパス |
+| `delta_render_planner.h` / `delta_render_planner.cpp` | フレームごとの差分描画の計画 (キーフレームの取り直しと全面描画への復帰) |
+| `stereo_presets.h` / `stereo_presets.cpp` | 名前付き既定値 |
+| `openxr_runtime.h` / `openxr_runtime.cpp` | ランタイムへの接続、 Vulkan への要求、 セッションと描画先の配線 |
+| `openxr_session.h` / `openxr_session.cpp` | OpenXR のセッション状態とフレームループ |
+| `openxr_swapchain_surface.h` / `openxr_swapchain_surface.cpp` | OpenXR の swapchain を描画先の契約として見せる |
+| `openxr_input.h` / `openxr_input.cpp` | コントローラ入力の action と毎フレームの読み出し |
+| `openxr_common.h` | OpenXR backend の内部ヘッダ (結果の確認、 名前欄への複写) |
+| `reproject_warp.vert` / `reproject_warp.frag` | 再投影パスの shader |
+| `unit_transform_math_test.cpp` / `unit_xr_stereo_camera_test.cpp` / `unit_xr_reprojection_test.cpp` / `unit_xr_delta_planner_test.cpp` | 単体テスト |
+
 ## SDK の選択
 
 Oculus 対応は OpenXR で行う。 旧 Oculus PC SDK (LibOVR) は Meta が非推奨にしており、
