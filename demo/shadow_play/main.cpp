@@ -1329,33 +1329,33 @@ private:
     uint32_t mesh_index_count_[kMeshCount] = {};
 };
 
-enum class FrameResult { Rendered, Skipped, Failed };
+enum class RenderOutcome { Rendered, Skipped, Failed };
 
-static FrameResult render_frame(VulkanContext& vk_ctx,
+static RenderOutcome render_frame(VulkanContext& vk_ctx,
                                 ShadowPlayRenderer& renderer,
                                 const SpSceneUBO& scene,
                                 bool backstage,
                                 const float trunk_model[16],
                                 const float figure_model[16]) {
     const uint32_t image_index = vk_ctx.acquire_next_image();
-    if (image_index == UINT32_MAX) return FrameResult::Skipped;
+    if (image_index == UINT32_MAX) return RenderOutcome::Skipped;
 
     if (!renderer.update_scene(scene)) {
         fprintf(stderr, "Failed to update scene uniform buffer\n");
-        return FrameResult::Failed;
+        return RenderOutcome::Failed;
     }
 
     VkCommandBuffer cmd = vk_ctx.command_buffers()[image_index];
     if (vkResetCommandBuffer(cmd, 0) != VK_SUCCESS) {
         fprintf(stderr, "Failed to reset command buffer\n");
-        return FrameResult::Failed;
+        return RenderOutcome::Failed;
     }
 
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     if (vkBeginCommandBuffer(cmd, &begin_info) != VK_SUCCESS) {
         fprintf(stderr, "Failed to begin command buffer\n");
-        return FrameResult::Failed;
+        return RenderOutcome::Failed;
     }
 
     renderer.render(cmd, image_index, vk_ctx.swapchain_extent(),
@@ -1363,7 +1363,7 @@ static FrameResult render_frame(VulkanContext& vk_ctx,
 
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
         fprintf(stderr, "Failed to end command buffer\n");
-        return FrameResult::Failed;
+        return RenderOutcome::Failed;
     }
 
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1383,10 +1383,10 @@ static FrameResult render_frame(VulkanContext& vk_ctx,
     if (vkQueueSubmit(vk_ctx.graphics_queue(), 1, &submit,
                       vk_ctx.in_flight_fence()) != VK_SUCCESS) {
         fprintf(stderr, "Failed to submit frame\n");
-        return FrameResult::Failed;
+        return RenderOutcome::Failed;
     }
     vk_ctx.present(image_index);
-    return FrameResult::Rendered;
+    return RenderOutcome::Rendered;
 }
 
 #endif // PICTOR_HAS_VULKAN
@@ -1588,10 +1588,10 @@ int main() {
 
         // ---- 描画 ----
 #ifdef PICTOR_HAS_VULKAN
-        const FrameResult frame_result = render_frame(
+        const RenderOutcome frame_result = render_frame(
             vk_ctx, sp_renderer, scene, backstage, trunk_model, figure_model);
-        if (frame_result == FrameResult::Skipped) continue;
-        if (frame_result == FrameResult::Failed) break;
+        if (frame_result == RenderOutcome::Skipped) continue;
+        if (frame_result == RenderOutcome::Failed) break;
 #endif
 
         frame_count++;
