@@ -13,6 +13,7 @@ set(PICTOR_TESTS
     unit_radix_sort_test
     unit_batch_builder_test
     unit_culling_test
+    unit_transform_math_test
     unit_visus_metadata_test
     unit_visus_serializer_test
     unit_visus_catalog_test
@@ -45,6 +46,11 @@ if(PICTOR_ENABLE_POSTPROCESS)
     list(APPEND PICTOR_TESTS unit_pipeline_profile_serializer_test unit_pipeline_tiers_test unit_postprocess_chain_test)
 endif()
 
+if(PICTOR_ENABLE_XR)
+    list(APPEND PICTOR_TESTS unit_xr_stereo_camera_test
+         unit_xr_reprojection_test unit_xr_delta_planner_test)
+endif()
+
 if(PICTOR_ENABLE_SHARC)
     list(APPEND PICTOR_TESTS unit_sharc_hash_test unit_sharc_estimator_test)
 endif()
@@ -54,6 +60,9 @@ foreach(_t ${PICTOR_TESTS})
     target_link_libraries(${_t} PRIVATE pictor)
     if(PICTOR_ENABLE_POSTPROCESS AND _t MATCHES "^(unit_pipeline_profile_serializer_test|unit_pipeline_tiers_test|unit_postprocess_chain_test)$")
         target_link_libraries(${_t} PRIVATE Pictor::postprocess)
+    endif()
+    if(PICTOR_ENABLE_XR AND _t MATCHES "^unit_xr_")
+        target_link_libraries(${_t} PRIVATE Pictor::xr)
     endif()
     target_include_directories(${_t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     # MSVC: tests も UTF-8 ソースとして読む (日本語コメントを含む header を取り込むため)

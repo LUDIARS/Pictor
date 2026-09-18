@@ -13,6 +13,8 @@
 | `PICTOR_USE_LARGE_PAGES` | `OFF` | ラージページ確保を有効化 → define `PICTOR_LARGE_PAGES=1` (PRIVATE) | `-DPICTOR_USE_LARGE_PAGES=ON` / `:12,250` |
 | `PICTOR_BUILD_WEBGL` | `OFF` | WebGL2 バックエンド (別ライブラリ `pictor_webgl`) をビルド。Emscripten 前提 | `-DPICTOR_BUILD_WEBGL=ON` / `:13,390` |
 | `PICTOR_ENABLE_RIVE` | `OFF` | Rive Renderer 統合。prebuilt rive-runtime が必要 (下記 §Rive) | `-DPICTOR_ENABLE_RIVE=ON` / `:14,260` |
+| `PICTOR_ENABLE_XR` | `ON` | 任意モジュール `Pictor::xr` (両眼カメラ・カリング・差分レンダリング・再投影パス)。外部依存なし → define `PICTOR_HAS_XR=1` | `-DPICTOR_ENABLE_XR=OFF` / `cmake/PictorXr.cmake` |
+| `PICTOR_ENABLE_OPENXR` | `OFF` | `Pictor::xr` の OpenXR backend と VR demo。Vulkan と `PICTOR_ENABLE_XR=ON` が必須で、欠けていれば configure を FATAL_ERROR で止める。OpenXR loader はインストール済み package を優先し、無ければ `PICTOR_OPENXR_SDK_TAG` (既定 `release-1.1.63`) を FetchContent で取得 → define `PICTOR_HAS_OPENXR=1` | `-DPICTOR_ENABLE_OPENXR=ON` / `cmake/PictorXr.cmake`、`../feature/vr-openxr-design.md` |
 
 > 注: `../../README.md` には `PICTOR_BUILD_C_API` (C ABI エクスポート) が列挙されているが、現行 `../../CMakeLists.txt` には対応する `option()` もターゲット定義も無く、ビルドフラグとしては未配線。`include/pictor/c_api.h` / `src/c_api/c_api.cpp` のソースは存在するが、現状このフラグを渡しても効果は無い。同様に consumer (PrivateGame) や CI が渡す `PICTOR_BUILD_BENCHMARK` も Pictor 側では未配線で、無害なキャッシュ変数として無視される。本ガイドでは未実装のため操作対象に含めない。
 
@@ -37,6 +39,8 @@ option やプラットフォーム検出から自動で立つ define。consumer 
 | `PICTOR_PROFILER_ENABLED=1` | `PICTOR_ENABLE_PROFILER=ON` | PUBLIC | `:247` |
 | `PICTOR_LARGE_PAGES=1` | `PICTOR_USE_LARGE_PAGES=ON` | PRIVATE | `:251` |
 | `PICTOR_HAS_RIVE=1` | `PICTOR_ENABLE_RIVE=ON` | PUBLIC | `:263` |
+| `PICTOR_HAS_XR=1` | `PICTOR_ENABLE_XR=ON` | PUBLIC (pictor_xr) | `cmake/PictorXr.cmake` |
+| `PICTOR_HAS_OPENXR=1` | `PICTOR_ENABLE_OPENXR=ON` | PUBLIC (pictor_xr) | `cmake/PictorXr.cmake` |
 | `PICTOR_HAS_WEBGL=1` | `pictor_webgl` ビルド時 | PUBLIC (pictor_webgl) | `:404` |
 | `VK_USE_PLATFORM_WIN32_KHR=1` / `NOMINMAX` | Win32 + Vulkan | PUBLIC | `:237` |
 | `VK_USE_PLATFORM_XLIB_KHR=1` | Linux + Vulkan | PUBLIC | `:239` |

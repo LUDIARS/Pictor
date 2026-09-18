@@ -1,4 +1,5 @@
 ﻿#include "pictor/culling/culling_system.h"
+#include "pictor/culling/frustum_utils.h"
 #include <cmath>
 
 // Frustum culling helper functions.

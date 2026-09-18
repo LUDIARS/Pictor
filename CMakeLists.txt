@@ -75,6 +75,7 @@ add_library(pictor STATIC
     src/core/file_watch.cpp
     src/core/cache_info.cpp
     src/core/device_memory_profile.cpp
+    src/core/transform_math.cpp
 
     # Memory Subsystem
     src/memory/frame_allocator.cpp
@@ -223,6 +224,7 @@ add_library(pictor STATIC
 )
 
 include(cmake/PictorOptionalEffects.cmake)
+include(cmake/PictorXr.cmake)
 
 # サーフェスプロバイダ — プラットフォーム別に条件付きで追加。
 # デスクトップ: GLFW プロバイダ。 Android/iOS: 各ネイティブプロバイダ。
@@ -460,6 +462,22 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         if(TARGET pictor_postprocess)
             add_executable(pictor_postprocess_demo demo/postprocess/main.cpp)
             target_link_libraries(pictor_postprocess_demo PRIVATE Pictor::postprocess)
+        endif()
+
+        # VR demo (OpenXR)。 OpenXR backend を外したビルドでは target 自体を作らない。
+        if(PICTOR_ENABLE_OPENXR)
+            add_executable(pictor_vr_openxr_demo
+                demo/vr_openxr/main.cpp
+                demo/vr_openxr/vr_scene_renderer.cpp
+                demo/vr_openxr/vr_eye_targets.cpp
+                demo/vr_openxr/vr_vulkan_util.cpp)
+            target_link_libraries(pictor_vr_openxr_demo PRIVATE Pictor::xr)
+            pictor_effect_shaders(pictor_vr_openxr_demo
+                "${CMAKE_CURRENT_SOURCE_DIR}/demo/vr_openxr/shaders/vr_scene.vert;${CMAKE_CURRENT_SOURCE_DIR}/demo/vr_openxr/shaders/vr_scene_multiview.vert;${CMAKE_CURRENT_SOURCE_DIR}/demo/vr_openxr/shaders/vr_scene.frag"
+                "${CMAKE_CURRENT_BINARY_DIR}/shaders/vr_demo")
+            if(MSVC)
+                target_compile_options(pictor_vr_openxr_demo PRIVATE /utf-8)
+            endif()
         endif()
 
         # Rive Renderer demo (plays an official .riv file through pictor::RiveRenderer).

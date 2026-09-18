@@ -2,6 +2,7 @@
 
 #include "pictor/surface/surface_provider.h"
 #include "pictor/surface/frame_result.h"
+#include "pictor/surface/vulkan_device_requirements.h"
 #include "pictor/surface/per_image_resource_pool.h"
 #include "pictor/surface/vulkan_per_image_backend.h"
 #include "pictor/core/device_memory_profile.h"
@@ -42,6 +43,14 @@ struct VulkanContextConfig {
     /// セマフォを flight 単位に多重化する (render-finished は swapchain image
     /// 単位)。
     uint32_t    frames_in_flight = 2;
+
+    /// インスタンス/デバイス生成への外部要求 (XR ランタイム等)。 借用で、 initialize()
+    /// の間だけ参照する。 要求を満たせない場合は初期化を失敗させる。
+    IVulkanDeviceRequirements* device_requirements = nullptr;
+
+    /// VK_KHR_multiview (1 パスの両眼描画) を要求する。 デバイスが対応していなければ
+    /// 初期化を失敗させる。 false のままなら機能を有効にしない。
+    bool        require_multiview = false;
 };
 
 /// Manages the Vulkan instance, physical/logical device, queue,
@@ -154,6 +163,8 @@ public:
     //   cheaper than interlock on some drivers.
     bool has_fragment_shader_interlock()               const { return has_fragment_shader_interlock_; }
     bool has_rasterization_order_attachment_access()   const { return has_rasterization_order_attachment_access_; }
+    /// VK_KHR_multiview を有効にしてデバイスを作ったか (require_multiview の結果)。
+    bool has_multiview()                               const { return has_multiview_; }
 
     /// 物理デバイスのメモリ構成を Vk 非依存記述に変換する (UMA/ReBAR 判定の入力)。
     DeviceMemoryDesc    describe_device_memory() const;
@@ -165,6 +176,8 @@ public:
 private:
 #ifdef PICTOR_HAS_VULKAN
     bool create_instance(const VulkanContextConfig& cfg);
+    /// 外部要求の拡張名を取り込み、 未対応のものがあれば理由を出して false。
+    bool collect_required_device_extensions(std::vector<const char*>& dev_extensions);
     bool create_surface();
     bool pick_physical_device();
     bool create_logical_device();
@@ -228,6 +241,12 @@ private:
 
     bool has_fragment_shader_interlock_             = false;
     bool has_rasterization_order_attachment_access_ = false;
+    bool has_multiview_                             = false;
+    bool multiview_requested_                       = false;
+    IVulkanDeviceRequirements* device_requirements_ = nullptr;
+    /// 外部要求の拡張名の実体。 Vulkan へ渡す const char* の寿命を保つ。
+    std::vector<std::string> required_instance_extensions_;
+    std::vector<std::string> required_device_extensions_;
 #endif
 
     bool initialized_ = false;

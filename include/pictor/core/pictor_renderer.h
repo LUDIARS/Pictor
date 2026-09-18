@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "pictor/core/types.h"
+#include "pictor/core/camera.h"
 #include "pictor/core/mobile_lifecycle.h"
 #include "pictor/memory/memory_subsystem.h"
 #include "pictor/scene/scene_registry.h"
@@ -45,14 +46,6 @@ struct RendererConfig {
     /// want Pictor to swap to `low_profile_name` on thermal
     /// throttling flip `enabled = true`.
     MobileAutoDowngradePolicy mobile_downgrade;
-};
-
-/// Camera for rendering
-struct Camera {
-    float4x4 view       = float4x4::identity();
-    float4x4 projection = float4x4::identity();
-    float3   position;
-    Frustum  frustum;
 };
 
 /// Main Pictor renderer — public API entry point (§12).

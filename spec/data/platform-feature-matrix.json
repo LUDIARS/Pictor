@@ -840,6 +840,29 @@
       ]
     },
     {
+      "code": "PC-FEAT-DRAW-18",
+      "name": "XR (両眼描画・差分レンダリング・OpenXR)",
+      "domain": "xr",
+      "status": "実装あり・実機未検証",
+      "note": "両眼カメラ/カリング/差分描画の計画は CPU のみ。 OpenXR 接続と再投影パスは Vulkan 専用で PICTOR_ENABLE_OPENXR=ON が必要。 Windows で build 確認のみ、 HMD での表示は未確認。",
+      "evidence": [
+        "src/xr/stereo_camera.cpp",
+        "src/xr/delta_render_planner.cpp",
+        "src/xr/reprojection_pass.cpp",
+        "src/xr/openxr/openxr_runtime.cpp",
+        "shaders/xr/reproject_warp.vert"
+      ],
+      "platforms": [
+        "未接続",
+        "VK",
+        "未接続",
+        "未接続",
+        "未接続",
+        "未接続",
+        "未接続"
+      ]
+    },
+    {
       "code": "PC-FEAT-TOOLS-01",
       "name": "描画デモ・機能選択・Visus移行ツール",
       "domain": "samples-and-tools",

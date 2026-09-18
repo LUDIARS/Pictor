@@ -62,6 +62,7 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     provider_ = provider;
 
     auto fail = [this]() {
+        device_requirements_ = nullptr;
         shutdown();
         return false;
     };
@@ -69,6 +70,8 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     create_default_rp_on_init_ = cfg.create_default_render_pass;
     swapchain_transfer_src_requested_ = cfg.enable_swapchain_transfer_src;
     frames_in_flight_          = std::max<uint32_t>(1, cfg.frames_in_flight);
+    device_requirements_       = cfg.device_requirements;
+    multiview_requested_       = cfg.require_multiview;
 
     if (!create_instance(cfg))              return fail();
     if (!create_surface())                  return fail();
@@ -95,6 +98,8 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
         return fail();
     }
 
+    // 借用は initialize() の間だけ。 以降に触らないよう手放す。
+    device_requirements_ = nullptr;
     initialized_ = true;
     last_frame_result_ = {FrameStatus::Ready};
     return true;
@@ -442,6 +447,19 @@ bool VulkanContext::create_instance(const VulkanContextConfig& cfg) {
 
     std::vector<const char*> extensions(ext_names, ext_names + ext_count);
 
+    if (device_requirements_) {
+        required_instance_extensions_.clear();
+        if (!device_requirements_->required_instance_extensions(required_instance_extensions_)) {
+            fprintf(stderr, "[Pictor] Failed to query required Vulkan instance extensions\n");
+            return false;
+        }
+        for (const std::string& name : required_instance_extensions_) {
+            const bool is_listed = std::any_of(extensions.begin(), extensions.end(),
+                [&](const char* e) { return name == e; });
+            if (!is_listed) extensions.push_back(name.c_str());
+        }
+    }
+
     std::vector<const char*> layers;
     if (cfg.validation) {
         layers.push_back("VK_LAYER_KHRONOS_validation");
@@ -607,6 +625,17 @@ bool VulkanContext::pick_physical_device() {
     std::vector<VkPhysicalDevice> devices(count);
     vkEnumeratePhysicalDevices(instance_, &count, devices.data());
 
+    // 外部要求が GPU を指定したら、 その 1 台だけを候補にする (HMD が繋がっている
+    // GPU 以外では XR の表示ができないため、 他の GPU へ逃げない)。
+    if (device_requirements_) {
+        VkPhysicalDevice required = VK_NULL_HANDLE;
+        if (!device_requirements_->required_physical_device(instance_, required)) {
+            fprintf(stderr, "[Pictor] Failed to query the required physical device\n");
+            return false;
+        }
+        if (required != VK_NULL_HANDLE) devices.assign(1, required);
+    }
+
     // Pick first device that has a graphics queue supporting present
     for (auto& dev : devices) {
         uint32_t qf_count = 0;
@@ -662,6 +691,9 @@ bool VulkanContext::create_logical_device() {
     // Enables VkSampler anisotropicEnable — used by demos that sample
     // offscreen textures at oblique angles (e.g. the Rive-cube demo).
     if (supported.samplerAnisotropy)        features.samplerAnisotropy        = VK_TRUE;
+    // 描かれた画素数を正確に数える occlusion query。 XR の差分描画が「穴埋めで
+    // 描いた画素の割合」 を測るのに使う。 無いデバイスでは測れないだけで描画は成り立つ。
+    if (supported.occlusionQueryPrecise)    features.occlusionQueryPrecise    = VK_TRUE;
 
     // ── Probe optional extensions Rive can use as faster-than-atomic paths.
     // Rive's Vulkan backend has three coverage modes ordered by speed:
@@ -741,6 +773,27 @@ bool VulkanContext::create_logical_device() {
         dev_extensions.push_back(VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
 #endif
 
+    if (!collect_required_device_extensions(dev_extensions)) return false;
+
+    // multiview は Vulkan 1.1 でコア化されているので拡張名は不要、 機能ビットだけ要る。
+    has_multiview_ = false;
+    VkPhysicalDeviceMultiviewFeatures multiview_feat_en{};
+    multiview_feat_en.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
+    if (multiview_requested_) {
+        VkPhysicalDeviceMultiviewFeatures multiview_probe{};
+        multiview_probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
+        VkPhysicalDeviceFeatures2 multiview_probe2{};
+        multiview_probe2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        multiview_probe2.pNext = &multiview_probe;
+        vkGetPhysicalDeviceFeatures2(physical_device_, &multiview_probe2);
+        if (multiview_probe.multiview != VK_TRUE) {
+            fprintf(stderr, "[Pictor] require_multiview is set but the GPU does not support multiview\n");
+            return false;
+        }
+        multiview_feat_en.multiview = VK_TRUE;
+        has_multiview_ = true;
+    }
+
     // Build the enable-side pNext chain with VkPhysicalDeviceFeatures2.
     // Using features2 means pEnabledFeatures MUST be nullptr.
     VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock_feat_en{};
@@ -766,6 +819,9 @@ bool VulkanContext::create_logical_device() {
         *etail = &rov_feat_en; etail = &rov_feat_en.pNext;
     }
 #endif
+    if (has_multiview_) {
+        *etail = &multiview_feat_en; etail = &multiview_feat_en.pNext;
+    }
 
     VkDeviceCreateInfo create_info{};
     create_info.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -783,6 +839,37 @@ bool VulkanContext::create_logical_device() {
 
     vkGetDeviceQueue(device_, queue_family_index_, 0, &graphics_queue_);
     present_queue_ = graphics_queue_;
+    return true;
+}
+
+bool VulkanContext::collect_required_device_extensions(
+    std::vector<const char*>& dev_extensions)
+{
+    if (!device_requirements_) return true;
+
+    required_device_extensions_.clear();
+    if (!device_requirements_->required_device_extensions(required_device_extensions_)) {
+        fprintf(stderr, "[Pictor] Failed to query required Vulkan device extensions\n");
+        return false;
+    }
+
+    uint32_t count = 0;
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> available(count);
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &count, available.data());
+
+    for (const std::string& name : required_device_extensions_) {
+        const bool is_available = std::any_of(available.begin(), available.end(),
+            [&](const VkExtensionProperties& e) { return name == e.extensionName; });
+        if (!is_available) {
+            fprintf(stderr, "[Pictor] Required device extension is not available: %s\n",
+                    name.c_str());
+            return false;
+        }
+        const bool is_listed = std::any_of(dev_extensions.begin(), dev_extensions.end(),
+            [&](const char* e) { return name == e; });
+        if (!is_listed) dev_extensions.push_back(name.c_str());
+    }
     return true;
 }
 

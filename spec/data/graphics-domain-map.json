@@ -373,6 +373,27 @@
       ]
     },
     {
+      "id": "xr",
+      "name": "XR (VR/AR)",
+      "cores": [
+        "platform",
+        "pipeline"
+      ],
+      "modules": [
+        {
+          "name": "xr-implementation",
+          "description": "XR (両眼描画・差分レンダリング・OpenXR)",
+          "paths": [
+            "(^|/)src/xr/[^/]+$",
+            "(^|/)src/xr/openxr/[^/]+$",
+            "(^|/)include/pictor/xr/[^/]+$",
+            "(^|/)cmake/PictorXr\\.cmake$",
+            "(^|/)tests/unit_xr_[^/]+_test\\.cpp$"
+          ]
+        }
+      ]
+    },
+    {
       "id": "text-rendering",
       "name": "文字描画",
       "cores": [

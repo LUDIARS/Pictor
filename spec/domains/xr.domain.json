@@ -1,0 +1,23 @@
+{
+  "name": "xr",
+  "description": "XR (VR/AR の頭部装着表示)。 両眼カメラ、 両眼をまとめたカリング、 再投影による差分レンダリング (両眼差分・時間差分)、 OpenXR ランタイムとの接続と HMD 用の描画先。 任意モジュール。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/xr/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/xr/openxr/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/xr/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)cmake/PictorXr\\.cmake$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_xr_[^/]+_test\\.cpp$"
+    }
+  ]
+}

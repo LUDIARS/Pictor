@@ -15,6 +15,9 @@
     },
     {
       "pathPattern": "(^|/)tests/unit_file_watch_test\\.cpp$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_transform_math_test\\.cpp$"
     }
   ]
 }
