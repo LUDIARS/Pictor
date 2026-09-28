@@ -16,7 +16,8 @@
 
 ## 3 つの描画経路
 
-実装は用途別に独立した 3 経路を持つ (共通の `FontLoader` を土台にする)。
+出力は用途別に3経路を持つ。`FontLoader` とフォント単位の `GlyphOutline`
+を共通の土台とし、画像とatlasは同じベクタの被覆計算を使用する。
 
 | 経路 | 解像度 | 用途 | 出力 |
 |---|---|---|---|
@@ -70,3 +71,50 @@ TextSvgRenderer は SVG 文字列を返すのみ (外部ラスタライザ or Ri
 
 - フォントパースは自前 (big-endian、cmap format 4/12)。外部フォントライブラリに差し替えない。
 - アトラスは焼込時サイズ固定 → 動的スケールは B 経路 or atlas 再構築。
+
+## SPEC-PC-VECTOR-TEXT
+
+価値: `PC-TEXT-VECTOR-001` — UI、拡大表示、画像出力、SVG出力で同じ字形を再利用する。
+ドメイン: `text-rendering`（多様な描画機能の文字サブシステム）。
+既存Pf仕様: `PC-FEAT-DRAW-10` / version 2 / draft
+（project `01M2438A4KK1NCBH46A0H08ANE`, spec `01M2438BSXQVH7CRR0V1VHYWQ3`）。
+2026-09-28に照合した登録は旧mainの実装一覧であり、本修正の反映・動作保証ではない。
+
+| 実装 | 責務 |
+|---|---|
+| `src/text/truetype_outline.cpp` | テーブル境界を検証し、単純/複合グリフを曲線のベクタ輪郭へ復元 |
+| `src/text/glyph_vector_rasterizer.cpp` | ベクタ輪郭を出力解像度で分割し、nonzero windingの画素被覆を計算 |
+| `src/text/font_glyph_raster.cpp` | フォント輪郭と画像bounds/bearingを対応させ、共通描画へ渡す |
+| `src/text/text_svg_renderer.cpp` | 共通輪郭の公開・SVG出力 |
+| `src/text/text_image_renderer.cpp` | 共通のグリフ画像を文字列へ配置・合成 |
+| `src/text/text_rasterizer.cpp` | 共通のグリフ画像をatlasへ格納 |
+
+- `TextSvgRenderer::extract_glyph_outline()` は解像度に依存しないy-upの
+  フォント座標と二次曲線を返す。TrueTypeの連続off-curve点、暗黙中点、
+  始点がoff-curveの輪郭も省略せず閉じる。
+- TrueType複合グリフは子の変換・XYオフセット・実点による位置合わせを
+  展開する。循環/過剰深度、範囲外参照、破損したテーブルは例外で拒否する。
+  hinting用phantom点による位置合わせは未対応で明示エラー。
+- `GlyphVectorRasterizer::render(outline, width, height, scale, origin_x,
+  baseline_y)` は公開ベクタデータを指定解像度のalpha画像へ変換する。
+  `x=path_x*scale+origin_x`, `y=baseline_y-path_y*scale`。
+  MOVE/LINE/QUAD/CUBIC/CLOSEを受け付け、パス効果の結果も入力可能。
+- 画像・atlasは同じ輪郭抽出とベクタ描画を利用する。画像のbboxとbearingを
+  対にし、負のbearingや右側の張り出しをadvance幅で切り捨てない。
+- 曲線は出力画素空間で適応分割。nonzero windingで穴と重なりを保持し、
+  横方向は連続座標の区間被覆、縦方向は8サンプルでAAを計算する。
+  ラスタ化は最終出力時のみ。ベクタ原本を低解像度bitmapへ置換しない。
+- 出力上限4096x4096、輪郭点/分割数/再帰深度に上限を設ける。
+  不正な寸法・非有限座標・未対応の輪郭形式は例外で拒否し、偽の字形を返さない。
+
+```cpp
+auto outline = TextSvgRenderer(fonts).extract_glyph_outline(font, U'語');
+auto alpha = GlyphVectorRasterizer().render(outline, 128, 128,
+                                           96.0f / outline.em_size, 8, 104);
+// outlineは同じまま、scaleと出力寸法を変えて再描画できる。
+```
+
+対象はTrueType `glyf`（可変フォントは既定インスタンス）。CFF/CFF2、
+可変軸選択、TrueType命令hinting、複雑な文字組み/shapingは未対応。
+高品質な最小文字サイズや実アプリでの読みやすさはビルドだけでは保証しない。
+仕様根拠: [OpenType glyf](https://learn.microsoft.com/en-us/typography/opentype/spec/glyf)。

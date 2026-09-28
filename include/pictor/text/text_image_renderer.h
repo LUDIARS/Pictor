@@ -12,9 +12,9 @@ namespace pictor {
 ///
 /// Pipeline: text string → per-glyph rasterization → compositing → ImageBuffer
 ///
-/// Uses a simple scanline rasterizer for glyph outlines (TrueType quadratic
-/// Bezier contours). For CFF/OTF fonts, falls back to the glyph bounding box
-/// approximation until a CFF charstring interpreter is added.
+/// Uses the shared font-unit vector outlines and GlyphVectorRasterizer.
+/// TrueType simple/composite contours are supported. Unsupported CFF outlines
+/// and malformed glyph data throw instead of drawing substitute rectangles.
 ///
 /// Typical usage:
 ///   TextImageRenderer renderer(font_loader);

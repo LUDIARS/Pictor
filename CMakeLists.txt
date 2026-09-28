@@ -187,6 +187,9 @@ add_library(pictor STATIC
     src/text/font_loader.cpp
     src/text/text_image_renderer.cpp
     src/text/text_svg_renderer.cpp
+    src/text/truetype_outline.cpp
+    src/text/glyph_vector_rasterizer.cpp
+    src/text/font_glyph_raster.cpp
     src/text/text_rasterizer.cpp
     src/text/text_effects.cpp
     src/text/glyph_path_effects.cpp

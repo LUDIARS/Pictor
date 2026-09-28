@@ -1,6 +1,7 @@
 {
   "name": "text-rendering",
   "description": "テキスト描画。 グリフのラスタライズと配置、 ピクセルフォント。",
+  "specRefs": ["spec/feature/subsystem/text.md"],
   "presetRules": [],
   "templateRules": [],
   "membership": [

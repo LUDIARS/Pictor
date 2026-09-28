@@ -35,6 +35,9 @@ public:
 
     /// Extract the outline of a single glyph as path commands.
     /// Returns empty outline if the glyph is not found or has no contours.
+    /// Simple and composite TrueType outlines share the image/atlas decoder.
+    /// Unsupported outline formats, invalid data and excessive component graphs
+    /// throw std::invalid_argument; returned paths retain font-unit curves.
     GlyphOutline extract_glyph_outline(FontHandle font, uint32_t codepoint) const;
 
     /// Extract outlines for all glyphs in the given character set.
