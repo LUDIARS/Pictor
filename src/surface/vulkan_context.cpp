@@ -4,8 +4,10 @@
 
 #ifdef PICTOR_HAS_VULKAN
 
+#include "pictor/surface/frame_gate.h"
 #include "pictor/surface/vk_result.h"
 #include "vulkan_frame_result.h"
+#include "vulkan_portability_probe.h"
 
 #include <algorithm>
 #include <cstring>
@@ -58,10 +60,26 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
                                const VulkanContextConfig& cfg)
 {
     if (instance_ || device_) return false;
-    if (!provider) return false;
+    init_result_ = {};
+    if (!provider) {
+        init_result_ = {ContextInitStatus::Failed, "no surface provider"};
+        return false;
+    }
+    // A host-owned provider without a native window (Android before
+    // onNativeWindowCreated / after onNativeWindowDestroyed, iOS without a
+    // layer) must not cause any instance / surface / swapchain creation.
+    if (provider->get_native_handle().type == NativeWindowHandle::Type::None) {
+        init_result_ = {ContextInitStatus::SurfaceUnavailable, "provider has no native window"};
+        return false;
+    }
     provider_ = provider;
 
-    auto fail = [this]() {
+    auto fail = [this](const char* step) {
+        // Steps that know the precise cause record it through fail_init_();
+        // anything else is a generic failure of the named step.
+        if (init_result_.status == ContextInitStatus::NotInitialized) {
+            init_result_ = {ContextInitStatus::Failed, step};
+        }
         device_requirements_ = nullptr;
         shutdown();
         return false;
@@ -72,37 +90,59 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     frames_in_flight_          = std::max<uint32_t>(1, cfg.frames_in_flight);
     device_requirements_       = cfg.device_requirements;
     multiview_requested_       = cfg.require_multiview;
+    required_portability_features_ = cfg.required_portability_features;
 
-    if (!create_instance(cfg))              return fail();
-    if (!create_surface())                  return fail();
-    if (!pick_physical_device())            return fail();
-    if (!create_logical_device())           return fail();
-    if (!create_swapchain())                return fail();
-    if (!create_image_views())              return fail();
+    if (!create_instance(cfg))              return fail("create instance");
+    if (!create_surface())                  return fail("create surface");
+    if (!pick_physical_device())            return fail("pick physical device");
+    if (!create_logical_device())           return fail("create logical device");
+    if (!create_swapchain())                return fail("create swapchain");
+    if (!create_image_views())              return fail("create image views");
     // Phase 4 step 4: host が profile-driven (RenderPassRegistry +
     // FramebufferRegistry) で自前 RP/FB を作るなら、 ここをスキップする。
     // default_render_pass() / framebuffers() は VK_NULL_HANDLE / 空 vector を
     // 返すので、 旧 easy-mode consumer はリンク時に NULL チェック必要。
     if (create_default_rp_on_init_) {
-        if (!create_render_pass())              return fail();
-        if (!create_framebuffers())             return fail();
+        if (!create_render_pass())              return fail("create render pass");
+        if (!create_framebuffers())             return fail("create framebuffers");
     }
-    if (!create_command_pool())             return fail();
+    if (!create_command_pool())             return fail("create command pool");
     // per-image リソース (command buffer / render-finished セマフォ /
     // images-in-flight 追跡) は swapchain image 数に追従する。 初期化でも
     // 再生成でも同じ経路で揃える。
-    if (!rebuild_per_image_resources())     return fail();
+    if (!rebuild_per_image_resources())     return fail("create per-image resources");
     if (!create_sync_objects()) {
         // Partial initialization is owned by shutdown(), including the
         // per-image pool created immediately above.
-        return fail();
+        return fail("create sync objects");
     }
 
     // 借用は initialize() の間だけ。 以降に触らないよう手放す。
     device_requirements_ = nullptr;
     initialized_ = true;
+    init_result_ = {ContextInitStatus::Ok};
     last_frame_result_ = {FrameStatus::Ready};
     return true;
+}
+
+bool VulkanContext::fail_init_(ContextInitStatus status, std::string detail) {
+    fprintf(stderr, "[Pictor] Vulkan initialization: %s\n", detail.c_str());
+    // Only initialize() reports through init_result_; a later recreate keeps
+    // the successful init outcome and reports through FrameResult instead.
+    if (!initialized_ && init_result_.status == ContextInitStatus::NotInitialized) {
+        init_result_ = {status, std::move(detail)};
+    }
+    return false;
+}
+
+FrameResult VulkanContext::gate_() const {
+    FrameGateInput in;
+    in.initialized              = initialized_;
+    in.latched                  = last_frame_result_.status;
+    in.presentation_suspended   = presentation_suspended_;
+    in.native_surface_available = provider_ &&
+        provider_->get_native_handle().type != NativeWindowHandle::Type::None;
+    return gate_frame(in);
 }
 
 void VulkanContext::shutdown() {
@@ -145,18 +185,21 @@ void VulkanContext::shutdown() {
     if (instance_) vkDestroyInstance(instance_, nullptr);
     instance_ = VK_NULL_HANDLE;
     provider_ = nullptr;
+    portability_ = {};
 
     initialized_ = false;
     last_frame_result_ = {};
+    // init_result_ is kept: a failed initialize() tears down through here and
+    // the host still needs to read why.
 }
 
 bool VulkanContext::recreate_swapchain() {
-    if (!initialized_ || !device_ || !provider_) return false;
-    if (last_frame_result_.status == FrameStatus::DeviceLost ||
-        last_frame_result_.status == FrameStatus::SurfaceLost ||
-        last_frame_result_.status == FrameStatus::Error) return false;
-    if (provider_->get_native_handle().type == NativeWindowHandle::Type::None) {
-        last_frame_result_ = {FrameStatus::SurfaceLost};
+    if (!device_) return false;
+    // Loss / error are sticky, a suspended host must not touch the swapchain,
+    // and a provider without a native window must not get a new swapchain.
+    const FrameResult gate = gate_();
+    if (gate.status != FrameStatus::Ready) {
+        if (gate.status == FrameStatus::SurfaceLost) last_frame_result_ = gate;
         return false;
     }
     // GPU が旧 swapchain / 旧 per-image リソースを使い終わるまで待つ。
@@ -209,8 +252,12 @@ bool VulkanContext::recreate_swapchain() {
             per_image_.destroy(backend);
         }
         replacement_old_swapchain_ = VK_NULL_HANDLE;
-        if (last_frame_result_.status != FrameStatus::DeviceLost &&
-            last_frame_result_.status != FrameStatus::SurfaceLost) {
+        if (!replacement_created && swapchain_extent_deferred_) {
+            // Zero-area surface (minimized desktop window, collapsed view):
+            // the old graph is intact, so stay in ordinary resize recovery.
+            last_frame_result_ = {FrameStatus::RecreateSwapchain};
+        } else if (last_frame_result_.status != FrameStatus::DeviceLost &&
+                   last_frame_result_.status != FrameStatus::SurfaceLost) {
             last_frame_result_ = {FrameStatus::Error};
         }
         return false;
@@ -246,27 +293,25 @@ bool VulkanContext::recreate_swapchain() {
     return true;
 }
 
-uint32_t VulkanContext::acquire_next_image() {
-    if (!initialized_) {
-        last_frame_result_ = {};
-        return UINT32_MAX;
+FrameResult VulkanContext::acquire_frame() {
+    // NotInitialized / sticky loss / Suspended / no native window: no Vulkan
+    // call is made. A native loss is sticky until the host explicitly
+    // reinitializes; retrying acquire on the old surface/device cannot restore
+    // its native ownership.
+    const FrameResult gate = gate_();
+    if (gate.status != FrameStatus::Ready) {
+        last_frame_result_ = gate;
+        return gate;
     }
-    // A native loss is sticky until the host explicitly reinitializes. Retrying
-    // acquire on the old surface/device cannot restore its native ownership.
-    if (last_frame_result_.status == FrameStatus::DeviceLost ||
-        last_frame_result_.status == FrameStatus::SurfaceLost ||
-        last_frame_result_.status == FrameStatus::Error) return UINT32_MAX;
-    if (provider_->get_native_handle().type == NativeWindowHandle::Type::None) {
-        last_frame_result_ = {FrameStatus::SurfaceLost};
-        return UINT32_MAX;
-    }
+    const auto resize = [this]() {
+        last_frame_result_ = {FrameStatus::RecreateSwapchain};
+        const bool rebuilt = recreate_swapchain();
+        last_frame_result_.swapchain_recreated = rebuilt;
+        return last_frame_result_;
+    };
     // An empty swapchain cannot be acquired. Explicit failures above remain
     // latched; only an otherwise healthy context may enter resize recovery.
-    if (swapchain_ == VK_NULL_HANDLE || per_image_.empty()) {
-        last_frame_result_ = {FrameStatus::RecreateSwapchain};
-        recreate_swapchain();
-        return UINT32_MAX;
-    }
+    if (swapchain_ == VK_NULL_HANDLE || per_image_.empty()) return resize();
 
     // 現在の flight の fence を待つ — これが「CPU が GPU に対して何フレーム
     // 先行できるか」を frames_in_flight_ 段に制限する (Q-3)。
@@ -274,7 +319,7 @@ uint32_t VulkanContext::acquire_next_image() {
     const VkResult waited = VK_CHECK(vkWaitForFences(device_, 1, &flight_fence, VK_TRUE, UINT64_MAX));
     if (waited != VK_SUCCESS) {
         last_frame_result_ = {vulkan_frame_status(waited)};
-        return UINT32_MAX;
+        return last_frame_result_;
     }
 
     uint32_t index = 0;
@@ -283,13 +328,11 @@ uint32_t VulkanContext::acquire_next_image() {
         image_available_sems_[current_frame_], VK_NULL_HANDLE, &index));
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        last_frame_result_ = {FrameStatus::RecreateSwapchain};
         // No queue submit will follow this frame, so the fence must stay
         // signaled — resetting it here (as the old code did before acquire)
         // left it unsignaled with nothing to signal it, deadlocking the next
         // frame's vkWaitForFences during a resize.
-        recreate_swapchain();
-        return UINT32_MAX;
+        return resize();
     }
 
     // DEVICE_LOST / SURFACE_LOST など: このフレームは描画しない。 submit が無いので
@@ -297,7 +340,7 @@ uint32_t VulkanContext::acquire_next_image() {
     // デッドロックしないようにする (Q-M3)。 SUBOPTIMAL は image 有効なので継続。
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         last_frame_result_ = {vulkan_frame_status(result)};
-        return UINT32_MAX;
+        return last_frame_result_;
     }
 
     // この image を最後に使った flight がまだ GPU 実行中なら待つ。 frames_in_flight_
@@ -310,7 +353,7 @@ uint32_t VulkanContext::acquire_next_image() {
         const VkResult image_waited = VK_CHECK(vkWaitForFences(device_, 1, &image_fence, VK_TRUE, UINT64_MAX));
         if (image_waited != VK_SUCCESS) {
             last_frame_result_ = {vulkan_frame_status(image_waited)};
-            return UINT32_MAX;
+            return last_frame_result_;
         }
     }
     per_image_.set_in_flight_fence(index, flight_fence);
@@ -321,23 +364,18 @@ uint32_t VulkanContext::acquire_next_image() {
     const VkResult reset = VK_CHECK(vkResetFences(device_, 1, &flight_fence));
     if (reset != VK_SUCCESS) {
         last_frame_result_ = {vulkan_frame_status(reset)};
-        return UINT32_MAX;
+        return last_frame_result_;
     }
     last_frame_result_ = {FrameStatus::Ready, index, result == VK_SUBOPTIMAL_KHR};
-    return index;
+    return last_frame_result_;
 }
 
-bool VulkanContext::present(uint32_t image_index) {
-    if (!initialized_) {
-        last_frame_result_ = {};
-        return false;
-    }
-    if (last_frame_result_.status == FrameStatus::DeviceLost ||
-        last_frame_result_.status == FrameStatus::SurfaceLost ||
-        last_frame_result_.status == FrameStatus::Error) return false;
-    if (provider_->get_native_handle().type == NativeWindowHandle::Type::None) {
-        last_frame_result_ = {FrameStatus::SurfaceLost};
-        return false;
+FrameResult VulkanContext::present_frame(uint32_t image_index) {
+    last_present_queued_ = false;
+    const FrameResult gate = gate_();
+    if (gate.status != FrameStatus::Ready) {
+        last_frame_result_ = gate;
+        return gate;
     }
     // present は「その image を描き終えた」render-finished セマフォ (image 単位) を待つ。
     // セマフォは per_image_ が swapchain image 数と同じ個数で保持している。
@@ -358,8 +396,9 @@ bool VulkanContext::present(uint32_t image_index) {
         // signaled なセマフォへの再 signal」になるため、 ここで実際に再生成して
         // per-image セマフォを作り直し、 signal 状態を捨てる (device idle は
         // recreate_swapchain() が取るので、 submit の完了も待たれる)。
-        recreate_swapchain();
-        return false;
+        const bool rebuilt = recreate_swapchain();
+        last_frame_result_.swapchain_recreated = rebuilt;
+        return last_frame_result_;
     }
 
     VkPresentInfoKHR info{};
@@ -371,16 +410,28 @@ bool VulkanContext::present(uint32_t image_index) {
     info.pImageIndices      = &image_index;
 
     VkResult result = VK_CHECK(vkQueuePresentKHR(present_queue_, &info));
+    last_present_queued_ = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
     // Present consumes the frame; it never returns an acquired image index.
     last_frame_result_ = {vulkan_frame_status(result)};
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-        recreate_swapchain();
+        const bool rebuilt = recreate_swapchain();
+        last_frame_result_.swapchain_recreated = rebuilt;
     }
 
     // 次の flight へ進める (present を発行したフレームのみ — acquire が
-    // UINT32_MAX を返して submit/present を skip したフレームでは進めない)。
+    // image を返さず submit/present を skip したフレームでは進めない)。
     current_frame_ = (current_frame_ + 1u) % std::max<uint32_t>(1, frames_in_flight_);
-    return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
+    return last_frame_result_;
+}
+
+uint32_t VulkanContext::acquire_next_image() {
+    const FrameResult result = acquire_frame();
+    return result.has_image() ? result.image_index : UINT32_MAX;
+}
+
+bool VulkanContext::present(uint32_t image_index) {
+    present_frame(image_index);
+    return last_present_queued_;
 }
 
 void VulkanContext::device_wait_idle() {
@@ -460,21 +511,48 @@ bool VulkanContext::create_instance(const VulkanContextConfig& cfg) {
         }
     }
 
+    // A missing surface / external extension is a capability gap, reported
+    // by name before vkCreateInstance instead of an opaque failure.
+    const std::vector<std::string> available = enumerate_instance_extension_names();
+    if (const char* missing = first_missing_extension(extensions, available)) {
+        return fail_init_(ContextInitStatus::MissingInstanceExtension, missing);
+    }
+
+    // Portability implementations (e.g. MoltenVK) are only enumerated when
+    // the loader is told the application handles VK_KHR_portability_subset.
+    VkInstanceCreateFlags create_flags = 0;
+    const char* portability_enumeration = portability_enumeration_extension_name();
+    bool portability_enumeration_enabled = false;
+    if (portability_enumeration[0] != '\0' &&
+        !first_missing_extension({portability_enumeration}, available)) {
+        extensions.push_back(portability_enumeration);
+        create_flags |= portability_enumeration_create_flags();
+        portability_enumeration_enabled = true;
+    }
+    portability_.instance_enumeration = portability_enumeration_enabled;
+
     std::vector<const char*> layers;
     if (cfg.validation) {
+        // Provided by the validation layer, not the loader list checked above.
         layers.push_back("VK_LAYER_KHRONOS_validation");
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
 
     VkInstanceCreateInfo create_info{};
     create_info.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    create_info.flags                   = create_flags;
     create_info.pApplicationInfo        = &app_info;
     create_info.enabledExtensionCount   = static_cast<uint32_t>(extensions.size());
     create_info.ppEnabledExtensionNames = extensions.data();
     create_info.enabledLayerCount       = static_cast<uint32_t>(layers.size());
     create_info.ppEnabledLayerNames     = layers.data();
 
-    if (vkCreateInstance(&create_info, nullptr, &instance_) != VK_SUCCESS) {
+    const VkResult created = vkCreateInstance(&create_info, nullptr, &instance_);
+    if (created == VK_ERROR_EXTENSION_NOT_PRESENT) {
+        return fail_init_(ContextInitStatus::MissingInstanceExtension,
+                          "instance extension rejected by the loader");
+    }
+    if (created != VK_SUCCESS) {
         fprintf(stderr, "[Pictor] Failed to create Vulkan instance\n");
         return false;
     }
@@ -618,8 +696,7 @@ bool VulkanContext::pick_physical_device() {
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(instance_, &count, nullptr);
     if (count == 0) {
-        fprintf(stderr, "[Pictor] No Vulkan-capable GPU found\n");
-        return false;
+        return fail_init_(ContextInitStatus::NoSuitableDevice, "no Vulkan-capable GPU");
     }
 
     std::vector<VkPhysicalDevice> devices(count);
@@ -659,8 +736,8 @@ bool VulkanContext::pick_physical_device() {
         }
     }
 
-    fprintf(stderr, "[Pictor] No suitable GPU found (need graphics + present)\n");
-    return false;
+    return fail_init_(ContextInitStatus::NoSuitableDevice,
+                      "no GPU with a graphics queue that can present to the surface");
 }
 
 // ---------- private: logical device ----------
@@ -773,7 +850,7 @@ bool VulkanContext::create_logical_device() {
         dev_extensions.push_back(VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
 #endif
 
-    if (!collect_required_device_extensions(dev_extensions)) return false;
+    if (!check_device_capabilities(dev_extensions)) return false;
 
     // multiview は Vulkan 1.1 でコア化されているので拡張名は不要、 機能ビットだけ要る。
     has_multiview_ = false;
@@ -787,8 +864,7 @@ bool VulkanContext::create_logical_device() {
         multiview_probe2.pNext = &multiview_probe;
         vkGetPhysicalDeviceFeatures2(physical_device_, &multiview_probe2);
         if (multiview_probe.multiview != VK_TRUE) {
-            fprintf(stderr, "[Pictor] require_multiview is set but the GPU does not support multiview\n");
-            return false;
+            return fail_init_(ContextInitStatus::MissingCapability, "multiview");
         }
         multiview_feat_en.multiview = VK_TRUE;
         has_multiview_ = true;
@@ -832,7 +908,16 @@ bool VulkanContext::create_logical_device() {
     create_info.enabledExtensionCount   = static_cast<uint32_t>(dev_extensions.size());
     create_info.ppEnabledExtensionNames = dev_extensions.data();
 
-    if (vkCreateDevice(physical_device_, &create_info, nullptr, &device_) != VK_SUCCESS) {
+    const VkResult created = vkCreateDevice(physical_device_, &create_info, nullptr, &device_);
+    if (created == VK_ERROR_EXTENSION_NOT_PRESENT) {
+        return fail_init_(ContextInitStatus::MissingDeviceExtension,
+                          "device extension rejected by the driver");
+    }
+    if (created == VK_ERROR_FEATURE_NOT_PRESENT) {
+        return fail_init_(ContextInitStatus::MissingCapability,
+                          "device feature rejected by the driver");
+    }
+    if (created != VK_SUCCESS) {
         fprintf(stderr, "[Pictor] Failed to create Vulkan logical device\n");
         return false;
     }
@@ -840,6 +925,36 @@ bool VulkanContext::create_logical_device() {
     vkGetDeviceQueue(device_, queue_family_index_, 0, &graphics_queue_);
     present_queue_ = graphics_queue_;
     return true;
+}
+
+bool VulkanContext::check_device_capabilities(std::vector<const char*>& dev_extensions)
+{
+    const std::vector<std::string> available = enumerate_device_extension_names(physical_device_);
+
+    // Presentation is the reason this context exists; without the swapchain
+    // extension the device is unusable, not merely "between resizes".
+    if (const char* missing = first_missing_extension({VK_KHR_SWAPCHAIN_EXTENSION_NAME}, available)) {
+        return fail_init_(ContextInitStatus::MissingDeviceExtension, missing);
+    }
+
+    // A portability subset device (e.g. MoltenVK) must have
+    // VK_KHR_portability_subset enabled, and only supports the features it
+    // reports. Check the host's requirements before creating the device.
+    portability_ = probe_portability(physical_device_, available,
+                                     portability_.instance_enumeration);
+    if (portability_.subset_device) {
+        if (const char* feature = first_missing_portability_feature(
+                portability_, required_portability_features_)) {
+            return fail_init_(ContextInitStatus::MissingCapability,
+                              std::string("portability subset feature ") + feature);
+        }
+        const bool listed = std::any_of(dev_extensions.begin(), dev_extensions.end(),
+            [](const char* e) { return std::strcmp(e, kPortabilitySubsetExtensionName) == 0; });
+        if (!listed) dev_extensions.push_back(kPortabilitySubsetExtensionName);
+        printf("[Pictor] Portability subset device: VK_KHR_portability_subset enabled\n");
+    }
+
+    return collect_required_device_extensions(dev_extensions);
 }
 
 bool VulkanContext::collect_required_device_extensions(
@@ -862,9 +977,7 @@ bool VulkanContext::collect_required_device_extensions(
         const bool is_available = std::any_of(available.begin(), available.end(),
             [&](const VkExtensionProperties& e) { return name == e.extensionName; });
         if (!is_available) {
-            fprintf(stderr, "[Pictor] Required device extension is not available: %s\n",
-                    name.c_str());
-            return false;
+            return fail_init_(ContextInitStatus::MissingDeviceExtension, name);
         }
         const bool is_listed = std::any_of(dev_extensions.begin(), dev_extensions.end(),
             [&](const char* e) { return name == e; });
@@ -876,6 +989,7 @@ bool VulkanContext::collect_required_device_extensions(
 // ---------- private: swapchain ----------
 
 bool VulkanContext::create_swapchain() {
+    swapchain_extent_deferred_ = false;
     VkSurfaceCapabilitiesKHR caps;
     const VkResult capabilities = VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
         physical_device_, surface_, &caps));
@@ -905,6 +1019,7 @@ bool VulkanContext::create_swapchain() {
 
     // surface format / present mode が 0 件だと formats[0] が UB (Q-M5)。
     if (formats.empty() || present_modes.empty()) {
+        fail_init_(ContextInitStatus::MissingCapability, "surface formats or present modes");
         fprintf(stderr, "[Pictor] Surface reports no formats (%u) or present modes (%u)\n",
                 static_cast<uint32_t>(formats.size()),
                 static_cast<uint32_t>(present_modes.size()));
@@ -954,6 +1069,14 @@ bool VulkanContext::create_swapchain() {
             caps.minImageExtent.height, caps.maxImageExtent.height);
     }
 
+    // A zero-area surface (minimized desktop window, collapsed view) cannot
+    // own a swapchain. Defer instead of failing: recreate keeps the old graph
+    // and reports RecreateSwapchain; initialize reports SurfaceUnavailable.
+    if (swapchain_extent_.width == 0 || swapchain_extent_.height == 0) {
+        swapchain_extent_deferred_ = true;
+        return fail_init_(ContextInitStatus::SurfaceUnavailable, "surface extent is zero");
+    }
+
     uint32_t image_count = std::max(sc_config.image_count, caps.minImageCount);
     if (caps.maxImageCount > 0) image_count = std::min(image_count, caps.maxImageCount);
 
@@ -968,8 +1091,8 @@ bool VulkanContext::create_swapchain() {
     sc_info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (swapchain_transfer_src_requested_) {
         if ((caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
-            fprintf(stderr, "[Pictor] Surface does not support swapchain transfer-source usage\n");
-            return false;
+            return fail_init_(ContextInitStatus::MissingCapability,
+                              "swapchain transfer-source usage");
         }
         sc_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     }
@@ -1248,12 +1371,15 @@ VulkanContext::VulkanContext() = default;
 VulkanContext::~VulkanContext() = default;
 
 bool VulkanContext::initialize(ISurfaceProvider*, const VulkanContextConfig&) {
+    init_result_ = {ContextInitStatus::Failed, "Vulkan not available in this build"};
     fprintf(stderr, "[Pictor] Vulkan not available (PICTOR_HAS_VULKAN not defined)\n");
     return false;
 }
 
 void VulkanContext::shutdown() {}
 bool VulkanContext::recreate_swapchain() { return false; }
+FrameResult VulkanContext::acquire_frame() { return {FrameStatus::NotInitialized}; }
+FrameResult VulkanContext::present_frame(uint32_t) { return {FrameStatus::NotInitialized}; }
 uint32_t VulkanContext::acquire_next_image() { return UINT32_MAX; }
 bool VulkanContext::present(uint32_t) { return false; }
 void VulkanContext::device_wait_idle() {}

@@ -62,7 +62,11 @@ int main() {
     vk_cfg.validation = true; // enable validation in demo
 
     if (!vk_ctx.initialize(&surface_provider, vk_cfg)) {
-        fprintf(stderr, "Failed to initialize Vulkan context\n");
+        // init_result() names the missing extension / capability or an
+        // unavailable surface instead of a bare failure.
+        fprintf(stderr, "Failed to initialize Vulkan context (status %d): %s\n",
+                static_cast<int>(vk_ctx.init_result().status),
+                vk_ctx.init_result().detail.c_str());
         surface_provider.destroy();
         return 1;
     }
@@ -212,9 +216,19 @@ int main() {
         float r, g, b;
         hue_to_rgb(hue, r, g, b);
 
-        // Acquire swapchain image
-        uint32_t image_idx = vk_ctx.acquire_next_image();
-        if (image_idx == UINT32_MAX) continue; // swapchain was recreated
+        // Acquire swapchain image (typed result). Only has_image() permits
+        // submit; resize is recovered by the context, while surface / device
+        // loss needs an explicit teardown + reinitialize and ends this demo.
+        const pictor::FrameResult acquired = vk_ctx.acquire_frame();
+        if (!acquired.has_image()) {
+            if (pictor::frame_status_requires_reinitialize(acquired.status)) {
+                fprintf(stderr, "Surface or device lost (status %d); exiting\n",
+                        static_cast<int>(acquired.status));
+                break;
+            }
+            continue; // RecreateSwapchain (incl. minimized window) / Suspended
+        }
+        const uint32_t image_idx = acquired.image_index;
 
         // Record command buffer: clear to animated colour
 #ifdef PICTOR_HAS_VULKAN
@@ -271,8 +285,15 @@ int main() {
         vkQueueSubmit(vk_ctx.graphics_queue(), 1, &submit_info, vk_ctx.in_flight_fence());
 #endif
 
-        // Present
-        vk_ctx.present(image_idx);
+        // Present. The default render pass / framebuffers are context-owned and
+        // already rebuilt when swapchain_recreated is set; host-owned
+        // swapchain-dependent resources would be rebuilt here.
+        const pictor::FrameResult presented = vk_ctx.present_frame(image_idx);
+        if (pictor::frame_status_requires_reinitialize(presented.status)) {
+            fprintf(stderr, "Surface or device lost on present (status %d); exiting\n",
+                    static_cast<int>(presented.status));
+            break;
+        }
 
         // Run Pictor pipeline (data-only, no GPU draw yet)
         float dt = 1.0f / 60.0f;

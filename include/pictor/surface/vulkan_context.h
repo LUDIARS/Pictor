@@ -2,6 +2,8 @@
 
 #include "pictor/surface/surface_provider.h"
 #include "pictor/surface/frame_result.h"
+#include "pictor/surface/context_init_result.h"
+#include "pictor/surface/vulkan_capability_check.h"
 #include "pictor/surface/vulkan_device_requirements.h"
 #include "pictor/surface/per_image_resource_pool.h"
 #include "pictor/surface/vulkan_per_image_backend.h"
@@ -51,6 +53,11 @@ struct VulkanContextConfig {
     /// VK_KHR_multiview (1 パスの両眼描画) を要求する。 デバイスが対応していなければ
     /// 初期化を失敗させる。 false のままなら機能を有効にしない。
     bool        require_multiview = false;
+
+    /// Portability subset features (VK_KHR_portability_subset, e.g. MoltenVK)
+    /// the host depends on. Ignored on conformant devices. A subset device
+    /// lacking any of them fails initialization with MissingCapability.
+    PortabilityFeatures required_portability_features{};
 };
 
 /// Manages the Vulkan instance, physical/logical device, queue,
@@ -68,7 +75,15 @@ public:
     VulkanContext& operator=(const VulkanContext&) = delete;
 
     /// Full initialization: instance → surface → device → swapchain.
+    /// When the provider exposes no native window (e.g. Android before
+    /// onNativeWindowCreated), nothing native is created and init_result()
+    /// reports SurfaceUnavailable. The provider stays host-owned and borrowed.
     bool initialize(ISurfaceProvider* provider, const VulkanContextConfig& cfg = {});
+
+    /// Typed outcome of the last initialize(). Survives the teardown performed
+    /// by a failed initialize() so the host can tell a missing extension or
+    /// capability apart from an absent surface.
+    const ContextInitResult& init_result() const { return init_result_; }
 
     /// Tear down everything in reverse order.
     void shutdown();
@@ -76,24 +91,30 @@ public:
     /// Recreate swapchain (e.g. after window resize).
     bool recreate_swapchain();
 
-    /// Acquire the next swapchain image. Returns image index, or UINT32_MAX on failure.
-    uint32_t acquire_next_image();
+    /// Typed acquire / present (primary API). Resize keeps the automatic
+    /// recreation behavior and reports it via FrameResult::swapchain_recreated.
+    /// Only has_image() permits submit. Native surface/device loss requires
+    /// host-owned resource teardown followed by explicit context
+    /// reinitialization; these methods do not retry it.
+    /// Recovery order: spec/feature/portability/mobile-surface-recovery.md
+    FrameResult acquire_frame();
+    FrameResult present_frame(uint32_t image_index);
 
-    /// Present the given swapchain image.
+    /// Legacy wrappers over acquire_frame() / present_frame().
+    /// acquire_next_image() returns UINT32_MAX for every non-image outcome.
+    uint32_t acquire_next_image();
     bool present(uint32_t image_index);
 
-    /// Typed equivalents of the legacy acquire/present API. Resize retains the
-    /// existing automatic recreation behavior. Only has_image() permits submit.
-    /// Native surface/device loss requires host-owned resource teardown followed
-    /// by explicit context reinitialization; these methods do not retry it.
-    FrameResult acquire_frame() {
-        acquire_next_image();
-        return last_frame_result_;
-    }
-    FrameResult present_frame(uint32_t image_index) {
-        present(image_index);
-        return last_frame_result_;
-    }
+    /// Host lifecycle gate. While suspended (pause / suspend / surface lost),
+    /// acquire / present / recreate issue no Vulkan calls and report
+    /// FrameStatus::Suspended, so no GPU submission can be built on them.
+    /// Drive it from the owner thread at a frame boundary, typically with
+    /// MobileLifecycleController::frame_work_suppressed().
+    void set_presentation_suspended(bool suspended) { presentation_suspended_ = suspended; }
+    bool presentation_suspended() const { return presentation_suspended_; }
+
+    /// Last typed frame outcome recorded by the context.
+    FrameResult last_frame_result() const { return last_frame_result_; }
 
     /// Wait for device idle.
     void device_wait_idle();
@@ -165,6 +186,8 @@ public:
     bool has_rasterization_order_attachment_access()   const { return has_rasterization_order_attachment_access_; }
     /// VK_KHR_multiview を有効にしてデバイスを作ったか (require_multiview の結果)。
     bool has_multiview()                               const { return has_multiview_; }
+    /// Portability capabilities probed at creation (subset device, features).
+    const PortabilityCapabilities& portability() const { return portability_; }
 
     /// 物理デバイスのメモリ構成を Vk 非依存記述に変換する (UMA/ReBAR 判定の入力)。
     DeviceMemoryDesc    describe_device_memory() const;
@@ -192,6 +215,9 @@ private:
     /// before-retire で差し替えるため)。 呼ぶ前に device idle を取ること。
     bool rebuild_per_image_resources();
     bool create_sync_objects();
+    /// Checks the device extension list (swapchain, portability subset,
+    /// external requirements) and portability features before vkCreateDevice.
+    bool check_device_capabilities(std::vector<const char*>& dev_extensions);
     void cleanup_swapchain();
     /// swapchain + per-image リソースを畳んで、 半端な状態を公開しないようにする。
     void discard_swapchain_resources();
@@ -243,14 +269,27 @@ private:
     bool has_rasterization_order_attachment_access_ = false;
     bool has_multiview_                             = false;
     bool multiview_requested_                       = false;
+    PortabilityFeatures     required_portability_features_{};
+    PortabilityCapabilities portability_{};
+    /// The last create_swapchain() found a zero-area surface and deferred.
+    bool swapchain_extent_deferred_ = false;
+    /// The last present_frame() reached vkQueuePresentKHR successfully
+    /// (legacy present() return value).
+    bool last_present_queued_ = false;
     IVulkanDeviceRequirements* device_requirements_ = nullptr;
     /// 外部要求の拡張名の実体。 Vulkan へ渡す const char* の寿命を保つ。
     std::vector<std::string> required_instance_extensions_;
     std::vector<std::string> required_device_extensions_;
+
+    /// Native-free gate shared by acquire / present / recreate.
+    FrameResult gate_() const;
+    bool fail_init_(ContextInitStatus status, std::string detail);
 #endif
 
     bool initialized_ = false;
+    bool presentation_suspended_ = false;
     FrameResult last_frame_result_{};
+    ContextInitResult init_result_{};
 };
 
 } // namespace pictor

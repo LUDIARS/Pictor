@@ -4,6 +4,7 @@ Pictor (C++20 / Vulkan / デスクトップ起点のレンダリング基盤) �
 ターゲットへ広げる際の、 現状・課題・設計方針の総括。 詳細は分冊を参照:
 
 - [portability/mobile.md](portability/mobile.md) — Android / iOS
+- [portability/mobile-surface-recovery.md](portability/mobile-surface-recovery.md) — surface / device 復旧の公開契約
 - [portability/web.md](portability/web.md) — Emscripten / WebGL2 / WebGPU
 
 関連 spec: `dx12-backend-design.md` (RHI 抽象 — 設計のみ) /

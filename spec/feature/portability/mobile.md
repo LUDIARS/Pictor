@@ -10,6 +10,10 @@ Android Vulkan / iOS Metal / Windows DirectX 12 の共通フレーム結果と l
 [第1段階 task](../../tasks/2026-09-10-native-backend-frame-contract.md) を参照。
 ネイティブ Metal / DirectX 12 描画および実機検証はまだ完了していない。
 
+2026-10-01 更新: surface / device 復旧の公開契約 (型付き frame / init 結果、
+lifecycle による presentation 抑止、portability 検査、復帰時の再構築順) は
+[mobile-surface-recovery.md](mobile-surface-recovery.md) を正本とする。
+
 ---
 
 ## 1. 現状 (実装済みの範囲)
@@ -48,7 +52,9 @@ Android Vulkan / iOS Metal / Windows DirectX 12 の共通フレーム結果と l
   ACTIVE 以外での per-frame 作業抑制 (`frame_work_suppressed()`) を提供。
 - host が提供する Hooks: `current_frame` / `flush_frame_allocator` /
   `active_profile` / `switch_profile` (`mobile_lifecycle_controller.h:19-24`)。
-  swapchain 再生成は host 責務 (`mobile_lifecycle.h:20-21`)。
+  host は `frame_work_suppressed()` を `VulkanContext::set_presentation_suspended()`
+  へ渡して acquire / present を止める。surface 消失後の再構築順は
+  [mobile-surface-recovery.md](mobile-surface-recovery.md) §5。
 - `unit_frame_contract_test` で app activity / surface のイベント順序と
   未初期化 frame API を headless 検査する。モバイルビルドではテストが
   除外され、実機の surface/device loss 復旧は未検査。

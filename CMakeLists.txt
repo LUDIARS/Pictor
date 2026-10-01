@@ -174,6 +174,8 @@ add_library(pictor STATIC
     # (glfw / android / ios の各プロバイダはプラットフォーム別に
     #  add_library 直後の target_sources で条件付き追加する)
     src/surface/vulkan_context.cpp
+    src/surface/vulkan_capability_check.cpp
+    src/surface/vulkan_portability_probe.cpp
     src/surface/simple_renderer.cpp
 
     # Data Handler
