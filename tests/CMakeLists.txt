@@ -14,6 +14,7 @@ set(PICTOR_TESTS
     unit_batch_builder_test
     unit_culling_test
     unit_transform_math_test
+    unit_float_parse_test
     unit_visus_metadata_test
     unit_visus_serializer_test
     unit_visus_catalog_test

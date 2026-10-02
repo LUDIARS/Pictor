@@ -10,7 +10,7 @@
 |---|---|
 | Android ARM64 / API 26 / NDK 21.4.7075529 / Debug | CMake configureとpictor静的ライブラリ生成に成功 |
 | PC-FEAT-DOD-02 フレーム・プールメモリ確保 | Android向けコンパイル成功。64-byte境界、確保失敗時のbad_alloc、freeとの組み合わせを維持 |
-| Visus JSON数値変換 | Android向けコンパイル成功。旧NDK向けにclassic localeのstream変換を使用。実行検証は未実施 |
+| Visus JSON数値変換 | Android向けコンパイル成功。旧NDK向けにclassic localeのstream変換を使用。実行検証は未実施（2026-10-03以降は全プラットフォーム共通の `pictor::float_parse::parse_double` へ置換。下記「修正理由」参照） |
 | Vulkan ROV拡張 | ヘッダに拡張定義がない構成では有効化しない。既存のinterlock/atomic選択と診断ログを維持 |
 | Vulkan API要求 | 既存の1.2要求を維持。古いヘッダでも表現できるVK_MAKE_VERSIONを使用 |
 | Androidアプリへの最終リンク・実機描画・背景復帰・surface/device復旧 | 未実施 |
@@ -31,6 +31,8 @@
 NDK r21のstdlib.hではaligned_allocがAPI 28、posix_memalignがAPI 17から提供される。AndroidのPoolAllocatorとFrameAllocatorでposix_memalignを使い、エラーコードを確認する。その他OSの確保経路は従来どおり。
 
 次に判明した旧libc++の浮動小数点charconv未提供へ、Android限定のlocale非依存変換を追加。有限性、末尾までの読み取り、非ゼロ値のゼロへのunderflowを確認する。JSONの既存文法検証は維持する。
+
+2026-10-03: Apple libc++ (macOS / iOS SDK) と NDK r27 の libc++ にも浮動小数点 `std::from_chars` が無いため、Android 限定の stream 変換を廃止し、全プラットフォーム共通の `pictor::float_parse::parse_double` (`include/pictor/core/float_parse.h`) へ置き換えた。C ロケール固定の strtod 系 (Windows `_strtod_l`、Apple / glibc `strtod_l`、その他 POSIX は `uselocale`) で、from_chars と同じ受理文法・読み終え位置・overflow / underflow-to-zero の区別を保つ。整数の `from_chars` と、エンコード側の Android 限定 stream 出力は変更していない。
 
 NDK同梱VulkanヘッダにはROV拡張がないため、対応構造体の使用・照会・有効化をヘッダの拡張定義で条件化する。型定義を独自に捏造しない。
 

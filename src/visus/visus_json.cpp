@@ -1,5 +1,6 @@
 #include "visus_json.h"
 
+#include "pictor/core/float_parse.h"
 #include "pictor/core/parse_limits.h"
 
 #include <charconv>
@@ -200,25 +201,11 @@ struct Parser {
             while (p < end && *p >= '0' && *p <= '9') ++p;
         }
 
-#ifdef __ANDROID__
-        std::istringstream number(std::string(start, p));
-        number.imbue(std::locale::classic());
-        number >> std::noskipws >> out;
-        if (number.fail() || !number.eof() || !std::isfinite(out))
-            return fail("number out of range");
-        // Stream conversion can silently round underflow to zero; from_chars
-        // rejects it. Ignore exponent digits when recognizing an actual zero.
-        if (out == 0.0) {
-            for (const char* digit = start; digit != p && *digit != 'e' && *digit != 'E'; ++digit) {
-                if (*digit >= '1' && *digit <= '9')
-                    return fail("number out of range");
-            }
-        }
-#else
-        const auto result = std::from_chars(start, p, out, std::chars_format::general);
+        // Floating-point std::from_chars is unavailable on some libc++ builds;
+        // parse_double keeps its semantics (overflow / underflow-to-zero fail).
+        const auto result = float_parse::parse_double(start, p, out);
         if (result.ec != std::errc{} || result.ptr != p || !std::isfinite(out))
             return fail("number out of range");
-#endif
         return true;
     }
 

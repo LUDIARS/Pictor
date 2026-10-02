@@ -76,6 +76,7 @@ add_library(pictor STATIC
     src/core/cache_info.cpp
     src/core/device_memory_profile.cpp
     src/core/transform_math.cpp
+    src/core/float_parse.cpp
 
     # Memory Subsystem
     src/memory/frame_allocator.cpp
