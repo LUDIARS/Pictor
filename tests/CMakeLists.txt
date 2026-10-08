@@ -40,6 +40,8 @@ set(PICTOR_TESTS
     unit_surface_recovery_contract_test
     unit_animation_stub_contract_test
     unit_public_animation_header_test
+    unit_fbx_track_csv_test
+    unit_fbx_morph_targets_test
     pixel_text_test
     fps_baseline_test
 )
@@ -74,6 +76,15 @@ foreach(_t ${PICTOR_TESTS})
     add_test(NAME ${_t}
              COMMAND ${_t}
              WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+endforeach()
+
+# FBX viewer track playback helpers (SPEC-PC-FBX-TRACK-PLAYBACK): the
+# headless demo sources are compiled straight into their tests.
+set(_fbx_viewer_dir ${CMAKE_CURRENT_SOURCE_DIR}/../demo/fbx_viewer)
+target_sources(unit_fbx_track_csv_test PRIVATE ${_fbx_viewer_dir}/track_csv.cpp)
+target_sources(unit_fbx_morph_targets_test PRIVATE ${_fbx_viewer_dir}/morph_targets.cpp)
+foreach(_t unit_fbx_track_csv_test unit_fbx_morph_targets_test)
+    target_include_directories(${_t} PRIVATE ${_fbx_viewer_dir})
 endforeach()
 
 # Pixel test needs the bundled font next to the working directory.

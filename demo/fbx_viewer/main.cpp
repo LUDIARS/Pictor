@@ -33,7 +33,14 @@
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/surface/vulkan_context.h"
 
+#include "channel_list.h"
 #include "frame_capture.h"
+#include "morph_loader.h"
+#include "raw_frame_writer.h"
+#include "stdout_divert.h"
+#include "swapchain_readback.h"
+#include "track_options.h"
+#include "track_player.h"
 #include "eye_locator.h"
 #include "fur_shell_pass.h"
 #include "nawa_binding.h"
@@ -928,6 +935,8 @@ struct ViewerOptions {
     bool           show_rope       = true;    // --no-rope: deformation only (debug the dent)
     bool           rope_tail       = true;    // --no-rope-tail: no loose end toward the camera
     bool           tears           = false;   // --tears: toon tears from the detected eyes
+    TrackOptions   track;                     // SPEC-PC-FBX-TRACK-PLAYBACK options
+    RawFrameWriter* raw_writer     = nullptr; // open when --raw-out was given (not owned)
 };
 
 namespace {
@@ -973,8 +982,11 @@ public:
                     std::vector<AnimationClipDescriptor> clips,
                     const fs::path& model_dir,
                     const std::string& shader_dir,
-                    const ViewerOptions& options) {
+                    const ViewerOptions& options,
+                    TrackData track = {},
+                    MorphTargets morphs = {}) {
         mesh_       = std::move(mesh);
+        morphs_     = std::move(morphs);
         skeleton_   = std::move(skeleton);
         clips_      = std::move(clips);
         model_dir_  = model_dir;
@@ -1010,6 +1022,7 @@ public:
 
         GlfwWindowConfig wc; wc.width = 1280; wc.height = 720; wc.title = "Pictor FBX Viewer";
         if (reconstruction_) { wc.width=options.reconstruction.width;wc.height=options.reconstruction.height; }
+        if (options.track.has_size) { wc.width = options.track.width; wc.height = options.track.height; }
         if (!provider_.create(wc)) { std::fprintf(stderr, "GLFW window create failed\n"); return false; }
         if (reconstruction_) glfwSetWindowTitle(provider_.glfw_window(), reconstruction_->title().c_str());
         VulkanContextConfig vcfg;
@@ -1017,8 +1030,12 @@ public:
         // This demo updates one shared set of host-visible resources. Keep it
         // serial rather than allowing a later flight to overwrite GPU input.
         vcfg.frames_in_flight = 1;
-        vcfg.enable_swapchain_transfer_src = !options.capture_path.empty();
+        vcfg.enable_swapchain_transfer_src = !options.capture_path.empty() || options.raw_writer;
         if (!vk_.initialize(&provider_, vcfg)) { std::fprintf(stderr, "Vulkan init failed\n"); return false; }
+        if (options.raw_writer && !SwapchainReadback::supports_format(vk_.swapchain_format())) {
+            std::fprintf(stderr, "--raw-out requires an RGBA8 or BGRA8 swapchain format\n");
+            return false;
+        }
         if (!options.capture_path.empty() && !FrameCapture::supports_format(vk_.swapchain_format())) {
             std::fprintf(stderr, "Capture requires an RGBA8 or BGRA8 swapchain format\n");
             return false;
@@ -1060,7 +1077,12 @@ public:
             skel_ = anim_.register_skeleton(skeleton_);
             for (const auto& c : clips_) clip_handles_.push_back(anim_.register_clip(c));
             inst_ = anim_.create_instance(42, skel_);
-            if (!clip_handles_.empty()) {
+            if (track.frame_count > 0) {
+                // Track playback replaces clips: the bind pose plus FK overrides.
+                track_player_.initialize(std::move(track), skeleton_, &morphs_);
+                std::fprintf(stderr, "Track: %u frames at %u fps%s\n", track_player_.frame_count(),
+                             options.track.track_fps, options.raw_writer ? " -> raw output" : "");
+            } else if (!clip_handles_.empty()) {
                 anim_.play(inst_, clip_handles_[clip_index_], 1.0f, 1.0f);
                 std::printf("Playing clip [%zu/%zu]: %s\n", clip_index_ + 1,
                             clips_.size(), clips_[clip_index_].name.c_str());
@@ -1371,6 +1393,12 @@ public:
             float dt = std::chrono::duration<float>(now - prev).count();
             float elapsed = std::chrono::duration<float>(now - t0).count();
             prev = now;
+            if (track_player_.active()) {
+                // Deterministic clock: one track frame per rendered frame.
+                dt = 1.0f / static_cast<float>(options_.track.track_fps);
+                elapsed = static_cast<float>(frame_index_) * dt;
+                track_player_.apply_bones(anim_, inst_, track_frame());
+            }
             // Exponential average in milliseconds. Keep the smoothing factor in
             // one place: the new-sample weight must stay (1 - kFrameSmoothing),
             // or the reported frame time silently gains a scale error.
@@ -1391,13 +1419,18 @@ public:
             if (reconstruction_) reconstruction_->camera_translation(motion_.camera_translation());
             const float image_time=options_.recording.directory.empty()?elapsed:float(frame_index_)/options_.recording.fps;
             if (reconstruction_) reconstruction_->stage_time(image_time);
-            update_uniforms(image_time);
+            if (track_player_.active()) apply_track_morphs();
+            update_uniforms(track_player_.active() ? elapsed : image_time);
             update_binding(elapsed);
             update_rope_tail();
             update_tears(elapsed);
             update_debug_bones();
             record_and_submit(img_idx);
             vk_.present(img_idx);
+            if (raw_pending_) {
+                raw_pending_ = false;
+                write_raw_frame();
+            }
             if (capture_pending_) {
                 capture_pending_ = false;
                 const bool saved = capture_.finish(vk_.device(), vk_.graphics_queue(), vk_.swapchain_format());
@@ -1420,8 +1453,48 @@ public:
                 }
             }
             ++frame_index_;
+            if (options_.raw_writer && frame_index_ >= track_player_.frame_count())
+                glfwSetWindowShouldClose(provider_.glfw_window(), GLFW_TRUE);
         }
         vkDeviceWaitIdle(vk_.device());
+    }
+
+    /// False when raw output could not be produced (extent mismatch, write error).
+    bool succeeded() const { return !run_failed_; }
+
+    // ─── track playback / raw output (SPEC-PC-FBX-TRACK-PLAYBACK) ───
+    /// Raw output plays the track once; preview playback loops it.
+    uint32_t track_frame() const {
+        const uint32_t n = track_player_.frame_count();
+        if (n == 0) return 0;
+        return options_.raw_writer ? std::min(frame_index_, n - 1) : frame_index_ % n;
+    }
+
+    /// Re-base and blend shape positions straight into the host-visible
+    /// vertex buffer; skinning in the vertex shader then deforms them.
+    void apply_track_morphs() {
+        if (!track_player_.has_morphs()) return;
+        void* p = nullptr;
+        if (vkMapMemory(vk_.device(), vb_mem_, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return;
+        auto* vertices = static_cast<TexturedSkinnedVertex*>(p);
+        track_player_.apply_morphs(track_frame(), vertices->position,
+                                   sizeof(TexturedSkinnedVertex) / sizeof(float));
+        vkUnmapMemory(vk_.device(), vb_mem_);
+    }
+
+    void write_raw_frame() {
+        vkQueueWaitIdle(vk_.graphics_queue());
+        const VkExtent2D ext = raw_readback_.extent();
+        if (!options_.raw_writer->write_frame(raw_readback_.pixels(), ext.width, ext.height,
+                                              SwapchainReadback::is_rgba(vk_.swapchain_format()))) {
+            std::fprintf(stderr, "[raw-out] write failed at frame %u\n", frame_index_);
+            fail_run();
+        }
+    }
+
+    void fail_run() {
+        run_failed_ = true;
+        glfwSetWindowShouldClose(provider_.glfw_window(), GLFW_TRUE);
     }
 
     void shutdown() {
@@ -1450,6 +1523,7 @@ public:
         tear_pass_.destroy();
         safe_buf(bind_buffer_, bind_mem_);
         capture_.destroy(d);
+        raw_readback_.destroy(d);
         hud_.shutdown();raymarch_.destroy();
         // Null each handle after destroying it: reconstruction can throw out of
         // initialize() or run(), and main's handler calls shutdown() on a
@@ -1511,7 +1585,7 @@ private:
         }
         if (on_fur_key(key)) return;
         if (on_bind_key(key)) return;
-        if (clip_handles_.empty()) return;
+        if (clip_handles_.empty() || track_player_.active()) return;
         size_t n = clip_handles_.size();
         size_t prev = clip_index_;
         switch (key) {
@@ -2155,12 +2229,15 @@ private:
             mesh_.center.z + dist * std::sin(t * 0.4f),
         };
         float center[3] = {mesh_.center.x, mesh_.center.y, mesh_.center.z};
+        if (options_.track.has_camera) {
+            for (int k = 0; k < 3; ++k) { eye[k] = options_.track.eye[k]; center[k] = options_.track.target[k]; }
+        }
         if (reconstruction_) reconstruction_->camera(eye,center);
         float up[3] = {0, 1, 0};
 
         SceneUBO ubo{};
         mat4_look_at(ubo.view, eye, center, up);
-        mat4_perspective(ubo.proj, 45.0f * 3.14159265f / 180.0f, aspect, 0.1f, dist * 8.0f + 1000.0f);
+        mat4_perspective(ubo.proj, options_.track.fov_deg * 3.14159265f / 180.0f, aspect, 0.1f, dist * 8.0f + 1000.0f);
         ubo.light_dir[0] = 0.4f; ubo.light_dir[1] = 0.8f; ubo.light_dir[2] = 0.5f; ubo.light_dir[3] = 1.0f;
         float l = std::sqrt(ubo.light_dir[0]*ubo.light_dir[0] + ubo.light_dir[1]*ubo.light_dir[1] + ubo.light_dir[2]*ubo.light_dir[2]);
         ubo.light_dir[0] /= l; ubo.light_dir[1] /= l; ubo.light_dir[2] /= l;
@@ -2317,6 +2394,8 @@ private:
 
         VkClearValue clears[2];
         clears[0].color = {{0.08f, 0.09f, 0.12f, 1.0f}};
+        if (options_.track.has_clear)
+            clears[0].color = {{options_.track.clear[0], options_.track.clear[1], options_.track.clear[2], 1.0f}};
         if (options_.reconstruction.stage) clears[0].color={{.002f,.003f,.009f,1.f}};
         clears[1].depthStencil = {1.0f, 0};
 
@@ -2414,6 +2493,8 @@ private:
             }
         }
 
+        if (options_.raw_writer && !run_failed_) record_raw_readback(cmd, img_idx, ext);
+
         vkEndCommandBuffer(cmd);
 
         VkSemaphore wait_sem = vk_.image_available_semaphore();
@@ -2425,6 +2506,24 @@ private:
         si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
         si.signalSemaphoreCount = 1; si.pSignalSemaphores = &sig_sem;
         vkQueueSubmit(vk_.graphics_queue(), 1, &si, vk_.in_flight_fence());
+    }
+
+    void record_raw_readback(VkCommandBuffer cmd, uint32_t img_idx, VkExtent2D ext) {
+        const TrackOptions& t = options_.track;
+        if (t.has_size && (ext.width != t.width || ext.height != t.height)) {
+            std::fprintf(stderr, "[raw-out] swapchain is %ux%u, expected %ux%u\n",
+                         ext.width, ext.height, t.width, t.height);
+            fail_run();
+            return;
+        }
+        const auto& images = vk_.swapchain_images();
+        if (img_idx >= images.size() || !raw_readback_.ensure(vk_.device(), vk_.physical_device(), ext)) {
+            std::fprintf(stderr, "[raw-out] read-back unavailable\n");
+            fail_run();
+            return;
+        }
+        raw_readback_.record(cmd, images[img_idx]);
+        raw_pending_ = true;
     }
 
     void handle_resize() {
@@ -2514,6 +2613,11 @@ private:
     bool               tears_enabled_  = false;
     VkBuffer           bind_buffer_ = VK_NULL_HANDLE; VkDeviceMemory bind_mem_ = VK_NULL_HANDLE;
     FrameCapture     capture_;
+    SwapchainReadback raw_readback_;
+    MorphTargets     morphs_;
+    TrackPlayer      track_player_;
+    bool             raw_pending_            = false;
+    bool             run_failed_             = false;
     std::unique_ptr<pictor_pn::Reconstruction> reconstruction_;
     pictor_pn::RaymarchPass raymarch_;
     pictor_pn::MotionBridge motion_;
@@ -2533,6 +2637,16 @@ int pictor::demo::run_polynomial_viewer(int argc,char** argv,PolynomialMotion* m
 #else
 int main(int argc, char** argv) {
 #endif
+    // Machine output (raw frames, channel JSON) owns the real stdout; every
+    // log line below then goes to stderr.
+    std::FILE* machine_out = nullptr;
+    {
+        bool binary = false;
+        if (wants_clean_stdout(argc, argv, binary)) {
+            machine_out = divert_stdout_to_stderr(binary);
+            if (!machine_out) { std::fprintf(stderr, "cannot redirect stdout\n"); return 1; }
+        }
+    }
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     std::printf("Pictor FBX Viewer\n");
@@ -2554,6 +2668,14 @@ int main(int argc, char** argv) {
     //   --no-rope             hide the rope tube (deformation only)
     //   --no-rope-tail        no loose rope end trailing toward the camera
     //   --tears               toon tears from the eyes found in the albedo
+    //   --track FILE.csv      drive bones / blendshapes per frame (SPEC-PC-FBX-TRACK-PLAYBACK)
+    //   --track-fps N         track frame rate (default 30)
+    //   --raw-out PATH|-      raw BGRA8 frames to a file or stdout, exit after the track
+    //   --size WxH            window / swapchain size
+    //   --camera ex,ey,ez,tx,ty,tz  fixed camera eye and target
+    //   --fov DEG             vertical field of view (default 45)
+    //   --clear r,g,b         clear colour (0..1)
+    //   --list-channels       print bone / blendshape names as JSON and exit
     std::vector<std::string> positional;
     ViewerOptions options;
 #ifdef PICTOR_POLYNOMIAL_DEMO_LIBRARY
@@ -2574,6 +2696,9 @@ int main(int argc, char** argv) {
                 "Research: Vlachos et al., Curved PN Triangles, I3D 2001, doi:10.1145/364338.364387\n");
             return 0;
         }
+        const OptionParse track_opt = parse_track_option(argc, argv, i, options.track);
+        if (track_opt == OptionParse::Error) return 2;
+        if (track_opt == OptionParse::Ok) continue;
         try {
             if (pictor_pn::parse_recording_option(argc,argv,i,options.recording)) continue;
             if (pictor_pn::parse_option(argc,argv,i,options.reconstruction)) continue;
@@ -2630,6 +2755,28 @@ int main(int argc, char** argv) {
         else if (a == "--tears")         options.tears = true;
         else if (!a.empty() && a[0] == '-') { std::fprintf(stderr, "Unknown option: %s\n", a.c_str()); return 2; }
         else positional.push_back(a);
+    }
+    if (!validate_track_options(options.track)) return 2;
+    if ((options.track.track_enabled() || options.track.list_channels) && options.reconstruction.enabled) {
+        std::fprintf(stderr, "--track / --list-channels cannot be combined with PN reconstruction\n");
+        return 2;
+    }
+    if (!options.track.raw_out.empty() &&
+        (!options.recording.directory.empty() || !options.capture_path.empty() ||
+         !options.reconstruction.capture_directory.empty())) {
+        std::fprintf(stderr, "--raw-out cannot be combined with --record-* or capture options\n");
+        return 2;
+    }
+    RawFrameWriter raw_writer;
+    if (!options.track.raw_out.empty()) {
+        if (options.track.raw_to_stdout()) {
+            raw_writer.attach(machine_out);
+            machine_out = nullptr;
+        } else if (!raw_writer.open_file(options.track.raw_out)) {
+            std::fprintf(stderr, "cannot open --raw-out %s\n", options.track.raw_out.c_str());
+            return 2;
+        }
+        options.raw_writer = &raw_writer;
     }
     fs::path input_path = (positional.size() >= 1) ? fs::path(positional[0]) : fs::path("fbx/model1");
     std::string shader_dir = (positional.size() >= 2) ? positional[1] : "shaders";
@@ -2705,10 +2852,14 @@ int main(int argc, char** argv) {
     PackedMesh                              mesh;
     SkeletonDescriptor                      skeleton;
     std::vector<AnimationClipDescriptor>    clips;
+    MorphTargets                            morph_targets;
+    // Blendshapes are not in the viewer cache: track / channel modes import.
+    const bool needs_import = options.track.track_enabled() || options.track.list_channels;
     bool cache_hit = false;
     {
         PROF_SCOPE("cache read (try)");
-        if (!options.reconstruction.enabled) cache_hit = cache::read(cache_path, sources, mesh, skeleton, clips);
+        if (!options.reconstruction.enabled && !needs_import)
+            cache_hit = cache::read(cache_path, sources, mesh, skeleton, clips);
     }
 
     if (cache_hit) {
@@ -2771,6 +2922,10 @@ int main(int argc, char** argv) {
         if (mesh.vertices.empty()) {
             std::fprintf(stderr, "No renderable mesh in FBX.\n");
             return 1;
+        }
+        if (needs_import) {
+            PROF_SCOPE("morph targets");
+            morph_targets = build_morph_targets(result, mesh);
         }
         {
             PROF_SCOPE("resolve textures");
@@ -2862,15 +3017,37 @@ int main(int argc, char** argv) {
 
     Profiler::instance().print("Load profile");
 
+    if (options.track.list_channels) {
+        const bool ok = write_channel_list_json(machine_out, skeleton, morph_targets.names);
+        std::fclose(machine_out);
+        return ok ? 0 : 1;
+    }
+    TrackData track;
+    if (options.track.track_enabled()) {
+        std::vector<std::string> bone_names;
+        bone_names.reserve(skeleton.bones.size());
+        for (const Bone& b : skeleton.bones) bone_names.push_back(b.name);
+        std::string error;
+        if (!load_track_csv(options.track.track_path, bone_names, morph_targets.names, track, error)) {
+            std::fprintf(stderr, "--track %s: %s\n", options.track.track_path.c_str(), error.c_str());
+            return 2;
+        }
+        for (const std::string& w : track.warnings) std::fprintf(stderr, "[track] %s\n", w.c_str());
+        std::fprintf(stderr, "[track] %u frames, %u bone(s), %u blendshape channel(s)\n",
+                     track.frame_count, track.bone_group_count(), track.morph_count());
+    }
+
     FBXViewer viewer;
     int exit_code = 0;
     try {
         if (!viewer.initialize(std::move(mesh), std::move(skeleton), std::move(clips),
-                               model_dir, shader_dir, options)) {
+                               model_dir, shader_dir, options,
+                               std::move(track), std::move(morph_targets))) {
             std::fprintf(stderr, "Viewer init failed.\n");
             exit_code = 1;
         } else {
             viewer.run();
+            if (!viewer.succeeded()) exit_code = 1;
         }
     } catch (const std::exception& e) {
         // Reconstruction reports invalid geometry, budget overruns and failed
@@ -2879,6 +3056,12 @@ int main(int argc, char** argv) {
         exit_code = 1;
     }
     viewer.shutdown();
+    if (raw_writer.is_open()) {
+        const uint64_t written = raw_writer.frames_written();
+        if (!raw_writer.close()) exit_code = 1;
+        std::fprintf(stderr, "[raw-out] %llu frame(s) written\n", static_cast<unsigned long long>(written));
+    }
+    if (machine_out) std::fclose(machine_out);
     return exit_code;
 }
 

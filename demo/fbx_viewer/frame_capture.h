@@ -6,6 +6,8 @@
 // to be created with VK_IMAGE_USAGE_TRANSFER_SRC_BIT (VulkanContext does).
 #pragma once
 
+#include "swapchain_readback.h"
+
 #include <vulkan/vulkan.h>
 
 #include <string>
@@ -43,13 +45,11 @@ public:
     void destroy(VkDevice device);
 
 private:
-    std::string    path_;
-    uint32_t       target_frame_ = 0;
-    bool           armed_    = false;
-    bool           recorded_ = false;
-    VkExtent2D     extent_{};
-    VkBuffer       staging_     = VK_NULL_HANDLE;
-    VkDeviceMemory staging_mem_ = VK_NULL_HANDLE;
+    std::string       path_;
+    uint32_t          target_frame_ = 0;
+    bool              armed_    = false;
+    bool              recorded_ = false;
+    SwapchainReadback readback_;
 };
 
 } // namespace pictor_fbx_viewer

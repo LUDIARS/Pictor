@@ -402,6 +402,15 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             demo/fbx_viewer/rope_pass.cpp
             demo/fbx_viewer/eye_locator.cpp
             demo/fbx_viewer/tear_pass.cpp
+            demo/fbx_viewer/swapchain_readback.cpp
+            demo/fbx_viewer/raw_frame_writer.cpp
+            demo/fbx_viewer/stdout_divert.cpp
+            demo/fbx_viewer/track_options.cpp
+            demo/fbx_viewer/track_csv.cpp
+            demo/fbx_viewer/track_player.cpp
+            demo/fbx_viewer/morph_targets.cpp
+            demo/fbx_viewer/morph_loader.cpp
+            demo/fbx_viewer/channel_list.cpp
             third_party/stb/stb_image_impl.cpp
         )
         target_include_directories(pictor_fbx_viewer PRIVATE third_party/stb)

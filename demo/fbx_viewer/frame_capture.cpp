@@ -1,7 +1,5 @@
 #include "frame_capture.h"
 
-#include "vk_buffer_util.h"
-
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -50,31 +48,11 @@ bool write_bmp32(const std::string& path, uint32_t w, uint32_t h, const uint8_t*
     return std::fclose(f) == 0 && ok;
 }
 
-void image_barrier(VkCommandBuffer cmd, VkImage image,
-                   VkImageLayout from, VkImageLayout to,
-                   VkAccessFlags src_access, VkAccessFlags dst_access,
-                   VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage) {
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.oldLayout = from;
-    b.newLayout = to;
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    b.srcAccessMask = src_access;
-    b.dstAccessMask = dst_access;
-    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &b);
-}
-
 } // namespace
 
 /// @implements SPEC-FBX-VIEWER-FUR-EFFECTS
 bool FrameCapture::supports_format(VkFormat format) {
-    return format == VK_FORMAT_R8G8B8A8_SRGB ||
-           format == VK_FORMAT_R8G8B8A8_UNORM ||
-           format == VK_FORMAT_B8G8R8A8_SRGB ||
-           format == VK_FORMAT_B8G8R8A8_UNORM;
+    return SwapchainReadback::supports_format(format);
 }
 
 bool FrameCapture::record(VkCommandBuffer cmd, VkDevice device, VkPhysicalDevice pd,
@@ -86,34 +64,12 @@ bool FrameCapture::record(VkCommandBuffer cmd, VkDevice device, VkPhysicalDevice
         armed_ = false;
         return false;
     }
-    extent_ = extent;
-    const VkDeviceSize size = static_cast<VkDeviceSize>(extent.width) * extent.height * 4;
-    const VkMemoryPropertyFlags hv = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    if (!create_buffer(device, pd, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, hv, staging_, staging_mem_)) {
+    if (!readback_.ensure(device, pd, extent)) {
         std::fprintf(stderr, "[capture] staging buffer allocation failed\n");
         armed_ = false;
         return false;
     }
-
-    image_barrier(cmd, swapchain_image,
-                  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-
-    VkBufferImageCopy region{};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageOffset = {0, 0, 0};
-    region.imageExtent = {extent.width, extent.height, 1};
-    vkCmdCopyImageToBuffer(cmd, swapchain_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           staging_, 1, &region);
-
-    image_barrier(cmd, swapchain_image,
-                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                  VK_ACCESS_TRANSFER_READ_BIT, 0,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    readback_.record(cmd, swapchain_image);
     recorded_ = true;
     return true;
 }
@@ -130,29 +86,18 @@ bool FrameCapture::finish(VkDevice device, VkQueue queue, VkFormat swapchain_for
         return false;
     }
 
-    const size_t size = static_cast<size_t>(extent_.width) * extent_.height * 4;
-    std::vector<uint8_t> pixels(size);
-    void* p = nullptr;
-    if (vkMapMemory(device, staging_mem_, 0, size, 0, &p) != VK_SUCCESS) {
-        std::fprintf(stderr, "[capture] failed to map staging memory\n");
-        destroy(device);
-        armed_ = false;
-        recorded_ = false;
-        return false;
-    }
-    std::memcpy(pixels.data(), p, size);
-    vkUnmapMemory(device, staging_mem_);
+    const VkExtent2D extent = readback_.extent();
+    const size_t size = static_cast<size_t>(extent.width) * extent.height * 4;
+    std::vector<uint8_t> pixels(readback_.pixels(), readback_.pixels() + size);
 
     // BMP wants BGRA; swap channels when the swapchain is RGBA.
-    const bool rgba = swapchain_format == VK_FORMAT_R8G8B8A8_SRGB ||
-                      swapchain_format == VK_FORMAT_R8G8B8A8_UNORM;
-    if (rgba) {
+    if (SwapchainReadback::is_rgba(swapchain_format)) {
         for (size_t i = 0; i + 3 < size; i += 4) std::swap(pixels[i], pixels[i + 2]);
     }
 
-    const bool ok = write_bmp32(path_, extent_.width, extent_.height, pixels.data());
+    const bool ok = write_bmp32(path_, extent.width, extent.height, pixels.data());
     std::printf("[capture] %s %s (%ux%u)\n", ok ? "wrote" : "FAILED to write",
-                path_.c_str(), extent_.width, extent_.height);
+                path_.c_str(), extent.width, extent.height);
     destroy(device);
     armed_ = false;
     recorded_ = false;
@@ -160,8 +105,7 @@ bool FrameCapture::finish(VkDevice device, VkQueue queue, VkFormat swapchain_for
 }
 
 void FrameCapture::destroy(VkDevice device) {
-    if (staging_)     { vkDestroyBuffer(device, staging_, nullptr);  staging_ = VK_NULL_HANDLE; }
-    if (staging_mem_) { vkFreeMemory(device, staging_mem_, nullptr); staging_mem_ = VK_NULL_HANDLE; }
+    readback_.destroy(device);
 }
 
 } // namespace pictor_fbx_viewer
