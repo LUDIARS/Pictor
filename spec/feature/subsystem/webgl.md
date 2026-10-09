@@ -32,6 +32,13 @@ void set_camera(const float3& eye, const float3& target, const float3& up);
 const WebGLFrameStats& stats() const;
 ```
 
+## Web 描画モジュール
+
+添字付きライティングメッシュを JS から描く `WebMeshRenderer` と ES module + wasm パッケージ
+(`pictor_web_mesh`、`web-mesh/`) は [../web-mesh-module.md](../web-mesh-module.md) (SPEC-PC-WEB-MESH)。
+上の icosphere `WebGLRenderer` はリファレンスとして並置のまま。
+Emscripten toolchain では `cmake/PictorWebGL.cmake` の web targets だけを構成する。
+
 ## Vulkan 経路との関係
 
 - **並行・非抽象**: Vulkan 側 `SimpleRenderer` と機能対応するが共通 IF はまだ無い。ヘッダコメントに「将来 `RenderBackend` trait で `PictorRenderer` に統合予定」と明記

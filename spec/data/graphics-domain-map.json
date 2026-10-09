@@ -199,7 +199,16 @@
           "description": "Web描画",
           "paths": [
             "(^|/)src/webgl/[^/]+$",
-            "(^|/)include/pictor/webgl/[^/]+$"
+            "(^|/)include/pictor/webgl/[^/]+$",
+            "(^|/)cmake/PictorWebGL\\.cmake$"
+          ]
+        },
+        {
+          "name": "web-mesh-module",
+          "description": "WebAssembly + WebGL2 の添字付きライティングメッシュ描画と JavaScript の入口 (SPEC-PC-WEB-MESH)",
+          "paths": [
+            "(^|/)web-mesh/",
+            "(^|/)tests/unit_web_mesh_input_test\\.cpp$"
           ]
         }
       ]

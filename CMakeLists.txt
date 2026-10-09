@@ -41,6 +41,14 @@ elseif(IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     message(STATUS "Pictor: iOS build (native Metal)")
 endif()
 
+# --- Web (Emscripten) — WebGL2 backend と Web mesh module だけを構成する ---
+# 本体 `pictor` は Vulkan を無条件に読むため wasm にできない (spec/feature/portability/web.md)。
+# Emscripten toolchain では Vulkan / GLFW の探索・本体・demo・test を行わず、web targets だけを作る。
+if(EMSCRIPTEN)
+    include(cmake/PictorWebGL.cmake)
+    return()
+endif()
+
 # --- Vulkan (requires Vulkan SDK to be installed) — デスクトップのみ ---
 if(NOT PICTOR_MOBILE)
     find_package(Vulkan QUIET)
@@ -603,53 +611,9 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
 endif()
 
 # ============================================================
-# WebGL2 backend (Emscripten)
+# WebGL2 backend (Emscripten) — see cmake/PictorWebGL.cmake
 # ============================================================
-if(PICTOR_BUILD_WEBGL OR EMSCRIPTEN)
-    add_library(pictor_webgl STATIC
-        src/core/types.cpp
-        src/webgl/webgl_context.cpp
-        src/webgl/webgl_shader.cpp
-        src/webgl/webgl_buffer.cpp
-        src/webgl/webgl_renderer.cpp
-    )
-
-    target_include_directories(pictor_webgl PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-    )
-
-    target_compile_definitions(pictor_webgl PUBLIC PICTOR_HAS_WEBGL=1)
-
-    if(EMSCRIPTEN)
-        target_compile_options(pictor_webgl PRIVATE -sUSE_WEBGL2=1)
-        target_link_options(pictor_webgl PUBLIC -sUSE_WEBGL2=1 -sFULL_ES3=1)
-    endif()
-
-    # WebGL demo (Emscripten only)
-    if(PICTOR_BUILD_DEMO AND EMSCRIPTEN)
-        add_executable(pictor_webgl_demo demo/webgl/main.cpp)
-        target_link_libraries(pictor_webgl_demo PRIVATE pictor_webgl)
-        target_link_options(pictor_webgl_demo PRIVATE
-            -sUSE_WEBGL2=1
-            -sFULL_ES3=1
-            -sALLOW_MEMORY_GROWTH=1
-            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']
-            --shell-file ${CMAKE_SOURCE_DIR}/demo/webgl/shell.html
-        )
-        set_target_properties(pictor_webgl_demo PROPERTIES
-            SUFFIX ".html"
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/webgl
-        )
-        # Copy shaders
-        add_custom_command(TARGET pictor_webgl_demo POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                ${CMAKE_SOURCE_DIR}/shaders/webgl
-                ${CMAKE_BINARY_DIR}/webgl/shaders
-        )
-        message(STATUS "Pictor: WebGL2 demo enabled (Emscripten)")
-    endif()
-endif()
+include(cmake/PictorWebGL.cmake)
 
 # Shader compilation (demo shaders only)
 if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)

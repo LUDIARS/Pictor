@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     { "pathPattern": "(^|/)browser/" },
+    { "pathPattern": "(^|/)web-mesh/" },
+    { "pathPattern": "(^|/)cmake/PictorWebGL\\.cmake$" },
+    { "pathPattern": "(^|/)tests/unit_web_mesh_input_test\\.cpp$" },
     {
       "pathPattern": "(^|/)src/webgl/[^/]+$"
     },
@@ -12,5 +15,5 @@
       "pathPattern": "(^|/)include/pictor/webgl/[^/]+$"
     }
   ],
-  "specRefs": ["spec/feature/browser-mesh-api.md"]
+  "specRefs": ["spec/feature/browser-mesh-api.md", "spec/feature/web-mesh-module.md"]
 }

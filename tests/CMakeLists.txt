@@ -42,6 +42,7 @@ set(PICTOR_TESTS
     unit_public_animation_header_test
     unit_fbx_track_csv_test
     unit_fbx_morph_targets_test
+    unit_web_mesh_input_test
     pixel_text_test
     fps_baseline_test
 )
@@ -86,6 +87,21 @@ target_sources(unit_fbx_morph_targets_test PRIVATE ${_fbx_viewer_dir}/morph_targ
 foreach(_t unit_fbx_track_csv_test unit_fbx_morph_targets_test)
     target_include_directories(${_t} PRIVATE ${_fbx_viewer_dir})
 endforeach()
+
+# Web mesh module (SPEC-PC-WEB-MESH): the input contract is pure CPU code, so it is compiled
+# straight into a native test even though the module itself only ships in WebGL builds.
+target_sources(unit_web_mesh_input_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/webgl/web_mesh_input.cpp)
+
+# The JavaScript face of the web mesh module is tested with Node against a fake wasm module.
+find_program(PICTOR_NODE_EXECUTABLE node)
+if(PICTOR_NODE_EXECUTABLE)
+    add_test(NAME web_mesh_js_test
+             COMMAND ${PICTOR_NODE_EXECUTABLE} --test "test/*.test.mjs"
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../web-mesh)
+    set_tests_properties(web_mesh_js_test PROPERTIES TIMEOUT 60)
+else()
+    message(STATUS "Pictor: node not found — web_mesh_js_test is not registered")
+endif()
 
 # Pixel test needs the bundled font next to the working directory.
 if(TARGET pictor_fonts)

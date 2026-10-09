@@ -23,6 +23,14 @@ WebGL バックエンド自体の仕様は `spec/feature/subsystem/webgl.md`。
 - `spec/feature/subsystem/webgl.md` は実装と **一致** (「共通抽象を持たない
   最小リファレンス」 と自己申告)。
 
+### Web 描画モジュール (2026-10-09 追加)
+
+`pictor_webgl` に添字付きライティングメッシュの `WebMeshRenderer` と、JS から使う
+ES module + wasm (`pictor_web_mesh`、`web-mesh/`) を追加した ([../web-mesh-module.md](../web-mesh-module.md))。
+Emscripten toolchain では root CMakeLists が `cmake/PictorWebGL.cmake` だけを構成するため、
+Vulkan / GLFW の探索で止まらずに web targets (demo を含む) をビルドできる。
+本体 (scene / culling / batch) の wasm 化 (下の Stage 1) は引き続き未着手。
+
 ### 本体ライブラリは wasm 不可 (事実)
 
 `add_library(pictor ...)` に Emscripten ガードは無く (`CMakeLists.txt:75`)、
