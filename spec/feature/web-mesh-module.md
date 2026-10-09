@@ -63,8 +63,12 @@ Emscripten toolchain では、本体 `pictor` (Vulkan 必須) と GLFW の探索
 ```sh
 emcmake cmake -S . -B build/web -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build/web --target pictor_web_mesh
-# → build/web/web-mesh/ に pictor_web_mesh.mjs / .wasm と web-mesh/ の JS を配置
+# → build/web/web-mesh/ に pictor_web_mesh.mjs (wasm 埋め込み) と web-mesh/ の JS を配置
 ```
+
+- wasm は `-sSINGLE_FILE` で `.mjs` に埋め込む。別ファイルの `.wasm` は fetch で読むため、
+  `file:` で開く host (Electron の `loadFile` など) では読み込めない。配布物も 1 ファイルで済む。
+- CSP を持つページは `script-src` に `'wasm-unsafe-eval'` が要る (wasm の実体化)。
 
 consumer は `build/web/web-mesh/` を `npm pack` したものか、そのファイル群を取り込み元の
 Pictor commit と一緒に取り込む。兄弟 checkout を実行時に参照しない。

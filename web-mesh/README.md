@@ -21,9 +21,13 @@ renderer.endFrame();
 
 ## Build
 
-Emscripten only. `pictor_web_mesh.mjs` / `.wasm` are produced by the CMake target
-`pictor_web_mesh` (`PICTOR_BUILD_WEBGL` with an Emscripten toolchain) and copied, together with
-this package's JavaScript, into `<build>/web-mesh/`. Package that directory with `npm pack`;
+Emscripten only. `pictor_web_mesh.mjs` is produced by the CMake target `pictor_web_mesh`
+(an Emscripten toolchain) with the wasm embedded (`-sSINGLE_FILE`), so it also loads from
+`file:` pages where a separate `.wasm` cannot be fetched. It is copied, together with this
+package's JavaScript, into `<build>/web-mesh/`. Package that directory with `npm pack`;
 consumers pin the version and record the Pictor commit they built from.
+
+Pages with a Content Security Policy need `'wasm-unsafe-eval'` in `script-src` to instantiate
+the module.
 
 `npm test` runs the JavaScript wrapper tests against an in-process fake module (no browser).

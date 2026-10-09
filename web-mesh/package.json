@@ -5,6 +5,6 @@
   "description": "Pictor Web mesh module: WebAssembly + WebGL2 renderer for lit, vertex-coloured indexed meshes",
   "license": "MIT",
   "exports": { ".": { "types": "./index.d.ts", "import": "./index.js" } },
-  "files": ["index.js", "index.d.ts", "heap.js", "lighting.js", "pictor_web_mesh.mjs", "pictor_web_mesh.wasm", "README.md"],
+  "files": ["index.js", "index.d.ts", "heap.js", "lighting.js", "pictor_web_mesh.mjs", "README.md"],
   "scripts": { "test": "node --test \"test/*.test.mjs\"" }
 }

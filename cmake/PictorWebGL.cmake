@@ -69,6 +69,9 @@ if(PICTOR_BUILD_WEBGL OR EMSCRIPTEN)
             -sEXPORT_NAME=createPictorWebMeshModule
             -sALLOW_MEMORY_GROWTH=1
             -sFILESYSTEM=0
+            # wasm を .mjs に埋め込む。別ファイルの .wasm は fetch で読むため、file: で開く
+            # host (Electron の loadFile など) では読み込めない。配布物も 1 ファイルで済む。
+            -sSINGLE_FILE=1
             "-sEXPORTED_FUNCTIONS=['_malloc','_free']"
             "-sEXPORTED_RUNTIME_METHODS=['HEAPU8','HEAPU32','HEAPF32']"
         )
