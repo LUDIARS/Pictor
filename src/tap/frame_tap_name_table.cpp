@@ -30,11 +30,20 @@ void FrameTapNameTable::set_mesh(MeshHandle mesh, std::string name,
     entry->name         = std::move(name);
     entry->vertex_count = vertex_count;
     entry->index_count  = index_count;
+    entry->has_content_hash = false;  // ハンドルの再登録で前の内容を引き継がない
+    entry->content_hash     = 0;
 }
 
 void FrameTapNameTable::set_mesh_name(MeshHandle mesh, std::string name) {
     MeshEntry* entry = slot_for(meshes_, mesh);
     if (entry) entry->name = std::move(name);
+}
+
+void FrameTapNameTable::set_mesh_content_hash(MeshHandle mesh, uint64_t content_hash) {
+    MeshEntry* entry = slot_for(meshes_, mesh);
+    if (!entry) return;
+    entry->has_content_hash = true;
+    entry->content_hash     = content_hash;
 }
 
 void FrameTapNameTable::clear_mesh(MeshHandle mesh) {
@@ -62,7 +71,8 @@ void FrameTapNameTable::clear_ui_texture(uint32_t texture_id) {
 FrameTapMeshInfo FrameTapNameTable::mesh_info(MeshHandle mesh) const {
     const MeshEntry* entry = find_slot(meshes_, mesh);
     if (!entry) return {};
-    return {entry->name, entry->vertex_count, entry->index_count};
+    return {entry->name, entry->vertex_count, entry->index_count,
+            entry->has_content_hash, entry->content_hash};
 }
 
 std::string_view FrameTapNameTable::material_name(MaterialHandle material) const {

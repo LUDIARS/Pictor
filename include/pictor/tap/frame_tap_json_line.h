@@ -9,8 +9,12 @@
 
 namespace pictor {
 
-/// `out` を書き換える (clear してから追記するので、 容量は呼び出し間で再利用される)。
-/// passes は scene → ui の順に必ず 1 つずつ。 draw は pass ごとに記録順で並ぶ。
+/// frame 行。 `out` を書き換える (clear してから追記するので、 容量は呼び出し間で
+/// 再利用される)。 passes は開いた順、 draw は pass ごとに記録順で並ぶ。
+/// 数値は有限であること (FrameTap が有限でない draw を dropped に回してから呼ぶ)。
 void encode_frame_tap_line(const FrameTapFrame& frame, std::string& out);
+
+/// end 行 `{"contract":"render-tap/1","seq":N,"end":"shutdown|error"}`。
+void encode_frame_tap_end_line(uint64_t seq, FrameTapEndReason reason, std::string& out);
 
 } // namespace pictor

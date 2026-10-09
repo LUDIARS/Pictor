@@ -337,6 +337,14 @@ void UIRenderer::record(VkCommandBuffer cmd, VkExtent2D extent,
     // タップが無い / OFF なら null — ループ内は null 判定 1 つだけになる。
     FrameTap* const tap_target =
         (frame_tap_ && frame_tap_->is_enabled()) ? frame_tap_ : nullptr;
+    // 意味付けは record() 1 回分だけ借りる (次のフレームへ持ち越さない)。
+    const FrameTapUiAnnotation* const annotations      = frame_tap_annotations_;
+    const size_t                      annotation_count = frame_tap_annotation_count_;
+    frame_tap_annotations_      = nullptr;
+    frame_tap_annotation_count_ = 0;
+    // 今効いている PushClip の矩形 (scissor と同じく切り詰めた値)。 PopClip で外れる。
+    bool               tap_has_clip = false;
+    FrameTapScreenRect tap_clip;
 
     for (size_t index = 0; index < cmds.size(); ++index) {
         const UIDrawCmd& c = cmds[index];
@@ -351,10 +359,17 @@ void UIRenderer::record(VkCommandBuffer cmd, VkExtent2D extent,
             sc.extent.width  = (ex > sc.offset.x) ? (ex - sc.offset.x) : 0;
             sc.extent.height = (ey > sc.offset.y) ? (ey - sc.offset.y) : 0;
             vkCmdSetScissor(cmd, 0, 1, &sc);
+            if (tap_target) {
+                tap_has_clip = true;
+                tap_clip = {static_cast<float>(sc.offset.x), static_cast<float>(sc.offset.y),
+                            static_cast<float>(sc.extent.width),
+                            static_cast<float>(sc.extent.height)};
+            }
             continue;
         }
         if (c.kind == UIDrawKind::PopClip) {
             vkCmdSetScissor(cmd, 0, 1, &full);
+            tap_has_clip = false;
             continue;
         }
         if (c.kind == UIDrawKind::Text) continue;  // テキストはホストが描画
@@ -392,6 +407,17 @@ void UIRenderer::record(VkCommandBuffer cmd, VkExtent2D extent,
             tap.x = c.x; tap.y = c.y; tap.w = c.w; tap.h = c.h;
             tap.texture_id = tid;
             tap.instance   = static_cast<uint32_t>(index);
+            tap.alpha      = c.a * c.opacity;  // シェーダと同じ最終不透明度
+            tap.has_clip   = tap_has_clip;
+            tap.clip       = tap_clip;
+            if (index < annotation_count) {
+                const FrameTapUiAnnotation& note = annotations[index];
+                if (note.instance != UINT32_MAX) tap.instance = note.instance;
+                tap.role    = note.role;
+                tap.element = note.element;
+                tap.fill    = note.fill;
+                tap.glyph   = note.glyph;
+            }
             tap_target->add_ui_draw(tap);
         }
     }

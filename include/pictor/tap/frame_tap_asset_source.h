@@ -12,11 +12,14 @@
 
 namespace pictor {
 
-/// メッシュ 1 つ分の名前と指紋の材料。 name が空なら「名前が取れない」。
+/// メッシュ 1 つ分の名前と、 名前が無いときの代わりの材料。 name が空なら「名前が取れない」。
+/// 代わりは内容ハッシュ (has_content_hash) を優先し、 無ければ頂点数 + インデックス数。
 struct FrameTapMeshInfo {
     std::string_view name;
-    uint32_t         vertex_count = 0;
-    uint32_t         index_count  = 0;
+    uint32_t         vertex_count     = 0;
+    uint32_t         index_count      = 0;
+    bool             has_content_hash = false;
+    uint64_t         content_hash     = 0;
 };
 
 class IFrameTapAssetSource {

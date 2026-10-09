@@ -20,6 +20,8 @@ public:
                   uint32_t vertex_count, uint32_t index_count);
     /// 登録済みメッシュの名前だけを差し替える (未登録なら数 0 で登録)。
     void set_mesh_name(MeshHandle mesh, std::string name);
+    /// 名前の無いメッシュの代わりに使う内容ハッシュ (frame_tap_mesh_content_hash)。
+    void set_mesh_content_hash(MeshHandle mesh, uint64_t content_hash);
     void clear_mesh(MeshHandle mesh);
 
     void set_material_name(MaterialHandle material, std::string name);
@@ -37,6 +39,8 @@ private:
         std::string name;
         uint32_t    vertex_count = 0;
         uint32_t    index_count  = 0;
+        bool        has_content_hash = false;
+        uint64_t    content_hash     = 0;
     };
 
     std::vector<MeshEntry>   meshes_;

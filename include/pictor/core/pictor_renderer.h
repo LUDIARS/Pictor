@@ -186,9 +186,12 @@ public:
 
     // ---- Frame Tap (spec/feature/frame-tap.md) ----
 
-    /// フレームごとの描画リストを 1 行の JSON で外へ出すタップ。 既定は無効。
-    /// `set_sink()` で有効化 / `disable()` で無効化。 UI は host が
+    /// フレームごとの描画リストを 1 行の JSON (render-tap/1) で外へ出すタップ。 既定は無効。
+    /// `set_sink()` で有効化 / `disable()` で無効化 (end 行を出して閉じる)。 UI は host が
     /// `UIRenderer::set_frame_tap(&renderer.frame_tap())` で同じタップへ流す。
+    /// 観測者 ID は `frame_tap().set_observer_id()`、 ゲーム時刻 / tick は
+    /// `frame_tap().clock().set_game_time()` / `set_game_tick()` (与えなければ
+    /// `begin_frame()` の delta_time の累積が `t` になり、 tick は出ない)。
     FrameTap&       frame_tap()       { return frame_tap_; }
     const FrameTap& frame_tap() const { return frame_tap_; }
 

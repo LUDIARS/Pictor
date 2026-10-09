@@ -163,7 +163,8 @@
           "description": "フレームごとの描画リスト出力 (フレームタップ)",
           "paths": [
             "(^|/)(src/tap|include/pictor/tap)/[^/]+$",
-            "(^|/)tests/unit_frame_tap_test\\.cpp$"
+            "(^|/)tests/unit_frame_tap_test\\.cpp$",
+            "(^|/)tools/frame_tap/[^/]+$"
           ]
         },
         {

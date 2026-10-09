@@ -22,6 +22,7 @@ namespace pictor {
 
 class VulkanContext;
 class FrameTap;  // pictor/tap/frame_tap.h (types.h は vulkan.h より先に読む必要があるため前方宣言)
+struct FrameTapUiAnnotation;  // pictor/tap/frame_tap_types.h
 
 enum class UIDrawKind : uint8_t {
     Rect = 0, NineSlice = 1, Image = 2, Text = 3, PushClip = 4, PopClip = 5,
@@ -62,8 +63,17 @@ public:
 
     /// フレームタップ (spec/feature/frame-tap.md) の ui pass へ、 `record()` が描いた
     /// Rect / NineSlice / Image を流す。 借用 (null で解除、 既定 null)。 Text と
-    /// Push/PopClip は描画ではないので流さない。 タップが OFF なら記録されない。
+    /// Push/PopClip は描画ではないので流さない (PushClip の矩形は後続 draw の clip になる)。
+    /// タップが OFF なら記録されない。
     void set_frame_tap(FrameTap* tap) { frame_tap_ = tap; }
+
+    /// 次の `record()` 1 回だけ、 描画リストと同じ添字で意味 (HP バーの fill / 数字の
+    /// glyph / 安定した要素 instance) を添える。 借用 (record() の間だけ参照し、 終われば
+    /// 外す)。 `count` を超える添字の描画は意味なし。 タップが OFF なら読まない。
+    void set_frame_tap_annotations(const FrameTapUiAnnotation* items, size_t count) {
+        frame_tap_annotations_      = items;
+        frame_tap_annotation_count_ = count;
+    }
 
 private:
     VkShaderModule load_shader_(const std::string& path) const;
@@ -95,6 +105,8 @@ private:
     bool initialized_ = false;
 
     FrameTap* frame_tap_ = nullptr;
+    const FrameTapUiAnnotation* frame_tap_annotations_      = nullptr;
+    size_t                      frame_tap_annotation_count_ = 0;
 };
 
 } // namespace pictor

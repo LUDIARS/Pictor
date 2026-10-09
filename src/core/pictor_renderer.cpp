@@ -1,5 +1,6 @@
 ﻿#include "pictor/core/pictor_renderer.h"
 #include "pictor/pipeline/pipeline_profile_serializer.h"
+#include "pictor/tap/frame_tap_asset_ids.h"
 #include "pictor/tap/frame_tap_config.h"
 #include "pictor/tap/scene_frame_tap_collector.h"
 
@@ -85,8 +86,8 @@ void PictorRenderer::shutdown() {
 #endif
     gi_facade_.reset();
     mobile_.reset();
-    // 配送先 (ファイル等) を閉じ、 破棄されるメッシュの名前を落とす。
-    frame_tap_.disable();
+    // end 行 (shutdown) を出して配送先 (ファイル等) を閉じ、 破棄されるメッシュの名前を落とす。
+    frame_tap_.end_stream(FrameTapEndReason::SHUTDOWN);
     frame_tap_.set_asset_source(nullptr);
     frame_tap_names_ = FrameTapNameTable{};
     subsystems_.shutdown();
@@ -589,9 +590,18 @@ void PictorRenderer::unregister_texture(TextureHandle handle) {
 MeshHandle PictorRenderer::register_mesh_data(const MeshDataDescriptor& desc) {
     if (!initialized_) return INVALID_MESH;
     const MeshHandle handle = data_handler_->register_mesh(desc);
-    // フレームタップの安定 ID 用 (名前が空なら頂点数 + インデックス数の指紋になる)。
+    // フレームタップの安定 ID 用。 名前が空なら内容ハッシュ (content-hash) を、
+    // それも無ければ頂点数 + インデックス数の指紋 (count-hash) を使う。 内容ハッシュは
+    // バイト列を 1 回走査するので、 タップ ON のときの名前の無いメッシュだけで計算する
+    // (OFF 時の登録コストを増やさない。 後から ON にした場合は count-hash になる)。
     if (handle != INVALID_MESH) {
         frame_tap_names_.set_mesh(handle, desc.name, desc.vertex_count, desc.index_count);
+        uint64_t content_hash = 0;
+        if (desc.name.empty() && frame_tap_.is_enabled() &&
+            frame_tap_mesh_content_hash(desc.vertex_data, desc.vertex_data_size,
+                                        desc.index_data, desc.index_data_size, content_hash)) {
+            frame_tap_names_.set_mesh_content_hash(handle, content_hash);
+        }
     }
     return handle;
 }

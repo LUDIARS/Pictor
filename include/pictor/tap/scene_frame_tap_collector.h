@@ -6,6 +6,8 @@
 /// 対象は static / dynamic プールのうちカリングで可視になった物 — BatchBuilder が
 /// バッチにする集合と同じ。 GPU-driven プールは GPU 側でカリングするため CPU に
 /// 可視集合が無く、 読み戻しをしない原則により対象外。
+///
+/// 可視性の根拠は FrameTap::visibility_source() があればそれ、 無ければ frustum-only。
 
 #include "pictor/scene/scene_registry.h"
 #include "pictor/tap/frame_tap.h"

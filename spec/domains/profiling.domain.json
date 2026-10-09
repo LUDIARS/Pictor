@@ -25,6 +25,9 @@
     },
     {
       "pathPattern": "(^|/)tests/unit_frame_tap_test\\.cpp$"
+    },
+    {
+      "pathPattern": "(^|/)tools/frame_tap/[^/]+$"
     }
   ]
 }

@@ -339,10 +339,10 @@ std::string json = query.export_json();
 
 ### フレームタップ（描画リストの JSON Lines 出力）
 
-フレームごとに「どのメッシュ / マテリアルが、どの変換で、画面のどこに、どの深度順で」描かれたかを
-1 行の JSON で外へ出します。画素や GPU バッファの読み戻しはしません。既定は OFF で、OFF の間は
-`render()` / `end_frame()` の分岐 1 つずつだけが残ります。詳細は
-[spec/feature/frame-tap.md](spec/feature/frame-tap.md)、出力形式の正本は Commentarii の
+フレームごとに「どのメッシュ / マテリアルが、どの変換で、画面のどこに、どの順で、どんな可視性の根拠で」
+描画へ出したかを、Commentarii の描画タップ契約 **render-tap/1** の 1 行 JSON で外へ出します。画素や GPU
+バッファの読み戻しはしません。既定は OFF で、OFF の間は `render()` / `end_frame()` の分岐 1 つずつだけが
+残ります。詳細は [spec/feature/frame-tap.md](spec/feature/frame-tap.md)、出力形式の正本は Commentarii の
 `spec/feature/render-tap-contract.md` / `schema/render-frame.schema.json` です。
 
 ```bash
@@ -355,19 +355,28 @@ RendererConfig cfg;
 cfg.frame_tap = "frames.jsonl";                 // 起動オプション (環境変数より優先、"off" で無効)
 renderer.initialize(cfg);
 
-// または API でコールバックへ
+// または API でコールバックへ (disable() / shutdown() で end 行を出して閉じる)
 renderer.frame_tap().set_sink(std::make_unique<pictor::CallbackFrameTapSink>(
     [](std::string_view line) { /* 1 フレーム 1 行 */ }));
 
 // ID はアセット名由来。メッシュ名は register_mesh_data() から自動で入る。
 renderer.frame_tap_names().set_material_name(material, "wood");
 ui_renderer.set_frame_tap(&renderer.frame_tap());  // UI pass も同じ行へ
+
+// ホストが与える値 (毎フレーム)
+renderer.frame_tap().clock().set_game_time(game_seconds);  // 無ければ delta_time の累積
+renderer.frame_tap().clock().set_game_tick(game_tick);     // 任意
+ui_renderer.set_frame_tap_annotations(notes.data(), notes.size());  // HP バーの fill / 数字の glyph
 ```
 
-1 行の形: `{"frame":12,"t":0.2,"camera":{"view":[..16],"projection":[..16],"viewport":[w,h]},
-"passes":[{"pass":"scene","draws":[{"mesh":"crate","material":["wood"],"instance":3,"world":[..16],
-"screen_bbox":[x,y,w,h],"depth_order":0,"tags":[]}]},{"pass":"ui","draws":[...]}]}`。
-名前の取れないメッシュは `fp:<頂点数+インデックス数の FNV-1a>` で代用し `tags` に `unnamed` が付きます。
+1 行の形: `{"contract":"render-tap/1","seq":0,"frame":12,"t":0.2,"observer":{"id":"player-camera","viewport":[w,h]},
+"camera":{"view":[..16],"projection":[..16]},"passes":[{"name":"scene","kind":"scene","draws":[{"mesh":"crate",
+"material":["wood"],"identity":"asset-name","instance":3,"generation":0,"world":[..16],"screen_bbox":[x,y,w,h],
+"depth_order":0,"visibility":"frustum-only","tags":[]}]},{"name":"ui","kind":"ui","draws":[...]}]}`、
+終了時は `{"contract":"render-tap/1","seq":N,"end":"shutdown"}`。
+名前の取れないメッシュは内容ハッシュ `ch:` (`content-hash`)、無ければ `fp:<頂点数+インデックス数の FNV-1a>`
+(`count-hash`、識別には使われない) で代用し `tags` に `unnamed` が付きます。
+出力は `tools/frame_tap/validate-render-tap.mjs` で Commentarii の schema に照らして検証できます。
 
 ---
 
