@@ -21,6 +21,7 @@
 namespace pictor {
 
 class VulkanContext;
+class FrameTap;  // pictor/tap/frame_tap.h (types.h は vulkan.h より先に読む必要があるため前方宣言)
 
 enum class UIDrawKind : uint8_t {
     Rect = 0, NineSlice = 1, Image = 2, Text = 3, PushClip = 4, PopClip = 5,
@@ -59,6 +60,11 @@ public:
     void record(VkCommandBuffer cmd, VkExtent2D extent,
                 const std::vector<UIDrawCmd>& cmds);
 
+    /// フレームタップ (spec/feature/frame-tap.md) の ui pass へ、 `record()` が描いた
+    /// Rect / NineSlice / Image を流す。 借用 (null で解除、 既定 null)。 Text と
+    /// Push/PopClip は描画ではないので流さない。 タップが OFF なら記録されない。
+    void set_frame_tap(FrameTap* tap) { frame_tap_ = tap; }
+
 private:
     VkShaderModule load_shader_(const std::string& path) const;
     uint32_t       find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
@@ -87,6 +93,8 @@ private:
     VkPipeline       pipeline_        = VK_NULL_HANDLE;
 
     bool initialized_ = false;
+
+    FrameTap* frame_tap_ = nullptr;
 };
 
 } // namespace pictor

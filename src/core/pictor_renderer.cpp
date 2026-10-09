@@ -1,5 +1,7 @@
 ﻿#include "pictor/core/pictor_renderer.h"
 #include "pictor/pipeline/pipeline_profile_serializer.h"
+#include "pictor/tap/frame_tap_config.h"
+#include "pictor/tap/scene_frame_tap_collector.h"
 
 #include <cstdio>
 
@@ -36,7 +38,40 @@ void PictorRenderer::initialize(const RendererConfig& config) {
     // Post-Process は host-driven の `PostProcessPipeline` を使う
     // (PrivateGame WorldRenderer 参照)。 PictorRenderer は関与しない。
 
+    frame_tap_.set_asset_source(&frame_tap_names_);
+    configure_frame_tap_();
+
     initialized_ = true;
+}
+
+void PictorRenderer::configure_frame_tap_() {
+    const std::string value =
+        config_.frame_tap.empty() ? read_frame_tap_env() : config_.frame_tap;
+    const FrameTapSetting setting = parse_frame_tap_setting(value);
+    if (setting.output == FrameTapOutput::NONE) return;
+
+    std::string error;
+    std::unique_ptr<IFrameTapSink> sink = make_frame_tap_sink(setting, &error);
+    if (!sink) {
+        std::fprintf(stderr, "[PictorRenderer] frame tap を有効化できません: %s\n",
+                     error.c_str());
+        return;
+    }
+    frame_tap_.set_sink(std::move(sink));
+    frame_tap_time_ = 0.0;
+}
+
+void PictorRenderer::record_frame_tap_(const Camera& camera) {
+    frame_tap_time_ += delta_time_;
+
+    FrameTapCamera tap_camera;
+    tap_camera.view            = camera.view;
+    tap_camera.projection      = camera.projection;
+    tap_camera.viewport_width  = config_.screen_width;
+    tap_camera.viewport_height = config_.screen_height;
+
+    frame_tap_.begin_frame(frame_number_, frame_tap_time_, tap_camera);
+    collect_scene_frame_tap(*scene_, frame_tap_);
 }
 
 void PictorRenderer::shutdown() {
@@ -50,6 +85,10 @@ void PictorRenderer::shutdown() {
 #endif
     gi_facade_.reset();
     mobile_.reset();
+    // 配送先 (ファイル等) を閉じ、 破棄されるメッシュの名前を落とす。
+    frame_tap_.disable();
+    frame_tap_.set_asset_source(nullptr);
+    frame_tap_names_ = FrameTapNameTable{};
     subsystems_.shutdown();
     sync_subsystem_aliases_(); // alias をすべて null 化
     clear_profile_source_();
@@ -133,6 +172,10 @@ void PictorRenderer::render(const Camera& camera) {
 
     profiler_->record_batches(static_cast<uint32_t>(batch_builder_->batches().size()));
 
+    // フレームタップ: カリング後の可視集合を CPU 側で記録するだけ (GPU は待たない)。
+    // OFF の間はこの分岐 1 つ。
+    if (frame_tap_.is_enabled()) record_frame_tap_(camera);
+
     // GPU Driven Pipeline execution (§7.2)
     if (gpu_pipeline_) {
         profiler_->begin_gpu_section("ComputeUpdate");
@@ -199,6 +242,9 @@ void PictorRenderer::end_frame() {
     // §12, §11.3: Present
     profiler_->end_frame();
     memory_->end_frame();
+
+    // フレームタップ: render() 以降に届いた scene / ui の draw を 1 行にして出す。
+    if (frame_tap_.is_enabled()) frame_tap_.end_frame();
 
     // Record frame for export if recording
     if (data_exporter_ && data_exporter_->is_recording()) {
@@ -542,12 +588,18 @@ void PictorRenderer::unregister_texture(TextureHandle handle) {
 
 MeshHandle PictorRenderer::register_mesh_data(const MeshDataDescriptor& desc) {
     if (!initialized_) return INVALID_MESH;
-    return data_handler_->register_mesh(desc);
+    const MeshHandle handle = data_handler_->register_mesh(desc);
+    // フレームタップの安定 ID 用 (名前が空なら頂点数 + インデックス数の指紋になる)。
+    if (handle != INVALID_MESH) {
+        frame_tap_names_.set_mesh(handle, desc.name, desc.vertex_count, desc.index_count);
+    }
+    return handle;
 }
 
 void PictorRenderer::unregister_mesh_data(MeshHandle handle) {
     if (!initialized_) return;
     data_handler_->unregister_mesh(handle);
+    frame_tap_names_.clear_mesh(handle);
 }
 
 ModelHandle PictorRenderer::register_model(const ModelDescriptor& desc) {

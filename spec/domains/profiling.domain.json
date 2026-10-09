@@ -1,9 +1,12 @@
 {
   "name": "profiling",
-  "description": "実行時プロファイリング。 GPU/CPU 計測の収集、 内省 API、 フレーム時間のベースライン。",
+  "description": "実行時プロファイリング。 GPU/CPU 計測の収集、 内省 API、 フレーム時間のベースライン、 フレームごとの描画リストを外へ出すフレームタップ。",
   "presetRules": [],
   "templateRules": [],
-  "specRefs": ["spec/feature/pn-raymarch.md"],
+  "specRefs": [
+    "spec/feature/pn-raymarch.md",
+    "spec/feature/frame-tap.md"
+  ],
   "membership": [
     {
       "pathPattern": "(^|/)src/profiler/[^/]+$"
@@ -13,6 +16,15 @@
     },
     {
       "pathPattern": "(^|/)tests/(?:unit_perf_introspection_test|fps_baseline_test)\\.cpp$"
+    },
+    {
+      "pathPattern": "(^|/)src/tap/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)include/pictor/tap/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_frame_tap_test\\.cpp$"
     }
   ]
 }

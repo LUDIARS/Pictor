@@ -74,6 +74,8 @@ public:
 
     // Const access
     const SoAStream<AABB>&         bounds()          const { return bounds_; }
+    const SoAStream<uint8_t>&      visibility_flags() const { return visibility_flags_; }
+    const SoAStream<MaterialHandle>& material_handles() const { return material_handles_; }
     const SoAStream<float4x4>&     transforms()      const { return transforms_; }
     const SoAStream<uint64_t>&     shader_keys()     const { return shader_keys_; }
     const SoAStream<uint32_t>&     material_keys()   const { return material_keys_; }

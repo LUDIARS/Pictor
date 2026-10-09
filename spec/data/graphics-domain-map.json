@@ -159,6 +159,14 @@
           ]
         },
         {
+          "name": "frame-tap",
+          "description": "フレームごとの描画リスト出力 (フレームタップ)",
+          "paths": [
+            "(^|/)(src/tap|include/pictor/tap)/[^/]+$",
+            "(^|/)tests/unit_frame_tap_test\\.cpp$"
+          ]
+        },
+        {
           "name": "profiling-contracts",
           "description": "計測契約・関連検査",
           "paths": [

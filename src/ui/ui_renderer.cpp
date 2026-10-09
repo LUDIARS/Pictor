@@ -1,3 +1,6 @@
+// frame_tap.h (→ core/types.h) は vulkan.h より先に読む: Windows の wingdi.h が
+// TRANSPARENT / OPAQUE をマクロ定義し、 ObjectFlags / PassType の列挙子を壊すため。
+#include "pictor/tap/frame_tap.h"
 #include "pictor/ui/ui_renderer.h"
 
 #ifdef PICTOR_HAS_VULKAN
@@ -331,7 +334,12 @@ void UIRenderer::record(VkCommandBuffer cmd, VkExtent2D extent,
     vkCmdSetScissor(cmd, 0, 1, &full);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
 
-    for (const auto& c : cmds) {
+    // タップが無い / OFF なら null — ループ内は null 判定 1 つだけになる。
+    FrameTap* const tap_target =
+        (frame_tap_ && frame_tap_->is_enabled()) ? frame_tap_ : nullptr;
+
+    for (size_t index = 0; index < cmds.size(); ++index) {
+        const UIDrawCmd& c = cmds[index];
         if (c.kind == UIDrawKind::PushClip) {
             VkRect2D sc;
             sc.offset.x = static_cast<int32_t>(c.x < 0 ? 0 : c.x);
@@ -374,6 +382,18 @@ void UIRenderer::record(VkCommandBuffer cmd, VkExtent2D extent,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(pc), &pc);
         vkCmdDraw(cmd, 4, 1, 0, 0);
+
+        // フレームタップ: 実際に描いた矩形と束縛したテクスチャを CPU 側で記録するだけ。
+        if (tap_target) {
+            FrameTapUiDraw tap;
+            tap.kind = (c.kind == UIDrawKind::Image)     ? FrameTapUiKind::IMAGE
+                     : (c.kind == UIDrawKind::NineSlice) ? FrameTapUiKind::NINE_SLICE
+                                                         : FrameTapUiKind::RECT;
+            tap.x = c.x; tap.y = c.y; tap.w = c.w; tap.h = c.h;
+            tap.texture_id = tid;
+            tap.instance   = static_cast<uint32_t>(index);
+            tap_target->add_ui_draw(tap);
+        }
     }
 }
 

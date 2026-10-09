@@ -179,6 +179,17 @@ add_library(pictor STATIC
     src/profiler/batch_gpu_timer.cpp
     src/profiler/hardware_counters.cpp
 
+    # Frame Tap (フレームごとの描画リストを JSON Lines で外へ出す, spec/feature/frame-tap.md)
+    src/tap/frame_tap_types.cpp
+    src/tap/frame_tap_sink.cpp
+    src/tap/frame_tap_config.cpp
+    src/tap/frame_tap_name_table.cpp
+    src/tap/frame_tap_asset_ids.cpp
+    src/tap/frame_tap_projection.cpp
+    src/tap/frame_tap_json_line.cpp
+    src/tap/frame_tap.cpp
+    src/tap/scene_frame_tap_collector.cpp
+
     # Surface Abstraction
     # (glfw / android / ios の各プロバイダはプラットフォーム別に
     #  add_library 直後の target_sources で条件付き追加する)

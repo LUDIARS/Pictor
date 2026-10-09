@@ -27,6 +27,8 @@
 #include "pictor/core/renderer_subsystem_manager.h"
 #include "pictor/core/mobile_lifecycle_controller.h"
 #include "pictor/core/gi_facade.h"
+#include "pictor/tap/frame_tap.h"
+#include "pictor/tap/frame_tap_name_table.h"
 #include <memory>
 
 namespace pictor {
@@ -46,6 +48,10 @@ struct RendererConfig {
     /// want Pictor to swap to `low_profile_name` on thermal
     /// throttling flip `enabled = true`.
     MobileAutoDowngradePolicy mobile_downgrade;
+
+    /// フレームタップ (spec/feature/frame-tap.md)。 `PICTOR_FRAME_TAP` と同じ書式
+    /// ("stdout" / "-" / ファイルパス / "off")。 空なら環境変数を読む。 既定は無効。
+    std::string       frame_tap;
 };
 
 /// Main Pictor renderer — public API entry point (§12).
@@ -177,6 +183,19 @@ public:
 
     /// Build current scene summary for external queries
     SceneSummary get_scene_summary() const;
+
+    // ---- Frame Tap (spec/feature/frame-tap.md) ----
+
+    /// フレームごとの描画リストを 1 行の JSON で外へ出すタップ。 既定は無効。
+    /// `set_sink()` で有効化 / `disable()` で無効化。 UI は host が
+    /// `UIRenderer::set_frame_tap(&renderer.frame_tap())` で同じタップへ流す。
+    FrameTap&       frame_tap()       { return frame_tap_; }
+    const FrameTap& frame_tap() const { return frame_tap_; }
+
+    /// タップの ID に使うアセット名表。 `register_mesh_data()` のメッシュ名は自動で入る。
+    /// マテリアル名・UI テクスチャ名は host が入れる (無ければ unnamed)。
+    FrameTapNameTable&       frame_tap_names()       { return frame_tap_names_; }
+    const FrameTapNameTable& frame_tap_names() const { return frame_tap_names_; }
 
     // ---- Animation System ----
 
@@ -342,6 +361,13 @@ private:
 
     bool is_frame_work_suppressed_() const;
 
+    /// `config_.frame_tap` (空なら `PICTOR_FRAME_TAP`) に従って配送先を付ける。
+    /// 開けなければ stderr に理由を出して無効のまま (無言で別経路へ逃げない)。
+    void configure_frame_tap_();
+
+    /// カリング後のフレームをタップへ記録する (タップ有効時だけ呼ばれる)。
+    void record_frame_tap_(const Camera& camera);
+
     bool initialized_ = false;
 
     // サブシステムの所有・構築順序・プロファイル再構成は manager に集約 (D-1)。
@@ -381,6 +407,11 @@ private:
     // (compile / プロファイル切替時の再 compile / 解放)。 headless ビルド
     // では常に disengaged のスタブ。
     CompiledPathDriver compiled_driver_;
+
+    // フレームタップ。 OFF の間は render() / end_frame() の分岐 1 つずつだけが残る。
+    FrameTap          frame_tap_;
+    FrameTapNameTable frame_tap_names_;
+    double            frame_tap_time_ = 0.0;
 
     RendererConfig config_;
     float          delta_time_     = 0.0f;
