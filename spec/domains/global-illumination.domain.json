@@ -22,5 +22,9 @@
     {
       "pathPattern": "(^|/)tests/unit_(gi_bake|gi_probe_field|sharc_estimator|sharc_hash)_test\\.cpp$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/gi-bake-realtime-design.md",
+    "spec/feature/optional-sharc-module.md"
   ]
 }

@@ -25,5 +25,9 @@
     {
       "pathPattern": "(^|/)spec/tasks/[^/]*pipeline-hot-reload[^/]*\\.md$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/pipeline-profile-config.md",
+    "spec/feature/pipeline-system-b-config.md"
   ]
 }

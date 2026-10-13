@@ -19,5 +19,10 @@
     {
       "pathPattern": "(^|/)tests/unit_(?:gpu_ring_flight|gpu_timer|swapchain_per_image_pool)_test\\.cpp$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/dx12-backend-design.md",
+    "spec/feature/metal-backend-design.md",
+    "spec/feature/portability.md"
   ]
 }

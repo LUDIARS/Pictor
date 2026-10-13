@@ -10,5 +10,8 @@
     {
       "pathPattern": "(^|/)tools/(?:.*/)?[^/]+$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/android-demo-collection.md"
   ]
 }

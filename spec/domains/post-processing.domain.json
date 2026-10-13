@@ -13,5 +13,8 @@
     {
       "pathPattern": "(^|/)tests/unit_postprocess_chain_test\\.cpp$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/optional-effects-modules.md"
   ]
 }

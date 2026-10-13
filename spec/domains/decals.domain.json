@@ -10,5 +10,8 @@
     {
       "pathPattern": "(^|/)include/pictor/decal/[^/]+$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/optional-effects-modules.md"
   ]
 }
