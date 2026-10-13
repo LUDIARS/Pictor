@@ -1,0 +1,20 @@
+{
+  "name": "multi-platform",
+  "description": "プラットフォーム横断の対応状況。機能ごとに Web / Windows / Linux / macOS / Android / iOS のどこで実装経路があるかの対応表と、その実機・ビルド確認の記録を持つ。各プラットフォームの描画実装そのもの (gpu-surface / webgl-backend / xr など) は持たない。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)spec/feature/platform-feature-matrix\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)spec/feature/android-build-validation\\.md$"
+    }
+  ],
+  "specRefs": [
+    "spec/feature/platform-feature-matrix.md",
+    "spec/feature/android-build-validation.md"
+  ],
+  "rationale": "機能別プラットフォーム対応表と Android ビルド確認は、個々の機能ドメインにまたがる横断の記録で、どの機能ドメインにも属さない。release-metadata はリリース版番号とビルド構成の宣言に限られ (lockedFields)、対応状況の記録を含めない。neco 2026-10-13 の指示で独立ドメインとして宣言する。"
+}
