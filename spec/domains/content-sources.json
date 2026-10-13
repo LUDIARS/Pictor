@@ -1,0 +1,22 @@
+[
+  { "glob": "demo/benchmark/", "nameFrom": "dirname" },
+  { "glob": "demo/fbx/", "nameFrom": "dirname" },
+  { "glob": "demo/fbx_viewer/", "nameFrom": "dirname" },
+  { "glob": "demo/graph/", "nameFrom": "dirname" },
+  { "glob": "demo/graphics/", "nameFrom": "dirname" },
+  { "glob": "demo/material_serializer/", "nameFrom": "dirname" },
+  { "glob": "demo/mobile/", "nameFrom": "dirname" },
+  { "glob": "demo/ocean/", "nameFrom": "dirname" },
+  { "glob": "demo/pn_surface/", "nameFrom": "dirname" },
+  { "glob": "demo/postprocess/", "nameFrom": "dirname" },
+  { "glob": "demo/rive/", "nameFrom": "dirname" },
+  { "glob": "demo/rive_cube/", "nameFrom": "dirname" },
+  { "glob": "demo/shadow_play/", "nameFrom": "dirname" },
+  { "glob": "demo/sharc/", "nameFrom": "dirname" },
+  { "glob": "demo/text/", "nameFrom": "dirname" },
+  { "glob": "demo/text_effects/", "nameFrom": "dirname" },
+  { "glob": "demo/texture2d/", "nameFrom": "dirname" },
+  { "glob": "demo/vr_openxr/", "nameFrom": "dirname" },
+  { "glob": "demo/webgl/", "nameFrom": "dirname" },
+  { "glob": "spec/feature/*.md", "nameFrom": "h1" }
+]
