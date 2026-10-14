@@ -96,6 +96,18 @@ public:
                           const unsigned char* lut_rgba = nullptr,
                           int lut_w = 0, int lut_h = 0);
 
+    /// LUT (`__lut__` 入力) の中身を初期化後に差し替える。 場面や表示条件が
+    /// 変わって色変換表だけを変えたいホスト向け (pipeline / render pass /
+    /// ターゲットは作り直さない)。 RGBA8 (UNORM、 sRGB decode なし)、
+    /// nullptr で「LUT なし」 (1x1 白、 lut_loaded = false) に戻す。
+    /// 内部で GPU idle を待つ。 同じ寸法なら既存 image へ転送するだけ、
+    /// 寸法が変われば image を作り直して descriptor を書き直す。
+    /// 未初期化なら false。
+    bool set_lut(const unsigned char* lut_rgba, int lut_w, int lut_h);
+
+    /// 現在 LUT が読み込まれているか (`set_lut` / 初期化で実 LUT を渡したか)。
+    bool lut_loaded() const { return lut_loaded_; }
+
     /// Render pass / framebuffer the host renders its 3D scene into.
     /// rp_scene_ は color (RGBA16F) + depth (D32_SFLOAT) の 2 アタッチメント。
     /// ホストの vkCmdBeginRenderPass は clearValueCount=2 を渡すこと
@@ -223,6 +235,10 @@ private:
     bool create_targets_();
     bool create_samplers_();
     bool upload_lut_(const unsigned char* rgba, int w, int h);
+    /// staging buffer 経由で `lut_.image` へ RGBA8 を転送する。 `from` は
+    /// 転送前の layout (新規 image は UNDEFINED、 差し替えは SHADER_READ_ONLY)。
+    void copy_lut_pixels_(const unsigned char* rgba, int w, int h, VkImageLayout from);
+    void destroy_lut_();
     bool create_descriptors_();
     void write_descriptor_sets_();
     VkDescriptorSetLayout get_or_create_dsl_(uint32_t input_count);
@@ -275,6 +291,8 @@ private:
 
     Texture   lut_{};
     bool      lut_loaded_ = false;
+    int       lut_w_ = 0;  // lut_.image の寸法 (LUT なしは 1x1)
+    int       lut_h_ = 0;
     VkSampler sampler_ = VK_NULL_HANDLE;
     // 深度入力 (__depth__) 用 NEAREST サンプラ。 D32 は LINEAR filter 対応が
     // 保証されないため color 用の sampler_ と分ける。

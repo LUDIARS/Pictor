@@ -473,15 +473,53 @@ bool PostProcessPipeline::upload_lut_(const unsigned char* rgba, int w, int h) {
 
     // 1x1 white fallback so the descriptor stays valid; the shader skips
     // the LUT via lut_intensity == 0 when no real LUT is present.
-    std::vector<uint8_t> neutral;
-    if (!have) {
-        w = 1; h = 1;
-        neutral = {255, 255, 255, 255};
-    }
-    const uint8_t* src = have ? rgba : neutral.data();
+    static const uint8_t kNeutral[4] = {255, 255, 255, 255};
+    if (!have) { w = 1; h = 1; }
+    const uint8_t* src = have ? rgba : kNeutral;
+
+    // device-local image (UNORM — the LUT values are the target, no sRGB decode)
+    VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ic.imageType   = VK_IMAGE_TYPE_2D;
+    ic.format      = VK_FORMAT_R8G8B8A8_UNORM;
+    ic.extent      = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
+    ic.mipLevels   = 1;
+    ic.arrayLayers = 1;
+    ic.samples     = VK_SAMPLE_COUNT_1_BIT;
+    ic.tiling      = VK_IMAGE_TILING_OPTIMAL;
+    ic.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device_, &ic, nullptr, &lut_.image) != VK_SUCCESS) return false;
+    VkMemoryRequirements mr{};
+    vkGetImageMemoryRequirements(device_, lut_.image, &mr);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize  = mr.size;
+    ai.memoryTypeIndex = find_memory_type_(mr.memoryTypeBits,
+                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device_, &ai, nullptr, &lut_.memory) != VK_SUCCESS) return false;
+    vkBindImageMemory(device_, lut_.image, lut_.memory, 0);
+
+    copy_lut_pixels_(src, w, h, VK_IMAGE_LAYOUT_UNDEFINED);
+
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image    = lut_.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format   = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(device_, &vi, nullptr, &lut_.view) != VK_SUCCESS) return false;
+
+    lut_w_ = w;
+    lut_h_ = h;
+    lut_loaded_ = have;
+    return true;
+}
+
+// staging buffer 経由で lut_.image へ転送し、 SHADER_READ_ONLY で終える。
+// 呼出し側で GPU idle (差し替え時) か未使用 (新規 image) を保証すること。
+void PostProcessPipeline::copy_lut_pixels_(const unsigned char* src, int w, int h,
+                                           VkImageLayout from) {
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
 
-    // staging buffer
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceMemory staging_mem = VK_NULL_HANDLE;
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -502,33 +540,13 @@ bool PostProcessPipeline::upload_lut_(const unsigned char* rgba, int w, int h) {
     std::memcpy(mapped, src, static_cast<size_t>(bytes));
     vkUnmapMemory(device_, staging_mem);
 
-    // device-local image (UNORM — the LUT values are the target, no sRGB decode)
-    VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    ic.imageType   = VK_IMAGE_TYPE_2D;
-    ic.format      = VK_FORMAT_R8G8B8A8_UNORM;
-    ic.extent      = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
-    ic.mipLevels   = 1;
-    ic.arrayLayers = 1;
-    ic.samples     = VK_SAMPLE_COUNT_1_BIT;
-    ic.tiling      = VK_IMAGE_TILING_OPTIMAL;
-    ic.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    vkCreateImage(device_, &ic, nullptr, &lut_.image);
-    vkGetImageMemoryRequirements(device_, lut_.image, &mr);
-    ai.allocationSize  = mr.size;
-    ai.memoryTypeIndex = find_memory_type_(mr.memoryTypeBits,
-                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    vkAllocateMemory(device_, &ai, nullptr, &lut_.memory);
-    vkBindImageMemory(device_, lut_.image, lut_.memory, 0);
-
     VkCommandBuffer cmd = vk_->begin_single_time_commands();
-    auto barrier = [&](VkImageLayout from, VkImageLayout to,
+    auto barrier = [&](VkImageLayout old_layout, VkImageLayout new_layout,
                        VkAccessFlags srcA, VkAccessFlags dstA,
                        VkPipelineStageFlags srcS, VkPipelineStageFlags dstS) {
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        b.oldLayout = from;
-        b.newLayout = to;
+        b.oldLayout = old_layout;
+        b.newLayout = new_layout;
         b.srcAccessMask = srcA;
         b.dstAccessMask = dstA;
         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -537,9 +555,11 @@ bool PostProcessPipeline::upload_lut_(const unsigned char* rgba, int w, int h) {
         b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, srcS, dstS, 0, 0, nullptr, 0, nullptr, 1, &b);
     };
-    barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            0, VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    const bool fresh = (from == VK_IMAGE_LAYOUT_UNDEFINED);
+    barrier(from, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            fresh ? 0 : VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+            fresh ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
@@ -553,18 +573,43 @@ bool PostProcessPipeline::upload_lut_(const unsigned char* rgba, int w, int h) {
 
     vkDestroyBuffer(device_, staging, nullptr);
     vkFreeMemory(device_, staging_mem, nullptr);
-
-    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vi.image    = lut_.image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format   = VK_FORMAT_R8G8B8A8_UNORM;
-    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(device_, &vi, nullptr, &lut_.view);
-
-    lut_loaded_ = have;
-    return true;
 }
 
+void PostProcessPipeline::destroy_lut_() {
+    if (lut_.view)   vkDestroyImageView(device_, lut_.view, nullptr);
+    if (lut_.image)  vkDestroyImage(device_, lut_.image, nullptr);
+    if (lut_.memory) vkFreeMemory(device_, lut_.memory, nullptr);
+    lut_ = Texture{};
+    lut_w_ = 0;
+    lut_h_ = 0;
+}
+
+bool PostProcessPipeline::set_lut(const unsigned char* rgba, int w, int h) {
+    if (!vulkan_ready_) return false;
+    const bool have = (rgba != nullptr && w > 0 && h > 0);
+    const int nw = have ? w : 1, nh = have ? h : 1;
+
+    // 前フレームの pass が LUT を sample し終えるのを待つ (resize /
+    // rebuild_chain と同じ。 LUT 差し替えは場面切替時の低頻度操作)。
+    vkDeviceWaitIdle(device_);
+
+    if (lut_.image != VK_NULL_HANDLE && nw == lut_w_ && nh == lut_h_) {
+        // 同寸法: image / view / descriptor はそのまま、 中身だけ転送する。
+        static const uint8_t kNeutral[4] = {255, 255, 255, 255};
+        copy_lut_pixels_(have ? rgba : kNeutral, nw, nh,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        lut_loaded_ = have;
+        return true;
+    }
+    // 寸法が変わる: image を作り直し、 view が変わるので descriptor を書き直す。
+    destroy_lut_();
+    if (!upload_lut_(rgba, w, h)) {
+        std::fprintf(stderr, "[postprocess] set_lut: LUT setup failed\n");
+        return false;
+    }
+    write_descriptor_sets_();
+    return true;
+}
 // input 数ぶんの COMBINED_IMAGE_SAMPLER binding を持つ descriptor set layout。
 // 組み込みチェーンは input 数 1 (extract/blur) と 3 (grade) を使う。
 VkDescriptorSetLayout PostProcessPipeline::get_or_create_dsl_(uint32_t input_count) {
@@ -1325,10 +1370,7 @@ void PostProcessPipeline::shutdown() {
         }
         history_.clear();
 
-        if (lut_.view)   vkDestroyImageView(device_, lut_.view, nullptr);
-        if (lut_.image)  vkDestroyImage(device_, lut_.image, nullptr);
-        if (lut_.memory) vkFreeMemory(device_, lut_.memory, nullptr);
-        lut_ = Texture{};
+        destroy_lut_();
 
         for (auto& cp : compiled_)
             if (cp.pipeline) vkDestroyPipeline(device_, cp.pipeline, nullptr);
