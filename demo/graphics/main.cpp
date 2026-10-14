@@ -10,7 +10,7 @@
 ///
 /// Build target: pictor_graphics_demo (separate from pictor_demo)
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 #include <GLFW/glfw3.h>

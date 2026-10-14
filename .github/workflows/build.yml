@@ -33,3 +33,30 @@ jobs:
 
       - name: Build (pictor library)
         run: cmake --build build --target pictor --parallel
+
+      # --- Consumer face checks (spec/architecture/multi-rhi.md §6) ---------------
+      - name: "C1: public headers carry no backend identifiers"
+        run: python3 tools/consumer_face/check_public_headers.py
+
+      - name: "C2: backend macros reaching consumers"
+        run: python3 tools/consumer_face/check_macro_propagation.py --defs build/consumer_face/interface_definitions.txt
+
+      - name: "C2: backend-neutral headers compile standalone (no backend macros, -Wpedantic)"
+        run: cmake --build build --target pictor_gfx_header_check --parallel
+
+      - name: "C4: interop usage in demo/ tools/ tests/"
+        run: |
+          python3 tools/consumer_face/report_interop_usage.py --markdown >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/consumer_face/report_interop_usage.py
+
+      - name: Build backend-neutral core + null backend tests
+        run: |
+          cmake --build build --parallel --target \
+            pictor_core \
+            unit_gfx_handle_test \
+            unit_pass_recorder_test \
+            unit_single_thread_dispatcher_test \
+            unit_null_backend_test
+
+      - name: Run backend-neutral core + null backend tests
+        run: ctest --test-dir build --output-on-failure -R "^(unit_gfx_handle_test|unit_pass_recorder_test|unit_single_thread_dispatcher_test|unit_null_backend_test)$"

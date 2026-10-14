@@ -21,7 +21,7 @@
 ///   --switch           Cycle through all mobile profiles, N frames each
 ///   --config=<path>    Load a key=value profile config (see kv_profile.ini format)
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include "pictor/pipeline/pipeline_builder.h"
 
 #include <chrono>

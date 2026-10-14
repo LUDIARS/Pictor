@@ -41,9 +41,15 @@ elseif(IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     message(STATUS "Pictor: iOS build (native Metal)")
 endif()
 
-# --- Web (Emscripten) — WebGL2 backend と Web mesh module だけを構成する ---
+# --- pictor_core — 方式非依存部 (scene / update / batch / culling / CPU memory / gfx 公開面) ---
+# Emscripten を含む全 toolchain でビルドできる。本体 `pictor` が PUBLIC リンクする
+# (spec/architecture/multi-rhi.md §6 S0)。
+include(cmake/PictorCore.cmake)
+
+# --- Web (Emscripten) — pictor_core と WebGL2 backend / Web mesh module だけを構成する ---
 # 本体 `pictor` は Vulkan を無条件に読むため wasm にできない (spec/feature/portability/web.md)。
-# Emscripten toolchain では Vulkan / GLFW の探索・本体・demo・test を行わず、web targets だけを作る。
+# Emscripten toolchain では Vulkan / GLFW の探索・本体・demo・test を行わず、pictor_core と
+# web targets だけを作る。
 if(EMSCRIPTEN)
     include(cmake/PictorWebGL.cmake)
     return()
@@ -78,39 +84,8 @@ else()
 endif()
 
 add_library(pictor STATIC
-    # Core
-    src/core/types.cpp
-    src/core/file_watch.cpp
-    src/core/cache_info.cpp
-    src/core/device_memory_profile.cpp
-    src/core/transform_math.cpp
-    src/core/float_parse.cpp
-
-    # Memory Subsystem
-    src/memory/frame_allocator.cpp
-    src/memory/pool_allocator.cpp
-    src/memory/gpu_memory_allocator.cpp
-    src/memory/memory_subsystem.cpp
-
-    # Scene Registry
-    src/scene/soa_stream.cpp
-    src/scene/object_pool.cpp
-    src/scene/object_classifier.cpp
-    src/scene/scene_registry.cpp
-
-    # Data Update
-    src/update/job_dispatcher.cpp
-    src/update/update_scheduler.cpp
-
-    # Batching + Sort
-    src/batch/radix_sort.cpp
-    src/batch/batch_builder.cpp
-
-    # Culling
-    src/culling/flat_bvh.cpp
-    src/culling/frustum_culler.cpp
-    src/culling/culling_system.cpp
-    src/culling/world_partition.cpp
+    # Core / memory / scene / update / batch / culling live in pictor_core
+    # (cmake/PictorCore.cmake), linked PUBLIC below.
 
     # GPU Driven
     src/gpu/gpu_buffer_manager.cpp
@@ -275,6 +250,9 @@ target_include_directories(pictor PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
+
+# 方式非依存部。PICTOR_HAS_RHI もここから伝播する。
+target_link_libraries(pictor PUBLIC pictor_core)
 
 if(Vulkan_FOUND)
     target_compile_definitions(pictor PUBLIC PICTOR_HAS_VULKAN=1)
@@ -815,6 +793,9 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/fbx)
         add_dependencies(pictor_fbx_viewer pictor_fbx_assets)
     endif()
 endif()
+
+# ─── Consumer-face checks (multi-rhi.md §6 C2; C1 / C4 are tools/consumer_face/*.py) ─
+include(cmake/PictorConsumerFaceChecks.cmake)
 
 # ─── Tests (opt-in via CTest) ────────────────────────────────────────
 if(PICTOR_BUILD_TESTS AND NOT PICTOR_MOBILE)

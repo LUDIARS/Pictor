@@ -172,6 +172,9 @@ Windows demo の実機確認は人間。実機欄は既定で「未確認」)。
 | **S8 Metal** | `MetalContext` を素体に `src/rhi/metal/`、MSL 束、macOS / iOS provider | C3 (Metal のみ)、macOS ジョブ (U-3)。環境が無ければ「未確認」のまま main に入れない |
 | **S9 消費側移行と撤去** | Ergo `ergo_render` / `ergo_gpu_particle` (Ergo 側 PR)、Ludellus-Native 段階 2〜4 と接続、interop の旧経路・`NativeDrawCallback`・`get_required_instance_extensions`・旧 c_api を削除、既存 spec (dx12 / metal / portability / platform matrix) を更新 | C4 の interop 利用数 0、Ln の「`world/*` `app/*` に方式 include 0 件」 |
 
+実装記録: S0 は [`spec/tasks/2026-10-14-multi-rhi-s0-public-face.md`](../tasks/2026-10-14-multi-rhi-s0-public-face.md)
+(Actio `9998f9a7`)。C1 の allowlist は実測 41 本 (コメント除去・トークン単位)、検査は `tools/consumer_face/`。
+
 依存: S0 → S1 → S2 → S3 → S4 → S5 → S6。S2b は S2 以降に並行。S7 は S3 以降に並行。S8 は S3 以降で環境が得られたとき。S9 は S4 以降に順次。
 S5 と S6 は入替可 (降格規則は先に入れる方で実装)。
 

@@ -2,6 +2,15 @@
 
 // Pictor — Rendering Pipeline Module v2.1
 // Data-Driven, GPU-Optimized Rendering Architecture
+//
+// Backend-neutral umbrella: nothing reachable from this header includes a GPU
+// API header (spec/architecture/multi-rhi.md §6 S0). The Vulkan-path API
+// (PictorRenderer, VulkanContext, compiled graph recording, GPU timers,
+// host-driven post-process) moved to "pictor/pictor_vulkan.h", which includes
+// this header first.
+
+// Backend-neutral rendering face
+#include "pictor/gfx/gfx.h"
 
 // Core types
 #include "pictor/core/types.h"
@@ -21,6 +30,7 @@
 // Data update
 #include "pictor/update/job_dispatcher.h"
 #include "pictor/update/update_scheduler.h"
+#include "pictor/update/single_thread_dispatcher.h"
 
 // Batching & sorting
 #include "pictor/batch/radix_sort.h"
@@ -37,16 +47,9 @@
 // Pipeline
 #include "pictor/pipeline/pipeline_profile.h"
 #include "pictor/pipeline/pipeline_builder.h"
-#include "pictor/pipeline/render_pass_scheduler.h"
-#include "pictor/pipeline/compiled_path_driver.h"
-#include "pictor/pipeline/compiled_batch_recorder.h"
 
-// Profiler
+// Profiler (CPU side; GPU timers are in pictor_vulkan.h)
 #include "pictor/profiler/cpu_timer.h"
-#include "pictor/profiler/gpu_timer.h"
-#include "pictor/profiler/profiler.h"
-#include "pictor/profiler/overlay_renderer.h"
-#include "pictor/profiler/data_exporter.h"
 
 // Material system
 #include "pictor/material/material_property.h"
@@ -56,15 +59,11 @@
 #include "pictor/gi/gi_lighting_system.h"
 #include "pictor/gi/gi_bake.h"
 
-// Post-process pipeline (host-driven, real Vulkan)
+// Post-process effect descriptions (the host-driven pipeline is in pictor_vulkan.h)
 #include "pictor/postprocess/postprocess_effect.h"
-#ifdef PICTOR_HAS_POSTPROCESS
-#include "pictor/postprocess/postprocess_pipeline.h"
-#endif
 
 // Surface abstraction
 #include "pictor/surface/surface_provider.h"
-#include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 
 // Data handler
@@ -96,6 +95,3 @@
 #include "pictor/animation/vector_animation.h"
 #include "pictor/animation/montage.h"
 #include "pictor/animation/animation_system.h"
-
-// Public API
-#include "pictor/core/pictor_renderer.h"

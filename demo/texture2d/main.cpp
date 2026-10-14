@@ -13,7 +13,7 @@
 ///   Scroll : Zoom
 ///   S      : Toggle stats overlay
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/profiler/stats_overlay.h"

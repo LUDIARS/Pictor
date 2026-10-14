@@ -1,0 +1,10 @@
+# C2: backend macros `pictor` may still export to consumers until S4
+# (spec/architecture/multi-rhi.md §5 ビルド). S4 makes them PRIVATE and empties
+# this list; consumers then only see PICTOR_HAS_RHI. Do not add entries.
+PICTOR_HAS_VULKAN
+PICTOR_HAS_DX12
+PICTOR_HAS_METAL
+VK_USE_PLATFORM_WIN32_KHR
+VK_USE_PLATFORM_XLIB_KHR
+VK_USE_PLATFORM_MACOS_MVK
+VK_USE_PLATFORM_ANDROID_KHR

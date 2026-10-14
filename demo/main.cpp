@@ -4,7 +4,7 @@
 /// the ISurfaceProvider abstraction, and renders a clear-color
 /// animation to prove the pipeline is running.
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/profiler/stats_overlay.h"

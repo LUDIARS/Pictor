@@ -84,8 +84,8 @@ private:
     ComputeUpdateParams  compute_params_;
     float                total_time_ = 0.0f;
 
-    std::unique_ptr<ThreadPoolDispatcher> default_dispatcher_;
-    IJobDispatcher*                       dispatcher_ = nullptr;
+    std::unique_ptr<IJobDispatcher> default_dispatcher_;
+    IJobDispatcher*                 dispatcher_ = nullptr;
 };
 
 } // namespace pictor

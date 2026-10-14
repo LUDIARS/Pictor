@@ -23,7 +23,7 @@
 ///
 /// Build target: pictor_postprocess_demo
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/profiler/bitmap_text_renderer.h"

@@ -80,6 +80,32 @@ foreach(_t ${PICTOR_TESTS})
              WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endforeach()
 
+# Backend-neutral face (spec/architecture/multi-rhi.md §6 S0): these tests link only
+# pictor_core, never `pictor`, so they build without any GPU SDK. The internal RHI
+# headers (src/rhi/...) are reached through the src/ include directory.
+set(PICTOR_CORE_TESTS
+    unit_gfx_handle_test
+    unit_pass_recorder_test
+    unit_single_thread_dispatcher_test
+)
+if(PICTOR_RHI_NULL)
+    list(APPEND PICTOR_CORE_TESTS unit_null_backend_test)
+endif()
+
+foreach(_t ${PICTOR_CORE_TESTS})
+    add_executable(${_t} ${_t}.cpp)
+    target_link_libraries(${_t} PRIVATE pictor_core)
+    target_include_directories(${_t} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    if(MSVC)
+        target_compile_options(${_t} PRIVATE /utf-8)
+    endif()
+    add_test(NAME ${_t}
+             COMMAND ${_t}
+             WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+endforeach()
+
 # FBX viewer track playback helpers (SPEC-PC-FBX-TRACK-PLAYBACK): the
 # headless demo sources are compiled straight into their tests.
 set(_fbx_viewer_dir ${CMAKE_CURRENT_SOURCE_DIR}/../demo/fbx_viewer)

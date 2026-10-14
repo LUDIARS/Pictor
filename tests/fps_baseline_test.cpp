@@ -6,7 +6,7 @@
 /// `PICTOR_FPS_THRESHOLD_MS` (default: 20.0 ms ≈ 50 fps) so that slow
 /// CI hosts can loosen the budget without recompiling.
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include "test_common.h"
 
 #include <cstdio>

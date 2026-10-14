@@ -1,0 +1,45 @@
+# C1 allowlist: public headers that still expose a backend (multi-rhi.md §6).
+# Shrinks stage by stage; empty at S4. Regenerate only to record a baseline:
+#   python3 tools/consumer_face/check_public_headers.py --write-allowlist
+# count: 41
+include/pictor/core/pictor_renderer.h
+include/pictor/decal/decal_system.h
+include/pictor/gi/gi_gpu_executor.h
+include/pictor/gi/gi_reflection_probe.h
+include/pictor/gi/gi_shadow_atlas.h
+include/pictor/gi/gi_ssao_compute.h
+include/pictor/gi/sharc_dx12_executor.h
+include/pictor/gi/sharc_executor.h
+include/pictor/pipeline/attachment_registry.h
+include/pictor/pipeline/compiled_batch_recorder.h
+include/pictor/pipeline/compiled_graph.h
+include/pictor/pipeline/compiled_path_driver.h
+include/pictor/pipeline/framebuffer_registry.h
+include/pictor/pipeline/pipeline_compiler.h
+include/pictor/pipeline/render_pass_registry.h
+include/pictor/pipeline/render_pass_scheduler.h
+include/pictor/postprocess/postprocess_pipeline.h
+include/pictor/profiler/batch_gpu_timer.h
+include/pictor/profiler/bitmap_text_renderer.h
+include/pictor/profiler/gpu_timer.h
+include/pictor/profiler/stats_overlay.h
+include/pictor/shader/graphics_pipeline_builder.h
+include/pictor/shader/shader_registry.h
+include/pictor/shader/vertex_layout.h
+include/pictor/surface/simple_renderer.h
+include/pictor/surface/vk_result.h
+include/pictor/surface/vulkan_capability_check.h
+include/pictor/surface/vulkan_context.h
+include/pictor/surface/vulkan_device_requirements.h
+include/pictor/surface/vulkan_per_image_backend.h
+include/pictor/ui/ui_overlay_pipeline.h
+include/pictor/ui/ui_renderer.h
+include/pictor/vector/rive_renderer.h
+include/pictor/webgl/web_mesh_renderer.h
+include/pictor/webgl/webgl_buffer.h
+include/pictor/webgl/webgl_context.h
+include/pictor/webgl/webgl_renderer.h
+include/pictor/webgl/webgl_shader.h
+include/pictor/xr/openxr_runtime.h
+include/pictor/xr/reprojection_pass.h
+include/pictor/xr/stereo_output_surface.h

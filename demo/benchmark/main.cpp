@@ -3,7 +3,7 @@
 /// Stress test: 1,000,000 independent spheres moving on 3D Lissajous curves.
 /// All updates via GPU Compute Shader. CPU frame time target: < 0.5ms.
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include <cstdio>
 #include <cmath>
 #include <chrono>

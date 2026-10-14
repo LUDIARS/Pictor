@@ -20,7 +20,7 @@ else()
     install(TARGETS glfw EXPORT PictorDemoTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
     install(DIRECTORY ${glfw_SOURCE_DIR}/include/GLFW DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
-install(TARGETS pictor pictor_polynomial_demo EXPORT PictorDemoTargets
+install(TARGETS pictor pictor_core pictor_polynomial_demo EXPORT PictorDemoTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY include/pictor DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT PictorDemoTargets NAMESPACE Pictor:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PictorDemo)

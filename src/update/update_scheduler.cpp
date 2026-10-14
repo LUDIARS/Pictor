@@ -1,4 +1,5 @@
 ﻿#include "pictor/update/update_scheduler.h"
+#include "pictor/update/single_thread_dispatcher.h"
 #include <cstring>
 
 #ifdef __AVX2__
@@ -15,6 +16,10 @@ UpdateScheduler::UpdateScheduler(SceneRegistry& registry, const UpdateConfig& co
     : registry_(registry)
     , config_(config)
 {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    // Wasm without pthreads cannot start worker threads: run jobs inline.
+    default_dispatcher_ = std::make_unique<SingleThreadDispatcher>();
+#else
     uint32_t threads = config.worker_threads;
     if (threads == 0) {
         // Guard against hardware_concurrency()==0 wrapping to UINT32_MAX.
@@ -22,6 +27,7 @@ UpdateScheduler::UpdateScheduler(SceneRegistry& registry, const UpdateConfig& co
         threads = hw > 1 ? hw - 1 : 1;
     }
     default_dispatcher_ = std::make_unique<ThreadPoolDispatcher>(threads);
+#endif
     dispatcher_ = default_dispatcher_.get();
 }
 

@@ -1,12 +1,9 @@
 ﻿#include "pictor/memory/pool_allocator.h"
+#include "memory/aligned_block.h"
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <new>
-
-#ifdef _MSC_VER
-#include <malloc.h>
-#endif
 
 namespace pictor {
 
@@ -81,11 +78,7 @@ void* PoolAllocator::reallocate_array(void* old_ptr, size_t element_size,
 
 void PoolAllocator::clear() {
     for (auto& chunk : chunks_) {
-#ifdef _MSC_VER
-        _aligned_free(chunk.data);
-#else
-        std::free(chunk.data);
-#endif
+        aligned_block_free(chunk.data);
     }
     chunks_.clear();
     total_allocated_ = 0;
@@ -97,18 +90,7 @@ void PoolAllocator::add_chunk(size_t min_size) {
     alloc_size = (alloc_size + CACHE_LINE - 1) & ~(CACHE_LINE - 1);
 
     Chunk chunk;
-#ifdef _MSC_VER
-    chunk.data = static_cast<uint8_t*>(_aligned_malloc(alloc_size, CACHE_LINE));
-#elif defined(__ANDROID__)
-    // Android aligned_alloc requires API 28; posix_memalign supports API 17.
-    void* allocation = nullptr;
-    if (posix_memalign(&allocation, CACHE_LINE, alloc_size) != 0) {
-        throw std::bad_alloc();
-    }
-    chunk.data = static_cast<uint8_t*>(allocation);
-#else
-    chunk.data = static_cast<uint8_t*>(std::aligned_alloc(CACHE_LINE, alloc_size));
-#endif
+    chunk.data = static_cast<uint8_t*>(aligned_block_alloc(CACHE_LINE, alloc_size));
     if (!chunk.data) {
         throw std::bad_alloc();
     }

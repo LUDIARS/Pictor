@@ -20,7 +20,7 @@
 ///
 /// Build target: pictor_text_demo
 
-#include "pictor/pictor.h"
+#include "pictor/pictor_vulkan.h"
 #include "pictor/surface/vulkan_context.h"
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/text/font_loader.h"

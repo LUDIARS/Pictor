@@ -1,11 +1,8 @@
 ﻿#include "pictor/memory/frame_allocator.h"
+#include "memory/aligned_block.h"
 #include <cstdlib>
 #include <algorithm>
 #include <new>
-
-#ifdef _MSC_VER
-#include <malloc.h>
-#endif
 
 #ifdef PICTOR_LARGE_PAGES
 #ifdef _WIN32
@@ -46,20 +43,9 @@ FrameAllocator::FrameAllocator(size_t capacity)
     owns_memory_ = true;
 #endif
 #else
-    // Standard aligned allocation (64-byte alignment for cache lines)
-#ifdef _MSC_VER
-    buffer_ = static_cast<uint8_t*>(_aligned_malloc(capacity, 64));
-#elif defined(__ANDROID__)
-    // Keep free() pairing without requiring Android API 28's aligned_alloc.
-    void* allocation = nullptr;
-    if (posix_memalign(&allocation, 64, capacity) != 0) {
-        throw std::bad_alloc();
-    }
-    buffer_ = static_cast<uint8_t*>(allocation);
-#else
-    // std::aligned_alloc requires size to be a multiple of the alignment
-    buffer_ = static_cast<uint8_t*>(std::aligned_alloc(64, (capacity + 63) & ~size_t{63}));
-#endif
+    // Standard aligned allocation (64-byte alignment for cache lines).
+    // Rounded up to whole cache lines as before.
+    buffer_ = static_cast<uint8_t*>(aligned_block_alloc(64, (capacity + 63) & ~size_t{63}));
     owns_memory_ = true;
 #endif
 
@@ -77,11 +63,7 @@ void FrameAllocator::release_() noexcept {
         munmap(buffer_, capacity_);
 #endif
 #else
-#ifdef _MSC_VER
-        _aligned_free(buffer_);
-#else
-        std::free(buffer_);
-#endif
+        aligned_block_free(buffer_);
 #endif
     }
 }
