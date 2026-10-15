@@ -867,7 +867,7 @@
       "name": "描画デモ・機能選択・Visus移行ツール",
       "domain": "samples-and-tools",
       "status": "実装あり",
-      "note": "demo/tools targetあり。毛皮・縄・涙・影絵等のdemo専用表現を汎用library APIと区別する。",
+      "note": "demo/tools targetあり。毛皮・縄・涙・影絵等のdemo専用表現を汎用library APIと区別する。demo単位の展開はspec/data/demo-platform-matrix.json。",
       "evidence": [
         "CMakeLists.txt",
         "spec/tasks/2026-09-02-fbx-viewer-fur-effects.md",

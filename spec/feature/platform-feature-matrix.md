@@ -319,6 +319,8 @@ registry/queryあり。一部uploadはstaging確保とフラグ更新だけで�
 
 demo/tools targetあり。毛皮・縄・涙・影絵等のdemo専用表現を汎用library APIと区別する。
 
+demo単位の使用機能・モジュール依存・固有パイプライン・対応バックエンド・ビルド/実機確認は `spec/feature/demo-platform-matrix.md`（`spec/data/demo-platform-matrix.json`）へ展開済み。
+
 根拠: `CMakeLists.txt`、`spec/tasks/2026-09-02-fbx-viewer-fur-effects.md`、`spec/feature/shadow-play-kirie-backdrop.md`
 
 ### PC-FEAT-HW-01 Intel PCMハードウェアカウンター
@@ -335,4 +337,4 @@ PCM prebuilt、対応CPU、権限/driverが必要。ARM Android/iOS向けカウ�
 - postprocess/decal分離: PR #1667 / 661a02f、提出済み。対応表作成時にマージ結果は未通知。GPU APIの実装追加ではなくビルド・リンク境界の分離。
 - 標準WebGL targetは独立最小renderer。native coreのCPU機能やVulkan効果が自動的にWebへ組み込まれるわけではない。
 - 各demoは固有設計の個別デフォルト。モジュールを選んで使い、共通の万能パイプラインやnative全機能統合を完成条件にしない。
-- この一覧は登録済みライブラリ機能が中心。毛皮・縄・涙などdemo専用表現はTOOLS-01にまとめ、各demo独自の対応表は別途展開する。
+- この一覧は登録済みライブラリ機能が中心。毛皮・縄・涙などdemo専用表現はTOOLS-01にまとめ、各demo独自の対応表は `spec/feature/demo-platform-matrix.md` に展開した。
