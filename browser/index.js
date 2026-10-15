@@ -11,6 +11,7 @@ export class PictorRenderer {
   #counts = [];
   #handles = [];
   #free = [];
+  #slots = new WeakMap();
   #disposed = false;
   #frame = false;
   constructor(canvas) {
@@ -44,17 +45,23 @@ export class PictorRenderer {
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
       if (gl.getError() !== gl.NO_ERROR) throw new Error('Pictor: mesh upload failed');
       const slot = this.#free.pop() ?? this.#buffers.length;
-      const mesh = Object.freeze({ slot });
+      const mesh = Object.freeze({});
+      this.#slots.set(mesh, slot);
       this.#buffers[slot] = buffer;
       this.#counts[slot] = vertices.length / 6;
       this.#handles[slot] = mesh;
       return mesh;
     } catch (error) { gl.deleteBuffer(buffer); throw error; }
   }
+  #slotOf(mesh) {
+    const slot = mesh !== null && typeof mesh === 'object' ? this.#slots.get(mesh) : undefined;
+    return slot !== undefined && this.#handles[slot] === mesh ? slot : undefined;
+  }
   releaseMesh(mesh) {
-    const slot = mesh?.slot;
-    if (!mesh || this.#handles[slot] !== mesh) throw new Error('Pictor: mesh does not belong to this renderer or was released');
+    const slot = this.#slotOf(mesh);
+    if (slot === undefined) throw new Error('Pictor: mesh does not belong to this renderer or was released');
     this.#gl.deleteBuffer(this.#buffers[slot]);
+    this.#slots.delete(mesh);
     this.#buffers[slot] = null; this.#counts[slot] = 0; this.#handles[slot] = null; this.#free.push(slot);
   }
   beginFrame(frame) {
@@ -81,8 +88,8 @@ export class PictorRenderer {
     if (!this.#frame) throw new Error('Pictor: submit outside frame');
     if (!object || typeof object !== 'object') throw new Error('Pictor: invalid object descriptor');
     const { mesh, transform } = object;
-    const slot = mesh?.slot;
-    if (!mesh || this.#handles[slot] !== mesh) throw new Error('Pictor: unknown mesh');
+    const slot = this.#slotOf(mesh);
+    if (slot === undefined) throw new Error('Pictor: unknown mesh');
     if (!(transform instanceof Float32Array) || transform.length !== 16 || !transform.every(Number.isFinite)) throw new Error('Pictor: invalid transform');
     const gl = this.#gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.#buffers[slot]);
