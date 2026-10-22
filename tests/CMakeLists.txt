@@ -31,6 +31,7 @@ set(PICTOR_TESTS
     unit_pipeline_registries_test
     unit_compiled_graph_wiring_test
     unit_parser_dos_test
+    unit_fbx_binary_bounds_test
     unit_file_watch_test
     unit_pipeline_hot_reload_test
     unit_gpu_ring_flight_test
@@ -79,6 +80,9 @@ foreach(_t ${PICTOR_TESTS})
              COMMAND ${_t}
              WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endforeach()
+
+# A regression in node offsets can otherwise loop without bound.
+set_tests_properties(unit_fbx_binary_bounds_test PROPERTIES TIMEOUT 10)
 
 # Backend-neutral face (spec/architecture/multi-rhi.md §6 S0): these tests link only
 # pictor_core, never `pictor`, so they build without any GPU SDK. The internal RHI

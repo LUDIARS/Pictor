@@ -697,6 +697,8 @@ bool read_node(BinReader& br, FBXNode& out, uint32_t version, int depth, std::st
         return true;
     }
 
+    if (end_offset > br.size) return set_err(error,"binary: end_offset overruns");
+
     if (br.pos + name_len > br.size) return set_err(error,"binary: name EOF");
     out.name.assign(reinterpret_cast<const char*>(br.data + br.pos), name_len);
     br.pos += name_len;
@@ -718,9 +720,11 @@ bool read_node(BinReader& br, FBXNode& out, uint32_t version, int depth, std::st
         if (child.empty()) break;       // sentinel に到達
         out.children.push_back(std::move(child));
     }
-    if (br.pos != end_offset) {
-        // パディングや読み残しがあれば end_offset に強制移動 (許容する)
-        if (end_offset > br.size) return set_err(error,"binary: end_offset overruns");
+    // Never rewind past a header, property, child, or sentinel already consumed:
+    // the caller would otherwise repeatedly append the same non-empty node.
+    if (end_offset < br.pos) return set_err(error,"binary: end_offset precedes consumed data");
+    if (br.pos < end_offset) {
+        // Forward padding after a sentinel remains permitted.
         br.pos = static_cast<size_t>(end_offset);
     }
     return true;
