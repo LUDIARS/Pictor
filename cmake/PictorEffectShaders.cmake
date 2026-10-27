@@ -1,5 +1,6 @@
 # Each effect owns shader outputs. Distinct output directories avoid duplicate
 # producers when two optional modules use the same fullscreen vertex shader.
+# Extra arguments are #include'd GLSL files: editing them rebuilds every output.
 function(pictor_effect_shaders target sources output_dir)
     if(NOT Vulkan_GLSLC_EXECUTABLE)
         message(STATUS "${target}: supply precompiled SPIR-V to the host (glslc unavailable)")
@@ -12,7 +13,7 @@ function(pictor_effect_shaders target sources output_dir)
         add_custom_command(OUTPUT "${output}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}"
             COMMAND "${Vulkan_GLSLC_EXECUTABLE}" "${source}" -o "${output}"
-            DEPENDS "${source}"
+            DEPENDS "${source}" ${ARGN}
             VERBATIM)
         list(APPEND outputs "${output}")
     endforeach()

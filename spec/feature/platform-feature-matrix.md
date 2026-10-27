@@ -321,7 +321,7 @@ demo/tools targetあり。毛皮・縄・涙・影絵等のdemo専用表現を�
 
 demo単位の使用機能・モジュール依存・固有パイプライン・対応バックエンド・ビルド/実機確認は `spec/feature/demo-platform-matrix.md`（`spec/data/demo-platform-matrix.json`）へ展開済み。
 
-根拠: `CMakeLists.txt`、`spec/tasks/2026-09-02-fbx-viewer-fur-effects.md`、`spec/feature/shadow-play-kirie-backdrop.md`
+根拠: `CMakeLists.txt`、`spec/tasks/2026-09-02-fbx-viewer-fur-effects.md`、`ErgoDemo:spec/feature/shadow-play-kirie-backdrop.md`
 
 ### PC-FEAT-HW-01 Intel PCMハードウェアカウンター
 

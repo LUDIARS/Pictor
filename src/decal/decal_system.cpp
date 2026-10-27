@@ -27,7 +27,10 @@ struct DecalPC {
     float depth_fade;
     float _pad0;
     float decal_axis[4];   // xyz = 投影軸 (ワールド空間, 正規化), w 未使用
+    float params[kDecalMaterialParamCount];   // マテリアル固有 (vec4 x2)
 };
+// Vulkan が保証する push constant の最小上限は 128 byte。
+static_assert(sizeof(DecalPC) <= 128, "DecalPC must fit the guaranteed push constant size");
 
 /// 一般 4x4 逆行列 (余因子法)。 行優先配列 in/out。
 void mat4_inverse(const float m[16], float out[16]) {
@@ -261,13 +264,32 @@ bool DecalSystem::create_descriptors_() {
 }
 
 bool DecalSystem::create_pipelines_(const std::string& shader_dir) {
-    VkShaderModule vs = load_shader_(shader_dir + "/fullscreen_quad.vert.spv");
-    VkShaderModule fs = load_shader_(shader_dir + "/decal.frag.spv");
-    if (!vs || !fs) {
-        if (vs) vkDestroyShaderModule(device_, vs, nullptr);
-        if (fs) vkDestroyShaderModule(device_, fs, nullptr);
+    shader_dir_ = shader_dir;
+
+    VkDescriptorSetLayout sets[2] = {dsl_scene_, dsl_decal_};
+    VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                            static_cast<uint32_t>(sizeof(DecalPC))};
+    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pl.setLayoutCount         = 2;
+    pl.pSetLayouts            = sets;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges    = &pcr;
+    if (vkCreatePipelineLayout(device_, &pl, nullptr, &pipeline_layout_) != VK_SUCCESS)
         return false;
-    }
+
+    VkShaderModule fs = load_shader_(shader_dir + "/decal.frag.spv");
+    if (!fs) return false;
+    MaterialPipelines builtin;
+    const bool ok = create_material_pipelines_(fs, builtin);
+    vkDestroyShaderModule(device_, fs, nullptr);
+    if (!ok) return false;
+    materials_.push_back(builtin);
+    return true;
+}
+
+bool DecalSystem::create_material_pipelines_(VkShaderModule fs, MaterialPipelines& out) {
+    VkShaderModule vs = load_shader_(shader_dir_ + "/fullscreen_quad.vert.spv");
+    if (!vs) return false;
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -304,20 +326,6 @@ bool DecalSystem::create_pipelines_(const std::string& shader_dir) {
         VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dy.dynamicStateCount = 2;
     dy.pDynamicStates    = dyn;
-
-    VkDescriptorSetLayout sets[2] = {dsl_scene_, dsl_decal_};
-    VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                            static_cast<uint32_t>(sizeof(DecalPC))};
-    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pl.setLayoutCount         = 2;
-    pl.pSetLayouts            = sets;
-    pl.pushConstantRangeCount = 1;
-    pl.pPushConstantRanges    = &pcr;
-    if (vkCreatePipelineLayout(device_, &pl, nullptr, &pipeline_layout_) != VK_SUCCESS) {
-        vkDestroyShaderModule(device_, vs, nullptr);
-        vkDestroyShaderModule(device_, fs, nullptr);
-        return false;
-    }
 
     // ブレンドモードごとに 1 パイプライン (シェーダは共通、 fixed-function の
     // ブレンド状態だけ差し替える)。
@@ -372,12 +380,35 @@ bool DecalSystem::create_pipelines_(const std::string& shader_dir) {
     multiply.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     multiply.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 
-    bool ok = make_pipe(alpha,    pipeline_alpha_)
-           && make_pipe(additive, pipeline_additive_)
-           && make_pipe(multiply, pipeline_multiply_);
+    bool ok = make_pipe(alpha,    out.alpha)
+           && make_pipe(additive, out.additive)
+           && make_pipe(multiply, out.multiply);
     vkDestroyShaderModule(device_, vs, nullptr);
-    vkDestroyShaderModule(device_, fs, nullptr);
+    if (!ok) destroy_material_pipelines_(out);
     return ok;
+}
+
+void DecalSystem::destroy_material_pipelines_(MaterialPipelines& m) {
+    if (m.alpha)    vkDestroyPipeline(device_, m.alpha, nullptr);
+    if (m.additive) vkDestroyPipeline(device_, m.additive, nullptr);
+    if (m.multiply) vkDestroyPipeline(device_, m.multiply, nullptr);
+    m = MaterialPipelines{};
+}
+
+DecalMaterialHandle DecalSystem::register_material(const std::string& frag_spv_path) {
+    if (!initialized_) return DEFAULT_DECAL_MATERIAL;
+    VkShaderModule fs = load_shader_(frag_spv_path);
+    if (!fs) return DEFAULT_DECAL_MATERIAL;
+    MaterialPipelines m;
+    const bool ok = create_material_pipelines_(fs, m);
+    vkDestroyShaderModule(device_, fs, nullptr);
+    if (!ok) {
+        std::fprintf(stderr, "[decal] material pipeline creation failed: %s\n",
+                     frag_spv_path.c_str());
+        return DEFAULT_DECAL_MATERIAL;
+    }
+    materials_.push_back(m);
+    return static_cast<DecalMaterialHandle>(materials_.size() - 1);
 }
 
 VkDescriptorSet DecalSystem::alloc_texture_set_(VkImageView texture) {
@@ -513,9 +544,11 @@ void DecalSystem::record(VkCommandBuffer cmd, const float view[16],
     VkPipeline bound = VK_NULL_HANDLE;
     for (uint32_t idx : order) {
         const DecalEntry& e = decals_[idx];
-        VkPipeline want = pipeline_alpha_;
-        if (e.desc.blend == DecalBlend::Additive)      want = pipeline_additive_;
-        else if (e.desc.blend == DecalBlend::Multiply) want = pipeline_multiply_;
+        const MaterialPipelines& mat = materials_[resolve_decal_material(
+            e.desc.material, static_cast<uint32_t>(materials_.size()))];
+        VkPipeline want = mat.alpha;
+        if (e.desc.blend == DecalBlend::Additive)      want = mat.additive;
+        else if (e.desc.blend == DecalBlend::Multiply) want = mat.multiply;
         if (want != bound) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
             bound = want;
@@ -532,6 +565,7 @@ void DecalSystem::record(VkCommandBuffer cmd, const float view[16],
         float al = std::sqrt(ax * ax + ay * ay + az * az);
         if (al > 1e-6f) { ax /= al; ay /= al; az /= al; }
         pc.decal_axis[0] = ax; pc.decal_axis[1] = ay; pc.decal_axis[2] = az;
+        std::memcpy(pc.params, e.desc.params, sizeof(pc.params));
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipeline_layout_, 1, 1, &e.tex_set, 0, nullptr);
@@ -607,6 +641,14 @@ void DecalSystem::clear() {
 #endif
 }
 
+uint32_t DecalSystem::material_count() const {
+#ifdef PICTOR_HAS_VULKAN
+    return static_cast<uint32_t>(materials_.size());
+#else
+    return 0;
+#endif
+}
+
 int DecalSystem::count() const {
 #ifdef PICTOR_HAS_VULKAN
     int n = 0;
@@ -621,9 +663,8 @@ void DecalSystem::shutdown() {
 #ifdef PICTOR_HAS_VULKAN
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
-        if (pipeline_alpha_)    vkDestroyPipeline(device_, pipeline_alpha_, nullptr);
-        if (pipeline_additive_) vkDestroyPipeline(device_, pipeline_additive_, nullptr);
-        if (pipeline_multiply_) vkDestroyPipeline(device_, pipeline_multiply_, nullptr);
+        for (auto& m : materials_) destroy_material_pipelines_(m);
+        materials_.clear();
         if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
         if (desc_pool_)       vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
         if (dsl_scene_)       vkDestroyDescriptorSetLayout(device_, dsl_scene_, nullptr);
@@ -636,7 +677,6 @@ void DecalSystem::shutdown() {
         if (framebuffer_) vkDestroyFramebuffer(device_, framebuffer_, nullptr);
         if (render_pass_) vkDestroyRenderPass(device_, render_pass_, nullptr);
         if (sampler_)     vkDestroySampler(device_, sampler_, nullptr);
-        pipeline_alpha_ = pipeline_additive_ = pipeline_multiply_ = VK_NULL_HANDLE;
         pipeline_layout_ = VK_NULL_HANDLE;
         desc_pool_ = VK_NULL_HANDLE;
         dsl_scene_ = dsl_decal_ = VK_NULL_HANDLE;

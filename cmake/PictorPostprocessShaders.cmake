@@ -26,7 +26,5 @@ set(_postprocess_shaders
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/tone_mapping.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/dof.comp
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/gaussian_blur.comp
-        ${CMAKE_CURRENT_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.vert
-        ${CMAKE_CURRENT_SOURCE_DIR}/demo/postprocess/shaders/pp_demo_scene.frag
 )
 pictor_effect_shaders(pictor_postprocess "${_postprocess_shaders}" "${CMAKE_CURRENT_BINARY_DIR}/shaders")

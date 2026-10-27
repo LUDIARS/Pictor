@@ -9,9 +9,16 @@
     },
     {
       "pathPattern": "(^|/)include/pictor/decal/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)shaders/decal/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_decal_[^/]+$"
     }
   ],
   "specRefs": [
-    "spec/feature/optional-effects-modules.md"
+    "spec/feature/optional-effects-modules.md",
+    "spec/feature/subsystem/decal.md"
   ]
 }

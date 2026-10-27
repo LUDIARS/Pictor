@@ -350,7 +350,7 @@ cmake --build build-android-x86_64 -- -j
 ## 9. 関連 Issue / 参照
 
 - Pictor `plan.md` — 全体設計
-- `demo/mobile/main.cpp` — MobileLow / MobileHigh プロファイル、lifecycle simulation (本書 Phase 2 の素材)
+- ErgoDemo `demos/mobile/main.cpp` — MobileLow / MobileHigh プロファイル、lifecycle simulation (本書 Phase 2 の素材。2026-10-27 に Pictor の `demo/mobile/` から [LUDIARS/ErgoDemo](https://github.com/LUDIARS/ErgoDemo) へ移設。以下の `pictor_mobile_demo` の記述は移設前の計画)
 - `include/pictor/core/mobile_lifecycle.h` — Phase 3 の JNI がここをドライブする
 - `src/surface/vulkan_context.cpp` — Android surface 作成パスは既に存在 (L262-273)
 
