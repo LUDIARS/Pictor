@@ -362,13 +362,6 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
     add_executable(pictor_fbx_demo demo/fbx/main.cpp)
     target_link_libraries(pictor_fbx_demo PRIVATE pictor)
 
-    # Mobile rendering pipeline demo (headless — no Vulkan/GLFW required).
-    # Showcases MobileLow / MobileHigh profiles and the external
-    # PipelineProfileBuilder API, so it builds on CI and on mobile toolchains
-    # where a Vulkan SDK isn't available.
-    add_executable(pictor_mobile_demo demo/mobile/main.cpp)
-    target_link_libraries(pictor_mobile_demo PRIVATE pictor)
-
     # Text effects smoke test (headless). Exercises every text_effects
     # and glyph_path_effects entry point on a synthetic alpha/path pair
     # and reports pass/fail via exit code — handy for CI.
@@ -380,16 +373,6 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
     # back, asserts field-for-field equality. Non-zero exit on divergence.
     add_executable(pictor_material_serializer_demo demo/material_serializer/main.cpp)
     target_link_libraries(pictor_material_serializer_demo PRIVATE pictor)
-
-    # Copy sample kv-config file next to the binary so --config= works out of
-    # the box from the build tree.
-    add_custom_command(TARGET pictor_mobile_demo POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/profiles
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_SOURCE_DIR}/demo/mobile/profiles/mobile_custom.ini
-            ${CMAKE_BINARY_DIR}/profiles/mobile_custom.ini
-        COMMENT "Staging mobile demo profile config"
-    )
 
     # FBX viewer demo (Vulkan + skinning, textured lit shader)
     if(Vulkan_FOUND AND glfw3_FOUND)
@@ -440,43 +423,13 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         add_executable(pictor_demo demo/main.cpp)
         target_link_libraries(pictor_demo PRIVATE pictor)
 
-        # PBR graphics demo
-        add_executable(pictor_graphics_demo demo/graphics/main.cpp)
-        target_link_libraries(pictor_graphics_demo PRIVATE pictor)
-
-        # Ocean wave tessellation demo
-        add_executable(pictor_ocean_demo demo/ocean/main.cpp)
-        target_link_libraries(pictor_ocean_demo PRIVATE pictor)
-
-        # Shadow play (影絵) demo — its runtime shaders must be compiled by glslc.
-        if(Vulkan_GLSLC_EXECUTABLE)
-            add_executable(pictor_shadow_play_demo
-                demo/shadow_play/main.cpp
-                demo/shadow_play/sp_kirie_backdrop.cpp
-                third_party/stb/stb_image_impl.cpp
-            )
-            target_link_libraries(pictor_shadow_play_demo PRIVATE pictor)
-            target_include_directories(pictor_shadow_play_demo PRIVATE third_party/stb)
-            # The demo loads two fixed 1024px assets; reject unexpectedly huge
-            # replacement images before stb_image allocates their decoded data.
-            target_compile_definitions(pictor_shadow_play_demo PRIVATE STBI_MAX_DIMENSIONS=8192)
-            if(MSVC)
-                # /utf-8 does not propagate from the pictor lib to demo targets.
-                target_compile_options(pictor_shadow_play_demo PRIVATE /utf-8)
-            endif()
-        else()
-            message(STATUS "Pictor: shadow play demo disabled (glslc not found)")
-        endif()
+        # シェーダー / パイプラインプリセットのデモ (PBR・海面・影絵・ポストエフェクト・
+        # 2D テクスチャ・モバイルプロファイル) は LUDIARS/Pinacotheca へ移した。
+        # Ergo (ergo_bind) でパラメータを調整しながら見るデモ集はそちらに置く。
 
         # Text rendering demo
         add_executable(pictor_text_demo demo/text/main.cpp)
         target_link_libraries(pictor_text_demo PRIVATE pictor)
-
-        # Post-process demo
-        if(TARGET pictor_postprocess)
-            add_executable(pictor_postprocess_demo demo/postprocess/main.cpp)
-            target_link_libraries(pictor_postprocess_demo PRIVATE Pictor::postprocess)
-        endif()
 
         # VR demo (OpenXR)。 OpenXR backend を外したビルドでは target 自体を作らない。
         if(PICTOR_ENABLE_OPENXR)
@@ -500,15 +453,6 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
         # false and the demo exits cleanly at startup.
         add_executable(pictor_rive_demo demo/rive/main.cpp)
         target_link_libraries(pictor_rive_demo PRIVATE pictor)
-
-        # 2D Texture rendering demo
-        add_executable(pictor_texture2d_demo
-            demo/texture2d/main.cpp
-            demo/texture2d/texture2d_renderer.cpp
-            third_party/stb/stb_image_impl.cpp
-        )
-        target_include_directories(pictor_texture2d_demo PRIVATE demo/texture2d third_party/stb)
-        target_link_libraries(pictor_texture2d_demo PRIVATE pictor)
 
         if(TARGET pictor_sharc_vulkan)
             # SHaRC 拡張デモ (D1 roughness ladder / D2 逆光透過、 4 パス compute)
@@ -551,7 +495,7 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             target_compile_options(pictor_graph_demo PRIVATE /utf-8)
         endif()
 
-        message(STATUS "Pictor: All demos enabled (benchmark, window, graphics, ocean, text, postprocess, texture2d, graph)")
+        message(STATUS "Pictor: All demos enabled (benchmark, window, text, graph)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")
     endif()
@@ -589,11 +533,10 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
     # コンパイルエラーになる。 全 demo target に個別指定する。
     if(MSVC)
         foreach(_demo
-            pictor_benchmark pictor_fbx_demo pictor_mobile_demo
+            pictor_benchmark pictor_fbx_demo
             pictor_text_effects_demo pictor_material_serializer_demo
-            pictor_fbx_viewer pictor_demo pictor_graphics_demo
-            pictor_ocean_demo pictor_text_demo pictor_postprocess_demo
-            pictor_rive_demo pictor_texture2d_demo pictor_sharc_demo)
+            pictor_fbx_viewer pictor_demo pictor_text_demo
+            pictor_rive_demo pictor_sharc_demo)
             if(TARGET ${_demo})
                 target_compile_options(${_demo} PRIVATE /utf-8)
             endif()
@@ -622,33 +565,10 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/shadow_depth.frag
         ${CMAKE_SOURCE_DIR}/shaders/hologram.vert
         ${CMAKE_SOURCE_DIR}/shaders/hologram.frag
-        ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.vert
-        ${CMAKE_SOURCE_DIR}/demo/graphics/shaders/pbr_demo.frag
-        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.vert
-        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tesc
-        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.tese
-        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean.frag
-        ${CMAKE_SOURCE_DIR}/demo/ocean/shaders/ocean_wireframe.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth.vert
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_screen.vert
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_screen.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_lit.vert
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_lit.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_cut.vert
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_cut.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_trunk.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_depth_figure.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_sheet.vert
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_sheet.frag
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_godray.vert
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_godray.frag
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.vert
         ${CMAKE_SOURCE_DIR}/demo/text/shaders/text_quad.frag
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.vert
         ${CMAKE_SOURCE_DIR}/demo/shaders/text_overlay.frag
-        ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.vert
-        ${CMAKE_SOURCE_DIR}/demo/texture2d/shaders/texture2d.frag
         ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_node.vert
         ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_edge.vert
         ${CMAKE_SOURCE_DIR}/demo/graph/shaders/graph_flat.frag
@@ -677,11 +597,6 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         ${CMAKE_SOURCE_DIR}/shaders/shadow.glsl
         ${CMAKE_SOURCE_DIR}/shaders/velocity.glsl
     )
-    set(PICTOR_SHADOW_PLAY_GLSL_INCLUDES
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_scene.glsl
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_cutout.glsl
-        ${CMAKE_SOURCE_DIR}/demo/shadow_play/shaders/sp_shapes.glsl
-    )
     set(PICTOR_FBX_VIEWER_GLSL_INCLUDES
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/fur_shell_common.glsl
         ${CMAKE_SOURCE_DIR}/demo/fbx_viewer/shaders/nawa_binding_common.glsl
@@ -692,9 +607,6 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         set(SPIRV_OUT ${CMAKE_BINARY_DIR}/shaders/${SHADER_NAME}.spv)
         set(SHADER_DEPENDS ${SHADER} ${PICTOR_GLSL_INCLUDES})
         set(SHADER_OPTIONS)
-        if(SHADER MATCHES "/demo/shadow_play/shaders/")
-            list(APPEND SHADER_DEPENDS ${PICTOR_SHADOW_PLAY_GLSL_INCLUDES})
-        endif()
         if(SHADER MATCHES "/demo/fbx_viewer/shaders/")
             list(APPEND SHADER_DEPENDS ${PICTOR_FBX_VIEWER_GLSL_INCLUDES})
         endif()
@@ -721,23 +633,8 @@ if(PICTOR_BUILD_DEMO AND Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
     if(TARGET pictor_benchmark)
         add_dependencies(pictor_benchmark pictor_shaders)
     endif()
-    if(TARGET pictor_graphics_demo)
-        add_dependencies(pictor_graphics_demo pictor_shaders)
-    endif()
-    if(TARGET pictor_ocean_demo)
-        add_dependencies(pictor_ocean_demo pictor_shaders)
-    endif()
-    if(TARGET pictor_shadow_play_demo)
-        add_dependencies(pictor_shadow_play_demo pictor_shaders)
-    endif()
     if(TARGET pictor_text_demo)
         add_dependencies(pictor_text_demo pictor_shaders)
-    endif()
-    if(TARGET pictor_postprocess_demo)
-        add_dependencies(pictor_postprocess_demo pictor_shaders)
-    endif()
-    if(TARGET pictor_texture2d_demo)
-        add_dependencies(pictor_texture2d_demo pictor_shaders)
     endif()
     if(TARGET pictor_graph_demo)
         add_dependencies(pictor_graph_demo pictor_shaders)
@@ -760,25 +657,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/fonts)
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/fonts ${CMAKE_BINARY_DIR}/fonts
         COMMENT "Copying fonts to build directory"
     )
-    foreach(_target pictor_demo pictor_text_demo pictor_graphics_demo pictor_postprocess_demo pictor_ocean_demo pictor_texture2d_demo)
+    foreach(_target pictor_demo pictor_text_demo)
         if(TARGET ${_target})
             add_dependencies(${_target} pictor_fonts)
         endif()
     endforeach()
-endif()
-
-# Copy texture2d demo textures to build output
-if(EXISTS ${CMAKE_SOURCE_DIR}/demo/texture2d/textures)
-    add_custom_target(pictor_texture2d_assets ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/textures
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_SOURCE_DIR}/demo/texture2d/textures
-            ${CMAKE_BINARY_DIR}/textures
-        COMMENT "Copying texture2d demo assets to build directory"
-    )
-    if(TARGET pictor_texture2d_demo)
-        add_dependencies(pictor_texture2d_demo pictor_texture2d_assets)
-    endif()
 endif()
 
 # Copy fbx_viewer test assets (UnityChan under UCL — see fbx/model1/LICENSE.md).

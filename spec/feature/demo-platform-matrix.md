@@ -30,20 +30,20 @@
 |---|---|---|---|---|---|---|---|
 | PC-DEMO-01 100万球ベンチマーク (`pictor_benchmark`) | 対象外 | VK/CPU | CPU | VK/CPU | VK※/CPU | 対象外 | 対象外 |
 | PC-DEMO-02 FBX読込・アニメーション (`pictor_fbx_demo`) | 対象外 | CPU | CPU | CPU | CPU | 対象外 | 対象外 |
-| PC-DEMO-03 モバイル描画プロファイル (`pictor_mobile_demo`) | 対象外 | CPU | CPU | CPU | CPU | 対象外 | 対象外 |
+| PC-DEMO-03 モバイル描画プロファイル (移設済み → Pinacotheca `pinacotheca_mobile`) | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 |
 | PC-DEMO-04 文字エフェクトsmoke (`pictor_text_effects_demo`) | 対象外 | CPU | CPU | CPU | CPU | 対象外 | 対象外 |
 | PC-DEMO-05 マテリアルJSON往復smoke (`pictor_material_serializer_demo`) | 対象外 | CPU | CPU | CPU | CPU | 対象外 | 対象外 |
 | PC-DEMO-06 FBXビューア 毛皮・縄・涙 (`pictor_fbx_viewer`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
 | PC-DEMO-07 PN多項式曲面 (`pictor_pn_demo`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
 | PC-DEMO-08 Vulkanウィンドウ (`pictor_demo`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
-| PC-DEMO-09 PBR・CSM影・SSAO (`pictor_graphics_demo`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
-| PC-DEMO-10 海面テッセレーション (`pictor_ocean_demo`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
-| PC-DEMO-11 影絵 (`pictor_shadow_play_demo`) | 対象外 | 条件VK | 対象外 | 条件VK | 条件VK※ | 対象外 | 対象外 |
+| PC-DEMO-09 PBR・CSM影・SSAO (移設済み → Pinacotheca `pinacotheca_graphics`) | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 |
+| PC-DEMO-10 海面テッセレーション (移設済み → Pinacotheca `pinacotheca_ocean`) | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 |
+| PC-DEMO-11 影絵 (移設済み → Pinacotheca `pinacotheca_shadow_play`) | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 |
 | PC-DEMO-12 文字描画 (`pictor_text_demo`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
-| PC-DEMO-13 ポストエフェクト (`pictor_postprocess_demo`) | 対象外 | 条件VK | 対象外 | 条件VK | 条件VK※ | 対象外 | 対象外 |
+| PC-DEMO-13 ポストエフェクト (移設済み → Pinacotheca `pinacotheca_postprocess`) | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 |
 | PC-DEMO-14 VR/OpenXR (`pictor_vr_openxr_demo`) | 対象外 | 条件VK | 対象外 | 条件VK | 対象外 | 対象外 | 対象外 |
 | PC-DEMO-15 Rive再生 (`pictor_rive_demo`) | 対象外 | 条件VK | 対象外 | 条件VK | 条件VK※ | 対象外 | 対象外 |
-| PC-DEMO-16 2Dテクスチャ (`pictor_texture2d_demo`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
+| PC-DEMO-16 2Dテクスチャ (移設済み → Pinacotheca `pinacotheca_texture2d`) | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 | 移設 |
 | PC-DEMO-17 SHaRC拡張 Vulkan (`pictor_sharc_demo`) | 対象外 | 条件VK | 対象外 | 条件VK | 条件VK※ | 対象外 | 対象外 |
 | PC-DEMO-18 SHaRC D3D12 headless (`pictor_sharc_dx12_test`) | 対象外 | 対象外 | 条件DX12 | 対象外 | 対象外 | 対象外 | 対象外 |
 | PC-DEMO-19 関係グラフ・dock (`pictor_graph_demo`) | 対象外 | VK | 対象外 | VK | VK※ | 対象外 | 対象外 |
@@ -77,6 +77,8 @@
 - 固有パイプライン: 描画なし。FBX読込とAnimationSystemの評価結果をconsoleへ出力。
 
 ### PC-DEMO-03 モバイル描画プロファイル — `pictor_mobile_demo`
+
+- **移設 (2026-10-27)**: [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) の `demos/mobile/` (target `pinacotheca_mobile`) へ移した。Pictor ではビルドしない。以下は移設時点の記述で、Ergo でのパラメータ調整は Pinacotheca 側の文書を正とする。
 
 - 依存: `pictor`、headless。POST_BUILDで `demo/mobile/profiles/mobile_custom.ini` を配置。
 - ライブラリ機能: PC-FEAT-DOD-01、PC-FEAT-PIPE-01、PC-FEAT-PLAT-04
@@ -121,11 +123,15 @@
 
 ### PC-DEMO-09 PBR・CSM影・SSAO — `pictor_graphics_demo`
 
+- **移設 (2026-10-27)**: [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) の `demos/graphics/` (target `pinacotheca_graphics`) へ移した。Pictor ではビルドしない。以下は移設時点の記述で、Ergo でのパラメータ調整は Pinacotheca 側の文書を正とする。
+
 - 依存: `pictor`、Vulkan+GLFW。
 - ライブラリ機能: PC-FEAT-PLAT-01、PC-FEAT-DOD-01、PC-FEAT-DRAW-02、PC-FEAT-DRAW-03、PC-FEAT-DRAW-04、PC-FEAT-DRAW-05
 - 固有パイプライン: demo独自のPBR shader(`pbr_demo.*`)に、ライブラリのGIConfig(CSM 3段・SSAO有効・probe無効)を設定。影・SSAO・GIの完成度は機能別対応表の各行に従う。
 
 ### PC-DEMO-10 海面テッセレーション — `pictor_ocean_demo`
+
+- **移設 (2026-10-27)**: [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) の `demos/ocean/` (target `pinacotheca_ocean`) へ移した。Pictor ではビルドしない。以下は移設時点の記述で、Ergo でのパラメータ調整は Pinacotheca 側の文書を正とする。
 
 - 依存: `pictor`、Vulkan+GLFW。実行にはtessellation shader対応GPUが必要。
 - ライブラリ機能: PC-FEAT-PLAT-01
@@ -134,9 +140,11 @@
 
 ### PC-DEMO-11 影絵 — `pictor_shadow_play_demo`
 
+- **移設 (2026-10-27)**: [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) の `demos/shadow_play/` (target `pinacotheca_shadow_play`) へ移した。Pictor ではビルドしない。以下は移設時点の記述で、Ergo でのパラメータ調整は Pinacotheca 側の文書を正とする。
+
 - 依存: `pictor`、Vulkan+GLFW、glslc(無ければtargetを作らない)、stb。
 - ライブラリ機能: PC-FEAT-PLAT-01
-- demo専用: PCFなしのハードシャドウとセロファン色8灯、障子紙の透過(SSS近似)、切り絵バックドロップ・月光カットアウト・ゴッドレイ(`spec/feature/shadow-play-kirie-backdrop.md`)。
+- demo専用: PCFなしのハードシャドウとセロファン色8灯、障子紙の透過(SSS近似)、切り絵バックドロップ・月光カットアウト・ゴッドレイ(`Pinacotheca:spec/feature/shadow-play-kirie-backdrop.md`)。
 - 固有パイプライン: VulkanContextとGLFWだけを使い、影map・紙スクリーン・ゴッドレイのパスをdemo内で構成。ライブラリの影(PC-FEAT-DRAW-03)は使わない。
 
 ### PC-DEMO-12 文字描画 — `pictor_text_demo`
@@ -145,6 +153,8 @@
 - 固有パイプライン: ライブラリのフォント・ラスタライズ・画像/SVG出力をdemoのoverlay shaderで表示。
 
 ### PC-DEMO-13 ポストエフェクト — `pictor_postprocess_demo`
+
+- **移設 (2026-10-27)**: [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) の `demos/postprocess/` (target `pinacotheca_postprocess`) へ移した。Pictor ではビルドしない。以下は移設時点の記述で、Ergo でのパラメータ調整は Pinacotheca 側の文書を正とする。
 
 - 依存: `Pictor::postprocess`、Vulkan+GLFW、`PICTOR_ENABLE_POSTPROCESS=ON`(既定ON。外すとtargetなし)。
 - ライブラリ機能: PC-FEAT-PLAT-01、PC-FEAT-DOD-01、PC-FEAT-DOD-08、PC-FEAT-DRAW-08
@@ -164,6 +174,8 @@
 - 固有パイプライン: 公式 `.riv` を `pictor::RiveRenderer` で再生。描画機能はrive-runtime prebuiltが揃った場合だけ。
 
 ### PC-DEMO-16 2Dテクスチャ — `pictor_texture2d_demo`
+
+- **移設 (2026-10-27)**: [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) の `demos/texture2d/` (target `pinacotheca_texture2d`) へ移した。Pictor ではビルドしない。以下は移設時点の記述で、Ergo でのパラメータ調整は Pinacotheca 側の文書を正とする。
 
 - 依存: `pictor`、Vulkan+GLFW、stb。ライブラリ機能: PC-FEAT-PLAT-01、PC-FEAT-DOD-08
 - demo専用: 2D quad描画(拡縮・回転・不透明度・filter・tint、`texture2d_renderer.cpp`)。

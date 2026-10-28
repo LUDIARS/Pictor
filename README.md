@@ -89,7 +89,8 @@ cmake --build build
 - `libpictor.a` — 静的ライブラリ
 - `pictor_demo` — Vulkan ウィンドウデモ（`PICTOR_BUILD_DEMO=ON` かつ Vulkan + GLFW 必要）
 - `pictor_benchmark` — 1M Spheres ベンチマーク実行ファイル（`PICTOR_BUILD_DEMO=ON`、headless 可）
-- その他 `pictor_fbx_demo` / `pictor_mobile_demo` / `pictor_graphics_demo` / `pictor_text_demo` / `pictor_postprocess_demo` / `pictor_rive_demo` 等のデモ実行ファイル
+- その他 `pictor_fbx_demo` / `pictor_text_demo` / `pictor_rive_demo` 等のデモ実行ファイル
+- シェーダー / パイプラインプリセットのデモ (PBR・海面・影絵・ポストエフェクト・2D テクスチャ・モバイルプロファイル) と、Ergo でパラメータを調整するデモ集は [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) にある
 
 ### プロジェクトへの組み込み
 

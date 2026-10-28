@@ -871,7 +871,7 @@
       "evidence": [
         "CMakeLists.txt",
         "spec/tasks/2026-09-02-fbx-viewer-fur-effects.md",
-        "spec/feature/shadow-play-kirie-backdrop.md"
+        "Pinacotheca:spec/feature/shadow-play-kirie-backdrop.md"
       ],
       "platforms": [
         "一部Web",

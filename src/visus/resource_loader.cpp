@@ -39,17 +39,20 @@ bool fail(std::string* error, const char* message) {
 
 bool normalized_relative_path(std::string_view input, fs::path& out,
                               std::string* error) {
-#ifdef _WIN32
-    // ':' in a relative Win32 path selects an NTFS alternate data stream.
-    // Asset paths name ordinary files only; allowing ADS could expose metadata
-    // attached to an otherwise permitted file.
-    if (input.find(':') != std::string_view::npos)
-        return fail(error, "FileSystemResourceLoader: alternate data stream rejected");
-#endif
     try {
         const fs::path raw{std::string(input)};
+        // 絶対パス (Windows のドライブ指定 "C:/..." を含む) を先に判定する。
+        // ドライブ名の ':' を下の代替データストリーム判定に先に拾わせると、
+        // 絶対パスなのに「alternate data stream」と誤った理由で拒否してしまう。
         if (raw.is_absolute() || raw.has_root_name() || raw.has_root_directory())
             return fail(error, "FileSystemResourceLoader: absolute path rejected");
+#ifdef _WIN32
+        // ':' in a relative Win32 path selects an NTFS alternate data stream.
+        // Asset paths name ordinary files only; allowing ADS could expose metadata
+        // attached to an otherwise permitted file.
+        if (input.find(':') != std::string_view::npos)
+            return fail(error, "FileSystemResourceLoader: alternate data stream rejected");
+#endif
 
         out = raw.lexically_normal();
         bool has_component = false;

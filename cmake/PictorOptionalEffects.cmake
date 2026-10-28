@@ -31,6 +31,7 @@ if(PICTOR_ENABLE_DECALS)
     if(Vulkan_FOUND)
         pictor_effect_shaders(pictor_decals
             "${CMAKE_CURRENT_SOURCE_DIR}/shaders/decal/decal.frag;${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess/fullscreen_quad.vert"
-            "${CMAKE_CURRENT_BINARY_DIR}/shaders/decal")
+            "${CMAKE_CURRENT_BINARY_DIR}/shaders/decal"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/decal/decal_common.glsl")
     endif()
 endif()

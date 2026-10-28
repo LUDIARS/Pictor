@@ -13,6 +13,7 @@ scene depth から world 位置を復元し、OBB 内に収まる画素へデカ
 | `DecalDescriptor` | world transform (単位 OBB `[-0.5,0.5]³`→world) / VkImageView / blend / opacity / angle fade / depth fade / sort order |
 | `DecalBlend` | Alpha / Additive / Multiply |
 | `DecalHandle` | 1-based 32bit (0=INVALID)、free-list でスロット再利用 |
+| `DecalMaterialHandle` | デカールマテリアル (フラグメントシェーダ)。0=組み込み `decal.frag`、`register_material()` が 1 以上を返す |
 
 ## 投影技法
 
@@ -35,7 +36,25 @@ void remove(DecalHandle); void clear();
 
 - TTL は呼び出し側 (例: ゲーム側 GameRenderer) が opacity を更新して管理。本層は寿命を持たない
 - descriptor set0 = scene (UBO inv-view-proj + depth sampler)、set1 = per-decal texture。push constant `DecalPC` (inv_decal[16] + opacity/angle/depth fade + axis)
-- pipeline は blend モード毎に 3 本 (同一 shader)。同時上限 `kMaxDecals`=64
+- pipeline は 1 マテリアルにつき blend モード毎に 3 本 (同一 shader)。同時上限 `kMaxDecals`=64
+
+## マテリアル (独自フラグメントシェーダ)
+
+```cpp
+DecalMaterialHandle register_material(const std::string& frag_spv_path);  // initialize 後
+uint32_t            material_count() const;                               // 組み込みを含む
+// DecalDescriptor::material / params[kDecalMaterialParamCount (=8)]
+```
+
+- 契約は `shaders/decal/decal_common.glsl` に集約する。set0 (UBO inv-view-proj + depth)、set1 (decal texture)、
+  push constant `DecalPC` (inv_decal / opacity / angle・depth fade / axis / `params[2]` = vec4 x2、計 128 byte) は
+  組み込みと独自マテリアルで共通。独自シェーダは `#include "decal_common.glsl"` して `decal_sample()` で
+  OBB 判定・UV・法線・fade を得て、色だけを自分で決める。
+- 登録時にブレンドモード 3 種の pipeline を作る。失敗時は `DEFAULT_DECAL_MATERIAL` を返し、デカールは組み込みで描く。
+- 描画時のマテリアル選択は `resolve_decal_material()` (純関数)。未登録・範囲外のハンドルは組み込みへ寄せる。
+- 時間など毎フレーム変わる値はホストが `params` に入れて `update()` する (本層は時刻を持たない)。
+- 組み込み `decal.frag` は `params` を使わないので、マテリアル未指定のデカールの見た目は従来と同じ。
+- 利用例: Pinacotheca の `inukare_decal` (切り絵コラージュ風マテリアル)。
 
 ## パス位置
 
@@ -45,4 +64,4 @@ scene pass (color+depth) → DecalSystem::record (depth read-only, HDR color ble
 
 ## 依存 / フェーズ
 
-`VulkanContext`、scene の depth/color (借用)、`fullscreen_quad.vert.spv` + `decal.frag.spv`。P2=fullscreen+Alpha、P3+ で Additive/Multiply + angle/depth fade + OBB box mesh + ゲーム側 TTL 統合。関連: [gi.md](gi.md) / [surface.md](surface.md)。
+`VulkanContext`、scene の depth/color (借用)、`fullscreen_quad.vert.spv` + `decal.frag.spv` (+ 登録した独自マテリアルの `.frag.spv`)。P2=fullscreen+Alpha、P3+ で Additive/Multiply + angle/depth fade + OBB box mesh + ゲーム側 TTL 統合。関連: [gi.md](gi.md) / [surface.md](surface.md)。

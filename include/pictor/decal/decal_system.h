@@ -33,6 +33,20 @@ class VulkanContext;
 using DecalHandle = uint32_t;
 constexpr DecalHandle INVALID_DECAL = 0;
 
+/// デカールマテリアル (フラグメントシェーダ) のハンドル。 0 は組み込みの
+/// `decal.frag`。 `DecalSystem::register_material()` が 1 以上を返す。
+using DecalMaterialHandle = uint32_t;
+constexpr DecalMaterialHandle DEFAULT_DECAL_MATERIAL = 0;
+
+/// マテリアルへ渡す自由パラメータ数 (push constant の `params[2]` = vec4 x2)。
+constexpr uint32_t kDecalMaterialParamCount = 8;
+
+/// 描画に使うマテリアルの添字。 未登録・破棄済みのハンドルは組み込みへ寄せる
+/// (デカール自体は消さない)。 `registered` は組み込みを含む登録数。
+constexpr uint32_t resolve_decal_material(DecalMaterialHandle h, uint32_t registered) {
+    return h < registered ? h : DEFAULT_DECAL_MATERIAL;
+}
+
 /// 合成ブレンドモード (P2 は Alpha のみ実装、 P3 で Additive/Multiply)。
 enum class DecalBlend : uint8_t {
     Alpha    = 0,
@@ -54,6 +68,10 @@ struct DecalDescriptor {
     float       angle_fade  = 0.35f;        ///< (P3) 投影面の角度フェード
     float       depth_fade  = 0.08f;        ///< OBB の Y 端でのフェード幅
     uint32_t    sort_order  = 0;            ///< 同位置の重ね順 (小→先に描画)
+    /// 描画に使うマテリアル。 未登録のハンドルは組み込みマテリアルで描く。
+    DecalMaterialHandle material = DEFAULT_DECAL_MATERIAL;
+    /// マテリアル固有のパラメータ (組み込みマテリアルは使わない)。
+    float       params[kDecalMaterialParamCount] = {};
 };
 
 class DecalSystem {
@@ -83,7 +101,16 @@ public:
     /// 描画したカメラ行列 (column-major)。 深度からワールド座標を復元する
     /// 逆行列は内部で計算する。
     void record(VkCommandBuffer cmd, const float view[16], const float proj[16]);
+
+    /// 独自のフラグメントシェーダ (SPIR-V) をデカールマテリアルとして登録する。
+    /// シェーダは `shaders/decal/decal_common.glsl` の set/binding と push
+    /// constant 配置に従うこと (組み込み `decal.frag` と同じ契約)。 ブレンド
+    /// モード 3 種の pipeline をまとめて作る。 失敗時は DEFAULT_DECAL_MATERIAL。
+    DecalMaterialHandle register_material(const std::string& frag_spv_path);
 #endif
+
+    /// 登録済みマテリアル数 (組み込みを含む)。
+    uint32_t material_count() const;
 
     void shutdown();
 
@@ -106,7 +133,16 @@ private:
     bool create_render_pass_(VkFormat color_format);
     bool create_framebuffer_();
     bool create_descriptors_();
+    /// 1 マテリアル = ブレンドモードごとの pipeline 3 本 (シェーダは共通)。
+    struct MaterialPipelines {
+        VkPipeline alpha    = VK_NULL_HANDLE;
+        VkPipeline additive = VK_NULL_HANDLE;
+        VkPipeline multiply = VK_NULL_HANDLE;
+    };
+
     bool create_pipelines_(const std::string& shader_dir);
+    bool create_material_pipelines_(VkShaderModule fs, MaterialPipelines& out);
+    void destroy_material_pipelines_(MaterialPipelines& m);
     VkShaderModule load_shader_(const std::string& path) const;
     uint32_t find_memory_type_(uint32_t filter, VkMemoryPropertyFlags props) const;
     VkDescriptorSet alloc_texture_set_(VkImageView texture);
@@ -130,10 +166,9 @@ private:
     VkDescriptorSetLayout dsl_decal_  = VK_NULL_HANDLE;  // set 1: decal texture
     VkDescriptorSet       ds_scene_   = VK_NULL_HANDLE;
 
+    std::string      shader_dir_;                        // fullscreen_quad.vert.spv の場所
     VkPipelineLayout pipeline_layout_   = VK_NULL_HANDLE;
-    VkPipeline       pipeline_alpha_    = VK_NULL_HANDLE;
-    VkPipeline       pipeline_additive_ = VK_NULL_HANDLE;
-    VkPipeline       pipeline_multiply_ = VK_NULL_HANDLE;
+    std::vector<MaterialPipelines> materials_;            // [0] = 組み込み decal.frag
 
     std::vector<DecalEntry> decals_;
     std::vector<uint32_t>   free_slots_;

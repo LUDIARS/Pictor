@@ -71,6 +71,7 @@
     },
     {
       "id": "PC-DEMO-03",
+      "movedTo": "LUDIARS/Pinacotheca demos/mobile (target pinacotheca_mobile, 2026-10-27)",
       "name": "モバイル描画プロファイル(headless)",
       "target": "pictor_mobile_demo",
       "cmake": "CMakeLists.txt (PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)",
@@ -183,6 +184,7 @@
     },
     {
       "id": "PC-DEMO-09",
+      "movedTo": "LUDIARS/Pinacotheca demos/graphics (target pinacotheca_graphics, 2026-10-27)",
       "name": "PBR・CSM影・SSAO",
       "target": "pictor_graphics_demo",
       "cmake": "CMakeLists.txt (Vulkan_FOUND AND glfw3_FOUND)",
@@ -200,6 +202,7 @@
     },
     {
       "id": "PC-DEMO-10",
+      "movedTo": "LUDIARS/Pinacotheca demos/ocean (target pinacotheca_ocean, 2026-10-27)",
       "name": "海面テッセレーション",
       "target": "pictor_ocean_demo",
       "cmake": "CMakeLists.txt (Vulkan_FOUND AND glfw3_FOUND)",
@@ -219,6 +222,7 @@
     },
     {
       "id": "PC-DEMO-11",
+      "movedTo": "LUDIARS/Pinacotheca demos/shadow_play (target pinacotheca_shadow_play, 2026-10-27)",
       "name": "影絵(切り絵・セロファン・紙透過)",
       "target": "pictor_shadow_play_demo",
       "cmake": "CMakeLists.txt (Vulkan_FOUND AND glfw3_FOUND AND Vulkan_GLSLC_EXECUTABLE)",
@@ -229,7 +233,7 @@
       "demoOnly": [
         {"name": "ハードシャドウ(PCFなし)・セロファン色の8灯", "evidence": ["demo/shadow_play/shaders/sp_lit.frag", "demo/shadow_play/shaders/sp_depth.frag"]},
         {"name": "障子紙の透過(SSS近似)", "evidence": ["demo/shadow_play/shaders/sp_screen.frag", "demo/shadow_play/shaders/sp_sheet.frag"]},
-        {"name": "切り絵バックドロップ・月光カットアウト・ゴッドレイ", "evidence": ["demo/shadow_play/sp_kirie_backdrop.cpp", "demo/shadow_play/shaders/sp_cutout.glsl", "demo/shadow_play/shaders/sp_godray.frag", "spec/feature/shadow-play-kirie-backdrop.md"]}
+        {"name": "切り絵バックドロップ・月光カットアウト・ゴッドレイ", "evidence": ["demo/shadow_play/sp_kirie_backdrop.cpp", "demo/shadow_play/shaders/sp_cutout.glsl", "demo/shadow_play/shaders/sp_godray.frag", "Pinacotheca:spec/feature/shadow-play-kirie-backdrop.md"]}
       ],
       "pipeline": "VulkanContextとGLFWだけを使い、影map・紙スクリーン・ゴッドレイの各パスをdemo内で構成する。ライブラリの影(PC-FEAT-DRAW-03)は使わない。",
       "backends": ["Vulkan"],
@@ -257,6 +261,7 @@
     },
     {
       "id": "PC-DEMO-13",
+      "movedTo": "LUDIARS/Pinacotheca demos/postprocess (target pinacotheca_postprocess, 2026-10-27)",
       "name": "ポストエフェクト",
       "target": "pictor_postprocess_demo",
       "cmake": "CMakeLists.txt (Vulkan_FOUND AND glfw3_FOUND AND TARGET pictor_postprocess)",
@@ -310,6 +315,7 @@
     },
     {
       "id": "PC-DEMO-16",
+      "movedTo": "LUDIARS/Pinacotheca demos/texture2d (target pinacotheca_texture2d, 2026-10-27)",
       "name": "2Dテクスチャ表示",
       "target": "pictor_texture2d_demo",
       "cmake": "CMakeLists.txt (Vulkan_FOUND AND glfw3_FOUND)",

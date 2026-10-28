@@ -35,7 +35,7 @@ cmake --build build --target pictor --parallel
 | GLFW 3.4 | 任意 (デスクトップ) | システム未検出時は FetchContent で `3.4` を自動取得 (`../../CMakeLists.txt:51-72`) |
 | glslc (Vulkan SDK 同梱) | デモ時のみ | `PICTOR_BUILD_DEMO` かつ `Vulkan_GLSLC_EXECUTABLE` 検出時に SPIR-V を焼く (`../../CMakeLists.txt:437`) |
 
-ウィンドウを開くデモ (`pictor_demo` / `pictor_graphics_demo` 等) は **Vulkan + GLFW が両方揃ったときだけ** add_executable される (`../../CMakeLists.txt:335,344`)。揃わない場合は `pictor_benchmark` などの headless デモのみ。
+ウィンドウを開くデモ (`pictor_demo` / `pictor_text_demo` 等) は **Vulkan + GLFW が両方揃ったときだけ** add_executable される (`../../CMakeLists.txt:335,344`)。揃わない場合は `pictor_benchmark` などの headless デモのみ。
 
 ## 3. Release / Debug の別
 
@@ -91,7 +91,8 @@ ctest --test-dir build
 ## 6. 出力物
 
 - `libpictor` — 静的ライブラリ (consumer がリンクする本体)。
-- `pictor_benchmark` / `pictor_fbx_demo` / `pictor_mobile_demo` / `pictor_text_effects_demo` / `pictor_material_serializer_demo` — headless デモ (Vulkan/GLFW 不要、`PICTOR_BUILD_DEMO=ON` 時、`../../CMakeLists.txt:298-322`)。
-- `pictor_demo` / `pictor_graphics_demo` / `pictor_ocean_demo` / `pictor_text_demo` / `pictor_postprocess_demo` / `pictor_rive_demo` / `pictor_texture2d_demo` / `pictor_fbx_viewer` — Vulkan + GLFW 必須のデモ (`../../CMakeLists.txt:335-380`)。
+- `pictor_benchmark` / `pictor_fbx_demo` / `pictor_text_effects_demo` / `pictor_material_serializer_demo` — headless デモ (Vulkan/GLFW 不要、`PICTOR_BUILD_DEMO=ON` 時、`../../CMakeLists.txt:298-322`)。
+- `pictor_demo` / `pictor_text_demo` / `pictor_rive_demo` / `pictor_fbx_viewer` — Vulkan + GLFW 必須のデモ (`../../CMakeLists.txt:335-380`)。
+- シェーダー / パイプラインプリセットのデモ (`graphics` / `ocean` / `shadow_play` / `postprocess` / `texture2d` / `mobile`) は [LUDIARS/Pinacotheca](https://github.com/LUDIARS/Pinacotheca) でビルドする。
 
 > Pictor の方針として、本リポでの作業は **ビルドまで**。`.exe` の起動・実行確認は consumer/ユーザー側 ([[feedback_pictor_no_run]])。
