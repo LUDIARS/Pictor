@@ -27,6 +27,11 @@ Emscripten only. `pictor_web_mesh.mjs` is produced by the CMake target `pictor_w
 package's JavaScript, into `<build>/web-mesh/`. Package that directory with `npm pack`;
 consumers pin the version and record the Pictor commit they built from.
 
+The target also sets `-sSINGLE_FILE_BINARY_ENCODE=0`: the embedded WASM uses textual
+base64 rather than binary UTF-8 strings containing literal NUL characters. This
+keeps the generated JavaScript inspectable by text-only source scanners without
+excluding the module or changing its decoded WASM or single-file loading contract.
+
 Pages with a Content Security Policy need `'wasm-unsafe-eval'` in `script-src` to instantiate
 the module.
 

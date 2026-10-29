@@ -69,6 +69,10 @@ cmake --build build/web --target pictor_web_mesh
 - wasm は `-sSINGLE_FILE` で `.mjs` に埋め込む。別ファイルの `.wasm` は fetch で読むため、
   `file:` で開く host (Electron の `loadFile` など) では読み込めない。配布物も 1 ファイルで済む。
 - CSP を持つページは `script-src` に `'wasm-unsafe-eval'` が要る (wasm の実体化)。
+- `-sSINGLE_FILE_BINARY_ENCODE=0` を明示し、埋め込みwasmはbase64文字列で出力する。
+  バイナリUTF-8文字列内のNULを含む生成物は、consumerのソース検査で非テキストとして拒否される。
+  検査の除外や無効化はせず、単一ファイル・file:対応を保ったテキスト形式を生成する。
+  変更は埋め込み表現のみで、wasmのAPI・描画処理・CSPの要件は変えない。
 
 consumer は `build/web/web-mesh/` を `npm pack` したものか、そのファイル群を取り込み元の
 Pictor commit と一緒に取り込む。兄弟 checkout を実行時に参照しない。
@@ -79,6 +83,15 @@ Pictor commit と一緒に取り込む。兄弟 checkout を実行時に参照�
 - JS の入口: `web-mesh/test/*.test.mjs` (Node、偽の wasm module。CTest の `web_mesh_js_test`)。
 - wasm のビルド: emsdk 6.0.9 で `pictor_web_mesh` と既存 `pictor_webgl_demo` が通ることを確認。
 - ブラウザでの描画は Pictor 側では未検証 (実行は consumer 側の確認に委ねる)。
+
+### 2026-10-25 埋め込み形式の互換性確認
+
+- `pictor_web_mesh` の Release ビルド成功 (専用worktree、demo/test無効、実行なし)。
+- 既存consumer同梱物 (source commit `0d828882bda3`) と新生成物の埋め込みを
+  データとして復号し比較。wasmは双方46,135 bytesで完全一致。
+  SHA-256: `f2554e6f0aa4c3869d15c8947cd98fa7657365b1b21361d01a2b9ab6d51a637b`。
+- 新`.mjs`のliteral NULは0、JavaScript構文確認済み。生成物は直接編集していない。
+- Revisorの再審査とconsumerブラウザの描画確認は別途必要。今回の確認は実行テストではない。
 
 ## 対象外
 
