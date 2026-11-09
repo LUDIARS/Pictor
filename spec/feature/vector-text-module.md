@@ -42,7 +42,8 @@ target_link_libraries(app PRIVATE Pictor::vector_text)
   batch.build_draws()
   renderer.sync(cache)            … render pass の外。新しいグリフだけ転送
   (render pass 開始)
-  renderer.record(cmd, extent, cache, batch)
+  renderer.begin_frame()
+  renderer.record(cmd, extent, cache, batch)   … 1 フレームに何回でも (他の描画と交互に重ねるとき)
 ```
 
 - shader は `build/shaders/vector_text/vector_text.{vert,frag}.spv`。glslc が無い場合は利用側が SPIR-V を渡す。

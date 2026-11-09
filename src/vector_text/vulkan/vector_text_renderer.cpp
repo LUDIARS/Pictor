@@ -101,13 +101,17 @@ void VectorTextRenderer::record(VkCommandBuffer cmd, VkExtent2D extent, const Gl
                                 const VectorTextBatch& batch) {
     if (!initialized_ || batch.empty()) return;
     HostBuffer& slot = *instances_[vk_->current_frame() % instances_.size()];
-    const size_t count = std::min<size_t>(batch.instances().size(), max_instances_);
+    // Several batches a frame (text between other draws) append behind each other.
+    const size_t base = std::min<size_t>(written_, max_instances_);
+    const size_t count = std::min<size_t>(batch.instances().size(), max_instances_ - base);
     if (count < batch.instances().size() && !warned_overflow_) {
         std::fprintf(stderr, "[vector_text] %zu glyphs exceed max_instances %u; the rest are skipped\n",
                      batch.instances().size(), max_instances_);
         warned_overflow_ = true;
     }
-    std::memcpy(slot.mapped(), batch.instances().data(), count * sizeof(VectorTextInstance));
+    std::memcpy(static_cast<VectorTextInstance*>(slot.mapped()) + base, batch.instances().data(),
+                count * sizeof(VectorTextInstance));
+    written_ = base + count;
 
     const VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height),
                               0.0f, 1.0f};
@@ -129,7 +133,7 @@ void VectorTextRenderer::record(VkCommandBuffer cmd, VkExtent2D extent, const Gl
         if (range.index_count == 0 || range.first_index + range.index_count > uploaded_indices_) continue;
         const uint32_t instances = static_cast<uint32_t>(std::min<size_t>(draw.instance_count, count - draw.first_instance));
         vkCmdDrawIndexed(cmd, range.index_count, instances, range.first_index,
-                         static_cast<int32_t>(range.first_vertex), draw.first_instance);
+                         static_cast<int32_t>(range.first_vertex), static_cast<uint32_t>(base) + draw.first_instance);
     }
 }
 

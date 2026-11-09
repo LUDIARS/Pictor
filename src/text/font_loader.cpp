@@ -315,8 +315,12 @@ bool FontLoader::parse_font_tables(FontTableEntry& entry) {
         parsed.num_h_metrics     = read_u16(hhea_data + 34);
     }
 
-    // ---- 'OS/2' table (overrides ascender/descender if sTypo* is available) ----
-    if (os2_data && os2_len >= 72) {
+    // ---- 'OS/2' table: sTypo* replace the hhea values only when the font asks
+    // for it (fsSelection bit 7, USE_TYPO_METRICS), as the OpenType spec and
+    // FreeType do. Fonts without the flag keep hhea, which is what other text
+    // engines (TextMesh Pro via FreeType) lay out with.
+    const bool use_typo = os2_data && os2_len >= 64 && (read_u16(os2_data + 62) & 0x0080u) != 0;
+    if (use_typo && os2_len >= 72) {
         int16_t typo_ascender  = read_i16(os2_data + 68);
         int16_t typo_descender = read_i16(os2_data + 70);
         if (typo_ascender != 0) {
