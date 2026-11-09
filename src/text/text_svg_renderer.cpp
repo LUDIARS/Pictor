@@ -1,4 +1,5 @@
 ﻿#include "pictor/text/text_svg_renderer.h"
+#include "cff_outline.h"
 #include "truetype_outline.h"
 #include <cmath>
 #include <sstream>
@@ -92,6 +93,8 @@ GlyphOutline TextSvgRenderer::parse_truetype_glyph(
     const FontTableEntry& entry, uint16_t glyph_index,
     uint32_t codepoint) const {
 
+    // OpenType with CFF outlines (.otf) has no glyf/loca: its cubic charstrings instead.
+    if (detail::has_cff_outlines(entry)) return detail::decode_cff_outline(entry, glyph_index, codepoint);
     return detail::decode_truetype_outline(entry, glyph_index, codepoint);
 }
 
