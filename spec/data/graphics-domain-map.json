@@ -427,6 +427,18 @@
             "(^|/)fonts/[^/]+$",
             "(^|/)tests/pixel_text_test\\.cpp$"
           ]
+        },
+        {
+          "name": "vector-text",
+          "description": "フォントの輪郭を三角形メッシュにしてインスタンス描画する任意モジュール (アトラス・SDF なし)",
+          "paths": [
+            "(^|/)src/vector_text/[^/]+$",
+            "(^|/)src/vector_text/vulkan/[^/]+$",
+            "(^|/)include/pictor/vector_text/[^/]+$",
+            "(^|/)shaders/vector_text/[^/]+$",
+            "(^|/)cmake/PictorVectorText\\.cmake$",
+            "(^|/)tests/unit_vector_text(_font)?_test\\.cpp$"
+          ]
         }
       ]
     },

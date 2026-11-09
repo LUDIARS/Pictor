@@ -226,6 +226,7 @@ add_library(pictor STATIC
 )
 
 include(cmake/PictorOptionalEffects.cmake)
+include(cmake/PictorVectorText.cmake)
 include(cmake/PictorXr.cmake)
 
 # サーフェスプロバイダ — プラットフォーム別に条件付きで追加。
