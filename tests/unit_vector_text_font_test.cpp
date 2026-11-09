@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using namespace pictor;
 using namespace pictor_test;
@@ -69,6 +70,40 @@ int main() {
         ++checked;
     }
     PT_ASSERT(checked > 80, "most printable ASCII glyphs have outlines");
+
+    // A TrueType Collection holding the same font gives the same outlines
+    // (the table directory sits behind the 'ttcf' header; offsets are file-relative).
+    {
+        std::vector<uint8_t> ttf;
+        if (FILE* f = std::fopen(path.c_str(), "rb")) {
+            int c;
+            while ((c = std::fgetc(f)) != EOF) ttf.push_back(static_cast<uint8_t>(c));
+            std::fclose(f);
+        }
+        PT_ASSERT(ttf.size() > 12, "font bytes read");
+        constexpr uint32_t kHeader = 16;
+        std::vector<uint8_t> ttc = {'t', 't', 'c', 'f', 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, kHeader};
+        ttc.insert(ttc.end(), ttf.begin(), ttf.end());
+        const uint16_t tables = static_cast<uint16_t>((ttc[kHeader + 4] << 8) | ttc[kHeader + 5]);
+        for (uint16_t i = 0; i < tables; ++i) {
+            const size_t at = kHeader + 12 + size_t(i) * 16 + 8;
+            uint32_t offset = (uint32_t(ttc[at]) << 24) | (uint32_t(ttc[at + 1]) << 16) |
+                              (uint32_t(ttc[at + 2]) << 8) | ttc[at + 3];
+            offset += kHeader;
+            ttc[at] = uint8_t(offset >> 24);
+            ttc[at + 1] = uint8_t(offset >> 16);
+            ttc[at + 2] = uint8_t(offset >> 8);
+            ttc[at + 3] = uint8_t(offset);
+        }
+        const FontHandle collection = fonts.load_from_memory(ttc.data(), ttc.size(), "collection");
+        PT_ASSERT(collection != INVALID_FONT, "the .ttc loads");
+        if (collection != INVALID_FONT) {
+            const GlyphOutline from_ttf = source.outline(font, 'g');
+            const GlyphOutline from_ttc = source.outline(collection, 'g');
+            PT_ASSERT(!from_ttc.path.empty(), "outline read from the collection");
+            PT_ASSERT_OP(from_ttc.path.size(), ==, from_ttf.path.size(), "same outline");
+        }
+    }
 
     // The cache serves the same glyphs from one flat array.
     GlyphMeshCache cache(source);

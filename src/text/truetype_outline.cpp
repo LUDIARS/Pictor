@@ -26,7 +26,15 @@ uint32_t tag(char a, char b, char c, char d) {
     return (uint32_t(a) << 24) | (uint32_t(b) << 16) | (uint32_t(c) << 8) | uint32_t(d);
 }
 Bytes table(Bytes file, uint32_t wanted) {
-    Cursor header{file}; header.skip(4); auto count = header.word(); header.skip(6);
+    // A TrueType Collection (.ttc) starts with its own header; use the first
+    // font's directory, as FontLoader does. Table offsets stay file-relative.
+    size_t directory = 0;
+    if (Cursor probe{file}; probe.dword() == tag('t','t','c','f')) {
+        probe.skip(4);
+        if (probe.dword() == 0) throw std::invalid_argument("Empty TrueType collection");
+        directory = probe.dword();
+    }
+    Cursor header{file, directory}; header.skip(4); auto count = header.word(); header.skip(6);
     for (unsigned i = 0; i < count; ++i) {
         auto name = header.dword(); header.skip(4);
         auto offset = header.dword(); auto size = header.dword();
