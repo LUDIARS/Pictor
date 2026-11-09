@@ -31,6 +31,9 @@ target_link_libraries(app PRIVATE Pictor::vector_text)
 帯の外側の頂点は「塗りから離れる向きの単位ベクトル」を持ち、頂点シェーダーが
 `(L * offset) / sqrt(|det L|) * feather_px` だけ動かして coverage を 0 にする。
 相似変換 (拡大・回転) なら帯の幅は常に `feather_px` (既定 1 px)。
+`embolden_px` (擬似太字) を指定すると帯を `feather_px + embolden_px` まで押し出し、フラグメントで
+被覆を `(feather + embolden) / feather` 倍して飽和させる。内側 `embolden_px` は塗り、外側 `feather_px` がぼかしになる
+(SDF の dilate と同じく外側へ太る)。
 角では隣り合う 2 辺の帯の間に扇を足して隙間を埋める。
 
 ## 描画の契約

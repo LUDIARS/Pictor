@@ -8,13 +8,14 @@ namespace pictor {
 /// One glyph to draw. `m` is the 2x2 map from em units (y-up) to screen pixels
 /// (column-major: (m[0], m[1]) is where the em x axis goes); `tx, ty` is where
 /// the glyph origin lands. Scale and rotation are free; the feather stays
-/// `feather_px` wide under similarity transforms.
+/// `feather_px` wide under similarity transforms. `embolden_px` grows the fill
+/// outward by that much (synthetic bold) before the feather starts.
 struct alignas(16) VectorTextInstance {
     float m[4]       = {1, 0, 0, -1};
     float tx         = 0.0f;
     float ty         = 0.0f;
     float feather_px = 1.0f;
-    float pad        = 0.0f;
+    float embolden_px = 0.0f;
     float color[4]   = {1, 1, 1, 1};
 };
 static_assert(sizeof(VectorTextInstance) == 48, "VectorTextInstance is uploaded as-is");

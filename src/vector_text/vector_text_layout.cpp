@@ -34,7 +34,8 @@ namespace {
 
 /// Walks the text glyph by glyph; `place` gets (mesh, pen x in px, line index).
 template <typename Place>
-float walk(GlyphMeshCache& cache, FontHandle font, std::string_view utf8, float pixels_per_em, Place&& place) {
+float walk(GlyphMeshCache& cache, FontHandle font, std::string_view utf8, float pixels_per_em, float spacing_px,
+           Place&& place) {
     const IGlyphOutlineSource& source = cache.source();
     const float units = source.units_per_em(font);
     const float kern_scale = units > 0.0f ? pixels_per_em / units : 0.0f;
@@ -54,7 +55,7 @@ float walk(GlyphMeshCache& cache, FontHandle font, std::string_view utf8, float 
         if (previous != 0) pen += source.kerning(font, previous, cp) * kern_scale;
         const uint32_t mesh = cache.mesh_for(font, cp, tier);
         place(mesh, pen, line);
-        pen += cache.range(mesh).advance_em * pixels_per_em;
+        pen += cache.range(mesh).advance_em * pixels_per_em + spacing_px;
         previous = cp;
     }
     return std::max(widest, pen);
@@ -76,8 +77,9 @@ float layout_vector_text(GlyphMeshCache& cache, FontHandle font, std::string_vie
     base.m[2] = s * k;   // em y axis (up) -> screen
     base.m[3] = -c * k;
     base.feather_px = style.feather_px;
+    base.embolden_px = style.embolden_px;
     std::copy(std::begin(style.color), std::end(style.color), std::begin(base.color));
-    return walk(cache, font, utf8, style.pixels_per_em, [&](uint32_t mesh, float pen, uint32_t line) {
+    return walk(cache, font, utf8, style.pixels_per_em, style.letter_spacing_px, [&](uint32_t mesh, float pen, uint32_t line) {
         if (cache.range(mesh).index_count == 0) return;  // blank
         // Pen moves along the rotated baseline; lines step along the rotated down axis.
         const float down = static_cast<float>(line) * line_px;
@@ -88,8 +90,9 @@ float layout_vector_text(GlyphMeshCache& cache, FontHandle font, std::string_vie
     });
 }
 
-float measure_vector_text(GlyphMeshCache& cache, FontHandle font, std::string_view utf8, float pixels_per_em) {
-    return walk(cache, font, utf8, pixels_per_em, [](uint32_t, float, uint32_t) {});
+float measure_vector_text(GlyphMeshCache& cache, FontHandle font, std::string_view utf8, float pixels_per_em,
+                          float letter_spacing_px) {
+    return walk(cache, font, utf8, pixels_per_em, letter_spacing_px, [](uint32_t, float, uint32_t) {});
 }
 
 }  // namespace pictor
