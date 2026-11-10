@@ -16,7 +16,10 @@
 ///   2. resolve — each cell folds the frame's samples into its running mean
 ///                and evicts itself when unsampled for long,
 ///   3. query   — every pixel looks its cell up and writes the diffuse
-///                irradiance to irradiance_view() (rgba16f, a = found).
+///                irradiance to irradiance_view() (rgba16f: rgb irradiance,
+///                a the cell's ambient occlusion over the frame's AO radius).
+/// Lights flagged as casting shadows are traced to from each hit, so the
+/// cached bounce does not leak through walls.
 /// The host reflects that irradiance with its own surface colours.
 ///
 /// Inputs are borrowed: the geometry and its acceleration structures

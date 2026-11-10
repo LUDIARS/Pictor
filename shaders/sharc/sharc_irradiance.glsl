@@ -4,7 +4,8 @@
 // The module's spatial hash, cell storage and accumulation (sharc_common.glsl)
 // hold, per cell, the diffuse irradiance arriving there: M0 of the moments is
 // the running mean, meta's sample count how many samples it stands for. A
-// cell is (grid, level, facing): the facing (the dominant axis of the surface
+// cell's AO is the share of rays that left it unblocked within the AO radius.
+// A cell is (grid, level, facing): the facing (the dominant axis of the surface
 // normal and its sign) keeps the two sides of a thin wall, and the floor and
 // wall of a corner, in separate cells so light does not leak between them.
 //
@@ -26,6 +27,7 @@ layout(std140, set = SHARC_SET, binding = 30) uniform SharcIrradianceFrame {
     vec4  sirHorizon;
     vec4  sirGround;
     vec4  sirLimits;        // sample clamp, history samples, ray length, strength
+    vec4  sirOcclusion;     // AO radius (m, 0 off), shadow rays on
     uvec4 sirCounts;        // light count, frame index, update block, sun shadow bound
 };
 

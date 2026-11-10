@@ -1,7 +1,8 @@
 // Pictor — SHaRC irradiance cache: query
 //
 // One invocation per G-buffer pixel writes the irradiance cached around it
-// to the output image (rgb, a 1 where a cell was found): a few taps spread
+// to the output image (rgb irradiance, a ambient occlusion; 1 where nothing
+// is known yet): a few taps spread
 // over about one cell in the surface's plane, fixed per pixel (no flicker),
 // so the cell edges do not show. The host reflects it with its own surface
 // colours.
@@ -32,7 +33,7 @@ void main() {
     vec2 uv = (vec2(pixel) + 0.5) * sirScreen.zw;
     float depth = texture(sirDepth, uv).r;
     if (depth >= 1.0) {
-        imageStore(sirIrradiance, pixel, vec4(0.0));
+        imageStore(sirIrradiance, pixel, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
     vec3 world = sharcIrradianceWorld(uv, depth);
@@ -43,16 +44,21 @@ void main() {
     vec3 t = normalize(cross(helper, n));
     vec3 b = cross(n, t);
     vec3 sum = vec3(0.0);
+    float aoSum = 0.0;
     float found = 0.0;
     for (int i = 0; i < kTaps; ++i) {
         float a = sirNoise(vec2(pixel) + float(i) * 13.0) * 6.2831853;
         float r = (float(i) + 0.5) / float(kTaps);
+        vec3 p = world + (t * cos(a) + b * sin(a)) * (r * cell);
+        uint level = sharcIrradianceLevel(p);
+        uint slot = sharcFindSlot(sharcIrradianceGrid(p, level), sharcIrradianceKeyLevel(level, n));
         vec3 e;
-        if (sharcIrradianceLookup(world + (t * cos(a) + b * sin(a)) * (r * cell), n, e)) {
+        if (slot != SHARC_SLOT_INVALID && sharcIrradianceLookup(p, n, e)) {
             sum += e;
+            aoSum += sharcLoadCellAo(slot);
             found += 1.0;
         }
     }
     vec3 irradiance = found > 0.0 ? sum / found * sirLimits.w : vec3(0.0);
-    imageStore(sirIrradiance, pixel, vec4(irradiance, found > 0.0 ? 1.0 : 0.0));
+    imageStore(sirIrradiance, pixel, vec4(irradiance, found > 0.0 ? aoSum / found : 1.0));
 }

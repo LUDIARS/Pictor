@@ -49,11 +49,11 @@ struct SharcIrradianceLightGpu {
     float position_inv_range2[4];   ///< xyz, w = 1 / range^2
     float radiance_kind[4];         ///< linear rgb (irradiance at 1 m, x pi), w = kind (0 spot, else point)
     float direction_spot_scale[4];  ///< xyz where a spot points, w = 1 / (cos inner - cos outer)
-    float params[4];                ///< x = -cos outer * spot scale, yzw unused
+    float params[4];                ///< x = -cos outer * spot scale, y host's own, z 1 when it casts shadows, w unused
 };
 static_assert(sizeof(SharcIrradianceLightGpu) == 64, "GLSL SharcIrradianceLight");
 
-/// The frame as the cache sees it (std140 uniform block, 272 B).
+/// The frame as the cache sees it (std140 uniform block, 288 B).
 struct alignas(16) SharcIrradianceFrameGpu {
     float inverse_view_projection[16];  ///< clip (Vulkan, depth 0..1) -> world, column-major
     float sun_view_projection[16];      ///< world -> sun shadow clip
@@ -65,9 +65,10 @@ struct alignas(16) SharcIrradianceFrameGpu {
     float horizon[4];                   ///< ... facing sideways (a miss sees it / pi as radiance)
     float ground[4];                    ///< ... facing down
     float limits[4];                    ///< x sample clamp (irradiance), y history samples, z ray length (m), w strength
+    float occlusion[4];                 ///< x ambient-occlusion radius (m, 0 = off), y 1 = shadow rays for the lights that cast them, zw unused
     uint32_t counts[4];                 ///< x light count, y frame index, z update block, w 1 when a sun shadow map is bound
 };
-static_assert(sizeof(SharcIrradianceFrameGpu) == 272, "GLSL SharcIrradianceFrame");
+static_assert(sizeof(SharcIrradianceFrameGpu) == 288, "GLSL SharcIrradianceFrame");
 
 /// One placement of a mesh range for the acceleration structures.
 struct SharcPlacement {

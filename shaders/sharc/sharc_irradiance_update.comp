@@ -5,7 +5,9 @@
 // query, and adds the irradiance that ray stands for to the pixel's cell.
 // The ray brings back the light leaving what it hits: emission, plus the
 // hit's direct light, ambient and cached irradiance reflected by its mean
-// albedo — so each frame adds one more bounce to what the cache holds.
+// albedo — so each frame adds one more bounce to what the cache holds. The
+// same ray also counts toward the cell's ambient occlusion (stopped within
+// the AO radius or not).
 //
 // dispatch: (ceil(width / block / 8), ceil(height / block / 8), 1)
 
@@ -70,8 +72,17 @@ float sirSunVisibility(vec3 p, vec3 n) {
     return texture(sirSunShadow, uv).r >= ndc.z - sirSunRadiance.w ? 1.0 : 0.0;
 }
 
-// Diffuse irradiance from the sun and the lights (the lights unshadowed: one
-// ray each would be needed).
+// Whether `p` sees the light `distance` away along `l` (any hit before it blocks).
+bool sirUnblocked(vec3 p, vec3 n, vec3 l, float distance) {
+    rayQueryEXT shadow;
+    rayQueryInitializeEXT(shadow, sirScene, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
+                          p + n * 0.02, 0.01, l, max(distance - 0.05, 0.02));
+    while (rayQueryProceedEXT(shadow)) {}
+    return rayQueryGetIntersectionTypeEXT(shadow, true) == gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+// Diffuse irradiance from the sun and the lights; a light that casts shadows
+// is traced to, so the bounce does not leak through walls.
 vec3 sirDirectIrradiance(vec3 p, vec3 n) {
     vec3 e = vec3(0.0);
     if (sirSunDirection.w > 0.5) {
@@ -94,6 +105,8 @@ vec3 sirDirectIrradiance(vec3 p, vec3 n) {
             float a = clamp(dot(light.directionSpotScale.xyz, -l) * light.directionSpotScale.w + light.params.x, 0.0, 1.0);
             attenuation *= a * a;
         }
+        if (attenuation <= 0.0) continue;
+        if (sirOcclusion.y > 0.5 && light.params.z > 0.5 && !sirUnblocked(p, n, l, sqrt(d2))) continue;
         e += light.radianceKind.rgb * sirSky.w * nol * attenuation;
     }
     return e;
@@ -135,7 +148,10 @@ void main() {
     while (rayQueryProceedEXT(query)) {}
 
     vec3 incoming;
-    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+    bool hitSomething = rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
+    // Ambient occlusion: the share of rays stopped within the radius.
+    bool occluded = hitSomething && rayQueryGetIntersectionTEXT(query, true) < sirOcclusion.x;
+    if (hitSomething) {
         uint instance = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
         uint primitive = uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true));
         vec2 bary = rayQueryGetIntersectionBarycentricsEXT(query, true);
@@ -188,4 +204,5 @@ void main() {
     atomicAdd(gpu_sharc_accum[a + 1u], sharcFixedEncode(sampleIrradiance.g));
     atomicAdd(gpu_sharc_accum[a + 2u], sharcFixedEncode(sampleIrradiance.b));
     atomicAdd(gpu_sharc_accum[a + 3u], 1u);
+    atomicAdd(gpu_sharc_accum[a + 7u], (occluded ? 1u : 0u) | (1u << 16));  // AO: occluded | rays
 }
