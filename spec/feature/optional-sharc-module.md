@@ -48,6 +48,24 @@ executorの`shutdown()`または破棄を呼ぶ。専用資源の解放はexecut
 Vulkanの借用contextはexecutorより長生きさせる。DX12版の自己所有device契約は維持する。
 実行中の汎用pipeline hot-toggle機構を新設した変更ではない。
 
+## 間接照度キャッシュ (呼び出し側 G-buffer + レイクエリ)
+
+自前の照明 (遅延照明など) を持つ host 向けの経路。`SharcGpuExecutor` が画素の最終放射輝度まで
+出すのに対し、`SharcIrradianceCache` は**拡散の間接照度だけ**を返し、host が自分の面の色で反射させる。
+同じモジュールのハッシュ・セル・蓄積 (`sharc_common.glsl`) を使い、別実装を持たない。
+
+| 部品 | 役割 |
+| --- | --- |
+| `pictor/gi/sharc_irradiance_types.h` | 契約 (設定、インスタンス表、面の表、ライト、フレーム定数)。GPU API 非依存 |
+| `SharcSceneAcceleration` | host の頂点/インデックスバッファと配置から加速構造を組む (メッシュ範囲ごとに BLAS、配置ごとに TLAS インスタンス) |
+| `SharcIrradianceCache` | 毎フレーム 3 compute: update (G-buffer の `update_block`² 画素に 1 本のレイクエリ) → resolve (セルの移動平均と追い出し) → query (画素ごとの照度を rgba16f 画像へ) |
+| `shaders/sharc/sharc_irradiance*.{glsl,comp}` | 上の 3 パス (ray query は `--target-env=vulkan1.2` でコンパイル) |
+
+- セルは (grid, level, 面の向き 6 方向) で引く。向きを分けるのは、薄い壁の表裏や床と壁の角で光が漏れないため。
+- レイが持ち帰るのは当たった面の発光 + (直接光 + 環境光 + キャッシュ自身) × 平均アルベド。毎フレーム 1 跳ね分ずつ多重反射が育つ。
+- 要件: `VulkanConfig::require_ray_query`。満たさない device では `initialize()` / `build()` が理由を出して失敗する (間接光を黙って消さない)。
+- host は G-buffer の深度 (Vulkan clip 0..1) とワールド法線、太陽のシャドウマップ、ライト表を渡し、`irradiance_view()` を自分のパスで読む。
+
 ## 残作業
 
 他のGI/影/AO、postprocess、文字/UI、vector/Rive、animationのモジュール分割は別単位。

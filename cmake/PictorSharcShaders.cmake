@@ -17,14 +17,23 @@ set(_sharc_includes
     "${_sharc_root}/sharc_common.glsl"
     "${_sharc_root}/sharc_scene.glsl"
     "${_sharc_root}/sharc_moments.glsl"
-    "${_sharc_root}/sharc_lobes.glsl")
+    "${_sharc_root}/sharc_lobes.glsl"
+    "${_sharc_root}/sharc_irradiance.glsl")
+# The irradiance cache's passes trace with ray queries (SPIR-V 1.4+, Vulkan 1.2).
+set(_sharc_ray_query_sources
+    sharc_irradiance_update.comp sharc_irradiance_resolve.comp sharc_irradiance_query.comp)
+list(APPEND _sharc_sources ${_sharc_ray_query_sources})
 set(_sharc_outputs)
 foreach(_shader IN LISTS _sharc_sources)
     set(_output "${PICTOR_SHARC_SPIRV_DIR}/${_shader}.spv")
+    set(_target_env)
+    if(_shader IN_LIST _sharc_ray_query_sources)
+        set(_target_env --target-env=vulkan1.2)
+    endif()
     add_custom_command(
         OUTPUT "${_output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${PICTOR_SHARC_SPIRV_DIR}"
-        COMMAND "${Vulkan_GLSLC_EXECUTABLE}" "${_sharc_root}/${_shader}" -o "${_output}"
+        COMMAND "${Vulkan_GLSLC_EXECUTABLE}" ${_target_env} "${_sharc_root}/${_shader}" -o "${_output}"
         DEPENDS "${_sharc_root}/${_shader}" ${_sharc_includes}
         COMMENT "Compiling SHaRC ${_shader} -> SPIR-V"
         VERBATIM)

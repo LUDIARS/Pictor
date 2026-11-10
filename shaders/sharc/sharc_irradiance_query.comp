@@ -1,0 +1,58 @@
+// Pictor — SHaRC irradiance cache: query
+//
+// One invocation per G-buffer pixel writes the irradiance cached around it
+// to the output image (rgb, a 1 where a cell was found): a few taps spread
+// over about one cell in the surface's plane, fixed per pixel (no flicker),
+// so the cell edges do not show. The host reflects it with its own surface
+// colours.
+//
+// dispatch: (ceil(width / 8), ceil(height / 8), 1)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#define SHARC_SET 0
+#include "sharc_irradiance.glsl"
+
+layout(set = SHARC_SET, binding = 38) uniform sampler2D sirDepth;
+layout(set = SHARC_SET, binding = 39) uniform sampler2D sirNormal;
+layout(set = SHARC_SET, binding = 40, rgba16f) uniform writeonly image2D sirIrradiance;
+
+const int kTaps = 4;
+
+float sirNoise(vec2 pixel) {
+    return fract(52.9829189 * fract(0.06711056 * pixel.x + 0.00583715 * pixel.y));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(sirScreen.x) || pixel.y >= int(sirScreen.y)) return;
+    vec2 uv = (vec2(pixel) + 0.5) * sirScreen.zw;
+    float depth = texture(sirDepth, uv).r;
+    if (depth >= 1.0) {
+        imageStore(sirIrradiance, pixel, vec4(0.0));
+        return;
+    }
+    vec3 world = sharcIrradianceWorld(uv, depth);
+    vec3 n = normalize(texture(sirNormal, uv).xyz);
+    if (dot(n, sirCamera.xyz - world) < 0.0) n = -n;
+    float cell = sharcCellSize(sharcIrradianceLevel(world));
+    vec3 helper = abs(n.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 t = normalize(cross(helper, n));
+    vec3 b = cross(n, t);
+    vec3 sum = vec3(0.0);
+    float found = 0.0;
+    for (int i = 0; i < kTaps; ++i) {
+        float a = sirNoise(vec2(pixel) + float(i) * 13.0) * 6.2831853;
+        float r = (float(i) + 0.5) / float(kTaps);
+        vec3 e;
+        if (sharcIrradianceLookup(world + (t * cos(a) + b * sin(a)) * (r * cell), n, e)) {
+            sum += e;
+            found += 1.0;
+        }
+    }
+    vec3 irradiance = found > 0.0 ? sum / found * sirLimits.w : vec3(0.0);
+    imageStore(sirIrradiance, pixel, vec4(irradiance, found > 0.0 ? 1.0 : 0.0));
+}

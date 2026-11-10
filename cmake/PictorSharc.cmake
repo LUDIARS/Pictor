@@ -21,7 +21,10 @@ if(PICTOR_ENABLE_SHARC_VULKAN)
     if(NOT Vulkan_FOUND)
         message(FATAL_ERROR "PICTOR_ENABLE_SHARC_VULKAN=ON requires a Vulkan backend; disable it for a non-Vulkan consumer")
     endif()
-    add_library(pictor_sharc_vulkan STATIC src/gi/sharc_executor.cpp)
+    add_library(pictor_sharc_vulkan STATIC
+        src/gi/sharc_executor.cpp
+        src/gi/sharc_irradiance_cache.cpp
+        src/gi/sharc_scene_acceleration.cpp)
     add_library(Pictor::sharc_vulkan ALIAS pictor_sharc_vulkan)
     target_link_libraries(pictor_sharc_vulkan PUBLIC pictor Pictor::sharc_contract)
     target_compile_definitions(pictor_sharc_vulkan PUBLIC PICTOR_HAS_SHARC_VULKAN=1)

@@ -1,0 +1,45 @@
+// Pictor — SHaRC irradiance cache: resolve
+//
+// One invocation per table slot. The frame's accumulated samples join the
+// cell's running mean (which stands for at most `history samples`, so the
+// cache keeps following light that changes); the frame's sums are cleared.
+// A cell no ray has reached for `stale frames` is evicted: its key becomes a
+// tombstone, which keeps the probe runs through it unbroken.
+//
+// dispatch: (table_size / 64, 1, 1)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#define SHARC_SET 0
+#include "sharc_irradiance.glsl"
+
+void main() {
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= sharcTableSize) return;
+    uint key = gpu_sharc_keys[slot];
+    if (key == 0u || key == SHARC_KEY_TOMBSTONE) return;
+    uint a = slot * SHARC_ACCUM_UINTS;
+    uint added = gpu_sharc_accum[a + 3u];
+    uint samples, last, level;
+    float mean, variance;
+    sharcLoadMeta(slot, samples, last, mean, variance, level);
+    uint frame = sirCounts.y;
+    if (added == 0u) {
+        if (((frame - last) & 0xFFFFu) > sharcStaleFrames) gpu_sharc_keys[slot] = SHARC_KEY_TOMBSTONE;
+        return;
+    }
+    vec3 sum = vec3(sharcFixedDecode(gpu_sharc_accum[a + 0u]), sharcFixedDecode(gpu_sharc_accum[a + 1u]),
+                    sharcFixedDecode(gpu_sharc_accum[a + 2u]));
+    vec3 m0, m1Dir, m1Mag;
+    float confidence;
+    sharcLoadMoments(slot, m0, m1Dir, m1Mag, confidence);
+    float kept = min(float(samples), max(sirLimits.y - float(added), 0.0));  // capped history
+    float total = kept + float(added);
+    vec3 resolved = (m0 * kept + sum) / total;
+    sharcStoreMoments(slot, resolved, m1Dir, m1Mag, min(total / max(sirLimits.y, 1.0), 1.0));
+    sharcStoreMeta(slot, uint(total), frame, sharcLuminance(resolved), 0.0, level, 1.0, 1.0);
+    for (uint i = 0u; i < 4u; ++i) gpu_sharc_accum[a + i] = 0u;
+}

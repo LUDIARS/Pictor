@@ -1,0 +1,191 @@
+// Pictor — SHaRC irradiance cache: update
+//
+// One invocation per update_block x update_block tile of the host's G-buffer
+// takes a jittered pixel of it, traces one cosine-weighted ray with a ray
+// query, and adds the irradiance that ray stands for to the pixel's cell.
+// The ray brings back the light leaving what it hits: emission, plus the
+// hit's direct light, ambient and cached irradiance reflected by its mean
+// albedo — so each frame adds one more bounce to what the cache holds.
+//
+// dispatch: (ceil(width / block / 8), ceil(height / block / 8), 1)
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#define SHARC_SET 0
+#include "sharc_irradiance.glsl"
+
+layout(set = SHARC_SET, binding = 31) uniform accelerationStructureEXT sirScene;
+
+struct SharcRayInstance {
+    uint first_index;
+    int  vertex_offset;
+    uint surface;
+    uint unused;
+};
+struct SharcRaySurface {
+    vec4 albedo;
+    vec4 emission;
+};
+struct SharcIrradianceLight {
+    vec4 positionInvRange2;
+    vec4 radianceKind;
+    vec4 directionSpotScale;
+    vec4 params;
+};
+layout(std430, set = SHARC_SET, binding = 32) readonly buffer SirInstances { SharcRayInstance sirInstances[]; };
+layout(std430, set = SHARC_SET, binding = 33) readonly buffer SirVertices { float sirVertexData[]; };
+layout(std430, set = SHARC_SET, binding = 34) readonly buffer SirIndices { uint sirIndexData[]; };
+layout(std430, set = SHARC_SET, binding = 35) readonly buffer SirSurfaces { SharcRaySurface sirSurfaces[]; };
+layout(std430, set = SHARC_SET, binding = 36) readonly buffer SirLights { SharcIrradianceLight sirLights[]; };
+layout(set = SHARC_SET, binding = 37) uniform sampler2D sirSunShadow;
+layout(set = SHARC_SET, binding = 38) uniform sampler2D sirDepth;
+layout(set = SHARC_SET, binding = 39) uniform sampler2D sirNormal;
+
+// The host's vertex layout, in floats: stride, position offset, normal offset.
+layout(push_constant) uniform SirVertexLayout {
+    uvec4 sirVertexLayout;
+};
+
+float sirNoise(vec2 pixel, uint frame) {
+    // Interleaved gradient noise (Jimenez 2014), shifted per frame.
+    pixel += 5.588238 * float(frame & 63u);
+    return fract(52.9829189 * fract(0.06711056 * pixel.x + 0.00583715 * pixel.y));
+}
+
+vec3 sirAmbient(vec3 n) {
+    vec3 up = mix(sirHorizon.rgb, sirSky.rgb, clamp(n.y, 0.0, 1.0));
+    return n.y >= 0.0 ? up : mix(sirHorizon.rgb, sirGround.rgb, clamp(-n.y, 0.0, 1.0));
+}
+
+float sirSunVisibility(vec3 p, vec3 n) {
+    if (sirCounts.w == 0u) return 1.0;
+    vec4 clip = sirSunViewProjection * vec4(p + n * 0.04, 1.0);
+    vec3 ndc = clip.xyz / max(clip.w, 1e-8);
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) return 1.0;
+    return texture(sirSunShadow, uv).r >= ndc.z - sirSunRadiance.w ? 1.0 : 0.0;
+}
+
+// Diffuse irradiance from the sun and the lights (the lights unshadowed: one
+// ray each would be needed).
+vec3 sirDirectIrradiance(vec3 p, vec3 n) {
+    vec3 e = vec3(0.0);
+    if (sirSunDirection.w > 0.5) {
+        vec3 l = normalize(sirSunDirection.xyz);
+        float nol = dot(n, l);
+        if (nol > 0.0) e += sirSunRadiance.rgb * nol * sirSunVisibility(p, n);
+    }
+    for (uint i = 0u; i < sirCounts.x; ++i) {
+        SharcIrradianceLight light = sirLights[i];
+        vec3 toLight = light.positionInvRange2.xyz - p;
+        float d2 = dot(toLight, toLight);
+        float factor = d2 * light.positionInvRange2.w;
+        if (factor >= 1.0) continue;
+        vec3 l = toLight * inversesqrt(max(d2, 1e-8));
+        float nol = dot(n, l);
+        if (nol <= 0.0) continue;
+        float window = clamp(1.0 - factor * factor, 0.0, 1.0);
+        float attenuation = window * window / max(d2, 1e-2);
+        if (light.radianceKind.w < 0.5) {
+            float a = clamp(dot(light.directionSpotScale.xyz, -l) * light.directionSpotScale.w + light.params.x, 0.0, 1.0);
+            attenuation *= a * a;
+        }
+        e += light.radianceKind.rgb * sirSky.w * nol * attenuation;
+    }
+    return e;
+}
+
+vec3 sirVertex(uint i, uint offset) {
+    uint b = i * sirVertexLayout.x + offset;
+    return vec3(sirVertexData[b], sirVertexData[b + 1u], sirVertexData[b + 2u]);
+}
+
+void main() {
+    uint block = max(sirCounts.z, 1u);
+    vec2 tile = vec2(gl_GlobalInvocationID.xy);
+    uint frame = sirCounts.y;
+    vec2 jitter = floor(vec2(sirNoise(tile, frame), sirNoise(tile + 17.0, frame + 7u)) * float(block));
+    vec2 pixel = tile * float(block) + jitter + 0.5;
+    if (pixel.x >= sirScreen.x || pixel.y >= sirScreen.y) return;
+    vec2 uv = pixel * sirScreen.zw;
+    float depth = texture(sirDepth, uv).r;
+    if (depth >= 1.0) return;
+    vec3 world = sharcIrradianceWorld(uv, depth);
+    vec3 n = normalize(texture(sirNormal, uv).xyz);
+    if (dot(n, sirCamera.xyz - world) < 0.0) n = -n;  // two-sided surfaces: the side in view
+    if (any(isnan(n))) return;
+
+    // Cosine-weighted direction around the normal.
+    vec3 helper = abs(n.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 t = normalize(cross(helper, n));
+    vec3 b = cross(n, t);
+    float u1 = sirNoise(pixel + 3.0, frame + 13u);
+    float u2 = sirNoise(pixel + 41.0, frame + 29u);
+    float r = sqrt(u1);
+    float angle = u2 * 6.2831853;
+    vec3 dir = normalize(t * (cos(angle) * r) + b * (sin(angle) * r) + n * sqrt(max(1.0 - u1, 0.0)));
+    vec3 origin = world + n * 0.02;
+
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, sirScene, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.01, dir, sirLimits.z);
+    while (rayQueryProceedEXT(query)) {}
+
+    vec3 incoming;
+    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        uint instance = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
+        uint primitive = uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true));
+        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(query, true);
+        float distance = rayQueryGetIntersectionTEXT(query, true);
+        mat4x3 toWorld = rayQueryGetIntersectionObjectToWorldEXT(query, true);
+        SharcRayInstance inst = sirInstances[instance];
+        uint base = inst.first_index + primitive * 3u;
+        uint i0 = uint(int(sirIndexData[base]) + inst.vertex_offset);
+        uint i1 = uint(int(sirIndexData[base + 1u]) + inst.vertex_offset);
+        uint i2 = uint(int(sirIndexData[base + 2u]) + inst.vertex_offset);
+        uint normalAt = sirVertexLayout.z;
+        vec3 localN = sirVertex(i0, normalAt) * (1.0 - bary.x - bary.y) + sirVertex(i1, normalAt) * bary.x +
+                      sirVertex(i2, normalAt) * bary.y;
+        vec3 hitN = normalize(transpose(inverse(mat3(toWorld))) * localN);
+        if (any(isnan(hitN))) {  // degenerate vertex normals: the triangle's own
+            uint positionAt = sirVertexLayout.y;
+            vec3 p0 = toWorld * vec4(sirVertex(i0, positionAt), 1.0);
+            vec3 p1 = toWorld * vec4(sirVertex(i1, positionAt), 1.0);
+            vec3 p2 = toWorld * vec4(sirVertex(i2, positionAt), 1.0);
+            hitN = normalize(cross(p1 - p0, p2 - p0));
+        }
+        if (dot(hitN, dir) > 0.0) hitN = -hitN;  // the side the ray arrived on
+        vec3 hit = origin + dir * distance;
+        SharcRaySurface surface = sirSurfaces[inst.surface];
+        vec3 cached;
+        sharcIrradianceLookup(hit, hitN, cached);
+        vec3 irradiance = sirDirectIrradiance(hit, hitN) + sirAmbient(hitN) + cached;
+        incoming = surface.emission.rgb + surface.albedo.rgb * SHARC_INV_PI * irradiance;
+    } else {
+        incoming = sirAmbient(dir) * SHARC_INV_PI;  // nothing in the way: the ambient sky
+    }
+
+    // With cosine-weighted directions the irradiance is pi times the radiance.
+    vec3 sampleIrradiance = incoming * SHARC_PI;
+    float luminance = sharcLuminance(sampleIrradiance);
+    if (luminance > sirLimits.x) sampleIrradiance *= sirLimits.x / luminance;  // no sparkle off lamps
+    if (any(isnan(sampleIrradiance)) || any(isinf(sampleIrradiance))) return;
+
+    uint level = sharcIrradianceLevel(world);
+    bool inserted;
+    uint slot = sharcInsertSlot(sharcIrradianceGrid(world, level), sharcIrradianceKeyLevel(level, n), inserted);
+    if (slot == SHARC_SLOT_INVALID) return;
+    if (inserted) {
+        // A fresh (or reclaimed) cell starts empty.
+        sharcStoreMoments(slot, vec3(0.0), vec3(0.0, 1.0, 0.0), vec3(0.0), 0.0);
+        sharcStoreMeta(slot, 0u, frame, 0.0, 0.0, level, 1.0, 1.0);
+    }
+    uint a = slot * SHARC_ACCUM_UINTS;
+    atomicAdd(gpu_sharc_accum[a + 0u], sharcFixedEncode(sampleIrradiance.r));
+    atomicAdd(gpu_sharc_accum[a + 1u], sharcFixedEncode(sampleIrradiance.g));
+    atomicAdd(gpu_sharc_accum[a + 2u], sharcFixedEncode(sampleIrradiance.b));
+    atomicAdd(gpu_sharc_accum[a + 3u], 1u);
+}
