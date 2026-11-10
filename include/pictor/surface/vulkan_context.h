@@ -54,6 +54,12 @@ struct VulkanContextConfig {
     /// 初期化を失敗させる。 false のままなら機能を有効にしない。
     bool        require_multiview = false;
 
+    /// Ray queries from any shader stage (VK_KHR_ray_query on
+    /// VK_KHR_acceleration_structure, with buffer device addresses): the host
+    /// builds its own acceleration structures and traces against them.
+    /// A device without them fails initialization with MissingCapability.
+    bool        require_ray_query = false;
+
     /// Portability subset features (VK_KHR_portability_subset, e.g. MoltenVK)
     /// the host depends on. Ignored on conformant devices. A subset device
     /// lacking any of them fails initialization with MissingCapability.
@@ -186,6 +192,8 @@ public:
     bool has_rasterization_order_attachment_access()   const { return has_rasterization_order_attachment_access_; }
     /// VK_KHR_multiview を有効にしてデバイスを作ったか (require_multiview の結果)。
     bool has_multiview()                               const { return has_multiview_; }
+    /// レイクエリ (加速構造・バッファデバイスアドレス込み) を有効にしてデバイスを作ったか。
+    bool has_ray_query()                               const { return has_ray_query_; }
     /// Portability capabilities probed at creation (subset device, features).
     const PortabilityCapabilities& portability() const { return portability_; }
 
@@ -269,6 +277,8 @@ private:
     bool has_rasterization_order_attachment_access_ = false;
     bool has_multiview_                             = false;
     bool multiview_requested_                       = false;
+    bool has_ray_query_                             = false;
+    bool ray_query_requested_                       = false;
     PortabilityFeatures     required_portability_features_{};
     PortabilityCapabilities portability_{};
     /// The last create_swapchain() found a zero-area surface and deferred.

@@ -90,6 +90,7 @@ bool VulkanContext::initialize(ISurfaceProvider* provider,
     frames_in_flight_          = std::max<uint32_t>(1, cfg.frames_in_flight);
     device_requirements_       = cfg.device_requirements;
     multiview_requested_       = cfg.require_multiview;
+    ray_query_requested_       = cfg.require_ray_query;
     required_portability_features_ = cfg.required_portability_features;
 
     if (!create_instance(cfg))              return fail("create instance");
@@ -850,6 +851,21 @@ bool VulkanContext::create_logical_device() {
         dev_extensions.push_back(VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
 #endif
 
+    if (ray_query_requested_) {
+        // Acceleration structures and ray queries, both resting on device
+        // addresses (core in 1.2) and deferred host operations.
+        const std::vector<std::string> available = enumerate_device_extension_names(physical_device_);
+        if (const char* missing = first_missing_extension({VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                                                           VK_KHR_RAY_QUERY_EXTENSION_NAME,
+                                                           VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME},
+                                                          available)) {
+            return fail_init_(ContextInitStatus::MissingDeviceExtension, missing);
+        }
+        dev_extensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        dev_extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        dev_extensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+    }
+
     if (!check_device_capabilities(dev_extensions)) return false;
 
     // multiview は Vulkan 1.1 でコア化されているので拡張名は不要、 機能ビットだけ要る。
@@ -897,6 +913,45 @@ bool VulkanContext::create_logical_device() {
 #endif
     if (has_multiview_) {
         *etail = &multiview_feat_en; etail = &multiview_feat_en.pNext;
+    }
+
+    has_ray_query_ = false;
+    VkPhysicalDeviceVulkan12Features vk12_feat_en{};
+    vk12_feat_en.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accel_feat_en{};
+    accel_feat_en.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    VkPhysicalDeviceRayQueryFeaturesKHR ray_query_feat_en{};
+    ray_query_feat_en.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    if (ray_query_requested_) {
+        VkPhysicalDeviceVulkan12Features vk12_probe{};
+        vk12_probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR accel_probe{};
+        accel_probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+        VkPhysicalDeviceRayQueryFeaturesKHR ray_query_probe{};
+        ray_query_probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+        vk12_probe.pNext = &accel_probe;
+        accel_probe.pNext = &ray_query_probe;
+        VkPhysicalDeviceFeatures2 ray_probe2{};
+        ray_probe2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        ray_probe2.pNext = &vk12_probe;
+        vkGetPhysicalDeviceFeatures2(physical_device_, &ray_probe2);
+        if (vk12_probe.bufferDeviceAddress != VK_TRUE) {
+            return fail_init_(ContextInitStatus::MissingCapability, "bufferDeviceAddress");
+        }
+        if (accel_probe.accelerationStructure != VK_TRUE) {
+            return fail_init_(ContextInitStatus::MissingCapability, "accelerationStructure");
+        }
+        if (ray_query_probe.rayQuery != VK_TRUE) {
+            return fail_init_(ContextInitStatus::MissingCapability, "rayQuery");
+        }
+        vk12_feat_en.bufferDeviceAddress = VK_TRUE;
+        accel_feat_en.accelerationStructure = VK_TRUE;
+        ray_query_feat_en.rayQuery = VK_TRUE;
+        *etail = &vk12_feat_en; etail = &vk12_feat_en.pNext;
+        *etail = &accel_feat_en; etail = &accel_feat_en.pNext;
+        *etail = &ray_query_feat_en; etail = &ray_query_feat_en.pNext;
+        has_ray_query_ = true;
+        printf("[Pictor] ray queries enabled (VK_KHR_acceleration_structure + VK_KHR_ray_query)\n");
     }
 
     VkDeviceCreateInfo create_info{};
