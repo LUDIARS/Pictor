@@ -1,5 +1,7 @@
 build/
 .build/
+# Lorica checkout made by .github/workflows/build.yml (LORICA_SOURCE_DIR in CI).
+_ci/
 *.o
 *.a
 *.so
