@@ -1,4 +1,5 @@
 ﻿#include "pictor/text/font_loader.h"
+#include "pictor/core/bounded_file.h"
 #include "pictor/core/parse_limits.h"
 #include <fstream>
 #include <cstring>
@@ -42,16 +43,11 @@ inline uint32_t make_tag(char a, char b, char c, char d) {
 // ============================================================
 
 FontHandle FontLoader::load_from_file(const std::string& path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) return INVALID_FONT;
-
-    auto file_size = file.tellg();
-    if (file_size <= 0) return INVALID_FONT;
-
-    std::vector<uint8_t> buffer(static_cast<size_t>(file_size));
-    file.seekg(0);
-    file.read(reinterpret_cast<char*>(buffer.data()), file_size);
-    if (!file) return INVALID_FONT;
+    std::vector<uint8_t> buffer;
+    if (read_file_bounded(path, parse_limits::kMaxFontFileBytes, buffer) != FileReadStatus::OK ||
+        buffer.empty()) {
+        return INVALID_FONT;
+    }
 
     // Extract family name from file path
     std::string name = path;
@@ -331,6 +327,9 @@ bool FontLoader::parse_font_tables(FontTableEntry& entry) {
     }
 
     // ---- 'hmtx' table ----
+    // numberOfHMetrics must not exceed numGlyphs; a font declaring more would index
+    // past the per-glyph arrays below. Clamp, as FreeType does.
+    if (parsed.num_h_metrics > parsed.num_glyphs) parsed.num_h_metrics = parsed.num_glyphs;
     if (hmtx_data && hmtx_len > 0 && parsed.num_h_metrics > 0) {
         parsed.advance_widths.resize(parsed.num_glyphs, 0);
         parsed.left_side_bearings.resize(parsed.num_glyphs, 0);

@@ -12,10 +12,18 @@
 
 #include "pictor/animation/fbx_document.h"
 
+#include "pictor/core/bounded_file.h"
 #include "pictor/core/parse_limits.h"
+
+#include <lorica/byte_reader.hpp>
+#include <lorica/checked_size.hpp>
+#include <lorica/input_budget.hpp>
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <limits>
+#include <span>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -39,6 +47,17 @@ inline T read_le(const uint8_t* p) noexcept {
 inline bool set_err(std::string* dst, std::string msg) {
     if (dst) *dst = std::move(msg);
     return false;
+}
+
+// One budget per parse() call. Allocations are counted but not limited: bytes and
+// elements bound the memory, depth bounds the recursion.
+lorica::input_budget make_budget(const FBXParseLimits& limits) noexcept {
+    return lorica::input_budget({limits.max_bytes, limits.max_elements,
+                                 std::numeric_limits<size_t>::max(), limits.max_depth});
+}
+
+inline bool budget_err(std::string* dst) {
+    return set_err(dst, "fbx: document exceeds the parse budget (FBXParseLimits)");
 }
 
 // ── zlib / DEFLATE 自前 inflate ──────────────────────────────────
@@ -533,25 +552,43 @@ const FBXProperty* FBXNode::property(size_t index) const noexcept {
 
 namespace {
 
+// Little-endian cursor over the document (lorica::byte_reader: every read checks
+// what remains first and a failed read consumes nothing) plus the document budget.
 struct BinReader {
-    const uint8_t* data;
-    size_t         size;
-    size_t         pos = 0;
-    bool           ok  = true;
+    lorica::byte_reader   in;
+    lorica::input_budget& budget;
 
-    BinReader(const uint8_t* d, size_t s) : data(d), size(s) {}
+    BinReader(const uint8_t* d, size_t s, lorica::input_budget& b)
+        : in(std::span<const std::byte>(reinterpret_cast<const std::byte*>(d), s)), budget(b) {}
 
-    bool read_bytes(void* dst, size_t n) {
-        if (pos + n > size) { ok = false; return false; }
-        std::memcpy(dst, data + pos, n);
-        pos += n;
+    size_t pos() const noexcept { return in.offset(); }
+    size_t size() const noexcept { return in.size(); }
+    size_t remaining() const noexcept { return in.remaining(); }
+
+    template <typename T> bool read_le(T& v) {
+        if constexpr (std::is_same_v<T, float>) {
+            const auto bits = in.read_little_endian<uint32_t>();
+            if (!bits) return false;
+            v = std::bit_cast<float>(*bits);
+        } else if constexpr (std::is_same_v<T, double>) {
+            const auto bits = in.read_little_endian<uint64_t>();
+            if (!bits) return false;
+            v = std::bit_cast<double>(*bits);
+        } else {
+            const auto value = in.read_little_endian<T>();
+            if (!value) return false;
+            v = *value;
+        }
         return true;
     }
-    template <typename T> bool read_le(T& v) { return read_bytes(&v, sizeof(T)); }
-    bool skip(size_t n) {
-        if (pos + n > size) { ok = false; return false; }
-        pos += n; return true;
+    // The next n bytes, or false (nothing consumed) when fewer remain.
+    bool take(size_t n, const uint8_t*& out) {
+        const auto part = in.take(n);
+        if (!part) return false;
+        out = reinterpret_cast<const uint8_t*>(part->data());
+        return true;
     }
+    bool skip(size_t n) { return in.skip(n); }
 };
 
 bool read_property(BinReader& br, FBXProperty& p, std::string* error) {
@@ -587,9 +624,10 @@ bool read_property(BinReader& br, FBXProperty& p, std::string* error) {
         case FBXPropertyType::STRING:
         case FBXPropertyType::RAW: {
             uint32_t len; if (!br.read_le(len)) return set_err(error,"binary: STR len EOF");
-            if (br.pos + len > br.size) return set_err(error,"binary: STR body EOF");
-            p.str.assign(reinterpret_cast<const char*>(br.data + br.pos), len);
-            br.pos += len;
+            const uint8_t* body = nullptr;
+            if (!br.take(len, body)) return set_err(error,"binary: STR body EOF");
+            if (!br.budget.consume(len, 0, 1)) return budget_err(error);
+            p.str.assign(reinterpret_cast<const char*>(body), len);
             return true;
         }
         case FBXPropertyType::ARR_BOOL:
@@ -611,35 +649,38 @@ bool read_property(BinReader& br, FBXProperty& p, std::string* error) {
                 case FBXPropertyType::ARR_DOUBLE: elem_size = 8; break;
                 default: break;
             }
-            size_t expected = static_cast<size_t>(length) * elem_size;
+            // ARR_BOOL is stored one byte per element but kept as int32.
+            const size_t stored_size = p.type == FBXPropertyType::ARR_BOOL ? sizeof(int32_t) : elem_size;
+            const auto expected = lorica::checked_multiply(static_cast<size_t>(length), elem_size);
+            const auto stored   = lorica::checked_multiply(static_cast<size_t>(length), stored_size);
             // 過大確保 / zip bomb 抑止: ファイル由来の length をそのまま信用せず
             // 絶対上限で弾く (raw/zlib いずれの経路でも resize/reserve 前に検査)。
-            if (expected > parse_limits::kMaxInflateBytes) {
+            if (!expected || !stored || *expected > parse_limits::kMaxInflateBytes) {
                 return set_err(error,"binary: ARR length exceeds limit");
             }
+            // The decoded array counts toward the document budget before it exists.
+            if (!br.budget.consume(*stored, 0, 1)) return budget_err(error);
 
             std::vector<uint8_t> raw_storage;
             const uint8_t* raw = nullptr;
-            size_t raw_n = 0;
+            const uint8_t* packed = nullptr;
             if (encoding == 0) {
-                if (br.pos + comp_len > br.size) return set_err(error,"binary: ARR raw EOF");
-                if (comp_len != expected)        return set_err(error,"binary: ARR raw size mismatch");
-                raw = br.data + br.pos;
-                raw_n = comp_len;
-                br.pos += comp_len;
+                if (!br.take(comp_len, packed)) return set_err(error,"binary: ARR raw EOF");
+                if (comp_len != *expected)      return set_err(error,"binary: ARR raw size mismatch");
+                raw = packed;
             } else if (encoding == 1) {
-                if (br.pos + comp_len > br.size) return set_err(error,"binary: ARR zlib EOF");
-                if (!fbx_zlib_decompress(br.data + br.pos, comp_len, raw_storage, expected, error)) {
+                if (!br.take(comp_len, packed)) return set_err(error,"binary: ARR zlib EOF");
+                if (!fbx_zlib_decompress(packed, comp_len, raw_storage, *expected, error)) {
                     return false;
                 }
-                if (raw_storage.size() != expected) return set_err(error,"binary: ARR inflate size mismatch");
+                if (raw_storage.size() != *expected) return set_err(error,"binary: ARR inflate size mismatch");
                 raw = raw_storage.data();
-                raw_n = raw_storage.size();
-                br.pos += comp_len;
             } else {
                 return set_err(error,"binary: ARR unknown encoding");
             }
-            (void)raw_n;
+            // An empty array has no storage: memcpy with a null destination is undefined
+            // even for zero bytes (found by the libFuzzer entry, tests/fuzz/).
+            if (length == 0) return true;
 
             switch (p.type) {
                 case FBXPropertyType::ARR_BOOL:
@@ -672,8 +713,8 @@ bool read_property(BinReader& br, FBXProperty& p, std::string* error) {
     }
 }
 
-bool read_node(BinReader& br, FBXNode& out, uint32_t version, int depth, std::string* error) {
-    if (depth > parse_limits::kMaxNestingDepth) {
+bool read_node(BinReader& br, FBXNode& out, uint32_t version, size_t depth, std::string* error) {
+    if (!br.budget.permits_depth(depth)) {
         return set_err(error,"binary: node nesting too deep");
     }
     bool is_v75 = version >= 7500;
@@ -697,24 +738,33 @@ bool read_node(BinReader& br, FBXNode& out, uint32_t version, int depth, std::st
         return true;
     }
 
-    if (end_offset > br.size) return set_err(error,"binary: end_offset overruns");
+    if (end_offset > br.size()) return set_err(error,"binary: end_offset overruns");
 
-    if (br.pos + name_len > br.size) return set_err(error,"binary: name EOF");
-    out.name.assign(reinterpret_cast<const char*>(br.data + br.pos), name_len);
-    br.pos += name_len;
+    const uint8_t* name = nullptr;
+    if (!br.take(name_len, name)) return set_err(error,"binary: name EOF");
 
     // 過大確保 / bad_alloc 抑止: 各プロパティは最低 1 バイト (型コード) を要するため、
     // 残りバイト数を超える num_props は不正。 実体読み出し前に弾く。
-    if (num_props > static_cast<uint64_t>(br.size - br.pos)) {
+    if (num_props > static_cast<uint64_t>(br.remaining())) {
         return set_err(error,"binary: num_props exceeds input");
     }
-    out.properties.resize(num_props);
+    // The node and its property slots count toward the budget before they exist.
+    const size_t prop_count = static_cast<size_t>(num_props);
+    const auto prop_bytes = lorica::checked_multiply(prop_count, sizeof(FBXProperty));
+    const auto node_bytes = prop_bytes ? lorica::checked_add(*prop_bytes, sizeof(FBXNode) + name_len)
+                                       : std::nullopt;
+    const auto elements = lorica::checked_add(prop_count, size_t{1});
+    if (!node_bytes || !elements || !br.budget.consume(*node_bytes, *elements, 1)) {
+        return budget_err(error);
+    }
+    out.name.assign(reinterpret_cast<const char*>(name), name_len);
+    out.properties.resize(prop_count);
     for (uint64_t i = 0; i < num_props; ++i) {
         if (!read_property(br, out.properties[i], error)) return false;
     }
 
     // 子ノードがある場合、ここまでの位置 != end_offset
-    while (br.pos < end_offset) {
+    while (br.pos() < end_offset) {
         FBXNode child;
         if (!read_node(br, child, version, depth + 1, error)) return false;
         if (child.empty()) break;       // sentinel に到達
@@ -722,10 +772,11 @@ bool read_node(BinReader& br, FBXNode& out, uint32_t version, int depth, std::st
     }
     // Never rewind past a header, property, child, or sentinel already consumed:
     // the caller would otherwise repeatedly append the same non-empty node.
-    if (end_offset < br.pos) return set_err(error,"binary: end_offset precedes consumed data");
-    if (br.pos < end_offset) {
-        // Forward padding after a sentinel remains permitted.
-        br.pos = static_cast<size_t>(end_offset);
+    if (end_offset < br.pos()) return set_err(error,"binary: end_offset precedes consumed data");
+    if (br.pos() < end_offset) {
+        // Forward padding after a sentinel remains permitted (end_offset <= size above).
+        if (!br.skip(static_cast<size_t>(end_offset) - br.pos()))
+            return set_err(error,"binary: end_offset overruns");
     }
     return true;
 }
@@ -749,10 +800,11 @@ bool FBXDocument::parse_binary(const uint8_t* data, size_t size, std::string* er
     if (size < kHeaderSize) return set_err(error,"binary: header too short");
     version = read_le<uint32_t>(data + 23);
 
-    BinReader br(data, size);
-    br.pos = kHeaderSize;
+    lorica::input_budget budget = make_budget(limits);
+    BinReader br(data, size, budget);
+    if (!br.skip(kHeaderSize)) return set_err(error,"binary: header too short");
 
-    while (br.pos < size) {
+    while (br.pos() < size) {
         FBXNode child;
         if (!read_node(br, child, version, 0, error)) return false;
         if (child.empty()) break;
@@ -777,10 +829,11 @@ namespace {
 struct AsciiReader {
     const uint8_t* data;
     size_t         size;
+    lorica::input_budget& budget;
     size_t         pos = 0;
     int            line = 1;
 
-    AsciiReader(const uint8_t* d, size_t s) : data(d), size(s) {}
+    AsciiReader(const uint8_t* d, size_t s, lorica::input_budget& b) : data(d), size(s), budget(b) {}
 
     bool eof() const { return pos >= size; }
     char peek() const { return pos < size ? static_cast<char>(data[pos]) : '\0'; }
@@ -803,7 +856,8 @@ struct AsciiReader {
 
     bool match(char c) { skip_ws(); if (peek() == c) { get(); return true; } return false; }
 
-    // 識別子: [A-Za-z_][A-Za-z0-9_\-|:.]*
+    // 識別子: [A-Za-z_][A-Za-z0-9_\-|.]*  (':' は key の区切りなので含めない。
+    // 含めると "Name:" 全体が識別子になり、 どの node も ':' 不足で失敗していた)
     bool read_identifier(std::string& out) {
         skip_ws();
         size_t start = pos;
@@ -813,7 +867,7 @@ struct AsciiReader {
         while (!eof()) {
             char ch = peek();
             if (std::isalnum(static_cast<unsigned char>(ch)) ||
-                ch == '_' || ch == '-' || ch == '|' || ch == ':' || ch == '.') {
+                ch == '_' || ch == '-' || ch == '|' || ch == '.') {
                 ++pos;
             } else break;
         }
@@ -902,6 +956,7 @@ bool parse_property_value(AsciiReader& r, FBXProperty& p, std::string* error) {
                 if (r.peek() == ',') { r.get(); continue; }
                 std::string nv;
                 if (!r.read_number(nv)) return set_err(error,"ascii: expected number in array");
+                if (!r.budget.consume(sizeof(double), 0, 0)) return budget_err(error);
                 try {
                     p.arr_f64.push_back(std::stod(nv));
                 } catch (...) { p.arr_f64.push_back(0.0); }
@@ -933,8 +988,8 @@ bool parse_property_value(AsciiReader& r, FBXProperty& p, std::string* error) {
     return set_err(error,std::string("ascii: unexpected char '") + c + "' at line " + std::to_string(r.line));
 }
 
-bool parse_node_ascii(AsciiReader& r, FBXNode& out, int depth, std::string* error) {
-    if (depth > parse_limits::kMaxNestingDepth) {
+bool parse_node_ascii(AsciiReader& r, FBXNode& out, size_t depth, std::string* error) {
+    if (!r.budget.permits_depth(depth)) {
         return set_err(error,"ascii: node nesting too deep");
     }
     r.skip_ws();
@@ -947,6 +1002,7 @@ bool parse_node_ascii(AsciiReader& r, FBXNode& out, int depth, std::string* erro
         return set_err(error,std::string("ascii: expected ':' after '") + out.name + "' at line " + std::to_string(r.line));
     }
     r.get(); // ':'
+    if (!r.budget.consume(sizeof(FBXNode) + out.name.size(), 1, 1)) return budget_err(error);
 
     // プロパティリスト (オプション)
     r.skip_ws();
@@ -958,6 +1014,7 @@ bool parse_node_ascii(AsciiReader& r, FBXNode& out, int depth, std::string* erro
             if (r.peek() == '{' || r.eof()) break;
             FBXProperty p;
             if (!parse_property_value(r, p, error)) return false;
+            if (!r.budget.consume(sizeof(FBXProperty) + p.str.size(), 1, 1)) return budget_err(error);
             out.properties.push_back(std::move(p));
             r.skip_ws();
             if (r.peek() == ',') { r.get(); continue; }
@@ -989,7 +1046,8 @@ bool FBXDocument::parse_ascii(const uint8_t* data, size_t size, std::string* err
     version  = 0;
     root     = FBXNode{};
 
-    AsciiReader r(data, size);
+    lorica::input_budget budget = make_budget(limits);
+    AsciiReader r(data, size, budget);
     while (true) {
         r.skip_ws();
         if (r.eof()) break;
@@ -1010,15 +1068,12 @@ bool FBXDocument::parse(const uint8_t* data, size_t size, std::string* error) {
 }
 
 bool FBXDocument::load_file(const std::string& path, std::string* error) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f.good()) return set_err(error,"fbx: cannot open file: " + path);
-    f.seekg(0, std::ios::end);
-    auto sz = f.tellg();
-    if (sz <= 0) return set_err(error,"fbx: empty file");
-    std::vector<uint8_t> buf(static_cast<size_t>(sz));
-    f.seekg(0);
-    f.read(reinterpret_cast<char*>(buf.data()), sz);
-    if (!f) return set_err(error,"fbx: read failure");
+    std::vector<uint8_t> buf;
+    const FileReadStatus status = read_file_bounded(path, parse_limits::kMaxModelFileBytes, buf);
+    if (status != FileReadStatus::OK) {
+        return set_err(error, std::string("fbx: cannot read file (") + file_read_status_name(status) + "): " + path);
+    }
+    if (buf.empty()) return set_err(error,"fbx: empty file");
     return parse(buf.data(), buf.size(), error);
 }
 

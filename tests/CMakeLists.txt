@@ -45,6 +45,7 @@ set(PICTOR_TESTS
     unit_fbx_track_csv_test
     unit_fbx_morph_targets_test
     unit_web_mesh_input_test
+    unit_input_bounds_test
     pixel_text_test
     fps_baseline_test
 )
