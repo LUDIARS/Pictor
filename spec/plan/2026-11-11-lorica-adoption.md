@@ -199,3 +199,9 @@ FORTIFY の設定が違うこと、`cmake/PictorLorica.cmake` とこの文書の
   build ツリーの ELF 実行ファイルすべてが PIE / NX stack / full RELRO。
 - 速度 (目安): `fps_baseline_test` の平均フレーム時間は着手時 4.48 ms → Lorica 適用後 4.56 ms (+2% 前後、
   混んだ機械でのばらつきの範囲)。
+
+### 6.7 「Lorica を使っているか」のテストと CI での取得 (2026-11-11 追記)
+
+- `tests/lorica_applied/`: `lorica_applied_tu_test` (強制 include された `unsafe_api.hpp` の宣言・`__SSP_STRONG__`・`__CET__`・PIE・`_GLIBCXX_ASSERTIONS` / `_LIBCPP_HARDENING_MODE`・最適化ビルドの FORTIFY 3 を TU の中から確かめ、`checked_add` / `input_budget` を実行)、`lorica_applied_compile_commands_test` (`cmake -P` で `compile_commands.json` の Pictor の全 TU と source-built GLFW の C を点検。Visual Studio / Xcode・守りなしの toolchain は `PICTOR_LORICA_SKIP:` で skip)、`lorica_applied_binary_<target>_test` (python3 と readelf があるときだけ、tests/ の外の実行ファイルと probe に `verify_binary.py`)。期待値は toolchain から決め、Lorica が付けた property は読まない。
+- わざと壊した確認: target を Lorica から外す (`PICTOR_LORICA_APPLIED` だけ立てる)、`-U_GLIBCXX_ASSERTIONS` / `-fno-stack-protector` / `-fcf-protection=none` / `-D_FORTIFY_SOURCE=0` / `-Wno-deprecated-declarations` を後から足す、強制 include を外す、のどれでも上のテストが落ちる。
+- `CMAKE_EXPORT_COMPILE_COMMANDS` は top-level のときだけ ON。CI (`build.yml`) は `cmake/PictorLorica.cmake` の固定 SHA を読み、`LUDIARS_REPO_TOKEN` で `LUDIARS/Lorica` を `_ci/lorica` に取得して `LORICA_SOURCE_DIR` に渡す (secret が空なら `::error::` で止める)。ソースツリー内の Lorica は Pictor の target として数えない。

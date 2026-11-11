@@ -3,7 +3,11 @@ project(Pictor VERSION 2.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Top level only: tests/lorica_applied reads compile_commands.json; an including project
+# decides for its own build tree.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
 
 option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
 option(PICTOR_BUILD_TOOLS         "Build developer tool targets (feature selector etc.)" OFF)

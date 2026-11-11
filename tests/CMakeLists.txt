@@ -149,6 +149,10 @@ if(TARGET pictor_fonts)
     endforeach()
 endif()
 
+# Lorica is really applied: inside a unit, in every compile command, in the executables
+# (tests/lorica_applied/CMakeLists.txt).
+add_subdirectory(lorica_applied)
+
 # Fuzz entry points: regression executables always, libFuzzer binaries with
 # PICTOR_BUILD_FUZZERS (tests/fuzz/CMakeLists.txt).
 add_subdirectory(fuzz)
