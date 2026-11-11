@@ -9,6 +9,7 @@
 #include "pictor/pictor_vulkan.h"
 #include "test_common.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
@@ -26,15 +27,17 @@ constexpr uint32_t MEASURE_FRAMES = 200;
 
 class NoopUpdate : public IUpdateCallback {
 public:
-    float t = 0.0f;
+    // update() runs on the dispatcher's worker threads, one call per chunk: the shared
+    // clock must be atomic (ThreadSanitizer reported the plain float as a data race).
+    std::atomic<float> t{0.0f};
     void update(float4x4* transforms, AABB* bounds,
                 uint32_t start, uint32_t count, float dt) override {
-        t += dt;
+        const float now = (t += dt);
         // Cheap deterministic motion so the SoA streams actually get touched.
         for (uint32_t i = 0; i < count; ++i) {
             uint32_t idx = start + i;
             float x = static_cast<float>(idx % 100) - 50.0f;
-            float y = std::sin(t + static_cast<float>(idx) * 0.001f);
+            float y = std::sin(now + static_cast<float>(idx) * 0.001f);
             float z = static_cast<float>((idx / 100) % 100) - 50.0f;
             transforms[idx] = float4x4::identity();
             transforms[idx].set_translation(x, y, z);

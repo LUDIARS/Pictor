@@ -76,7 +76,8 @@
     { "glob": "third_party/stb/*", "layer": "infrastructure" },
 
     { "glob": "spec/interface/anatomia/domains/*", "layer": "shared" },
-    { "glob": "tests/*", "layer": "shared" }
+    { "glob": "tests/*", "layer": "shared" },
+    { "glob": "tests/fuzz/*", "layer": "shared" }
   ],
 
   "mergeCouplingThreshold": 1

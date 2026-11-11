@@ -5,7 +5,13 @@
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)tests/(?:test_common\\.h|CMakeLists\\.txt)$"
+      "pathPattern": "(^|/)tests/(?:test_common\\.h|synthetic_font\\.h|CMakeLists\\.txt)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/fuzz/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)cmake/PictorSanitizers\\.cmake$"
     }
   ]
 }

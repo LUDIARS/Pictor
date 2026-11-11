@@ -19,6 +19,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # --- Lorica (boundary checks + build hardening on every Pictor target) — cmake/PictorLorica.cmake ---
 include(cmake/PictorLorica.cmake)
+include(cmake/PictorSanitizers.cmake)
 
 # ---------------------------------------------------------------------------
 # モバイル (Android NDK / iOS) クロスビルドの早期分岐 — Issue #47
@@ -56,6 +57,7 @@ include(cmake/PictorCore.cmake)
 if(EMSCRIPTEN)
     include(cmake/PictorWebGL.cmake)
     pictor_lorica_apply_all()
+    pictor_sanitize_all()
     return()
 endif()
 
@@ -756,3 +758,4 @@ endif()
 # ─── Lorica on every Pictor-owned compiled target (cmake/PictorLorica.cmake) ─
 # Keep this last: a Pictor target defined after it fails configure.
 pictor_lorica_apply_all()
+pictor_sanitize_all()

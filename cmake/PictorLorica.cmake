@@ -84,7 +84,8 @@ function(_pictor_lorica_own_directories dir out)
 endfunction()
 set(PICTOR_LORICA_THIRD_PARTY_DIR "${PROJECT_SOURCE_DIR}/third_party")
 
-function(_pictor_lorica_own_compiled_targets out)
+# Every compiled target in a Pictor-owned directory (also used by PictorSanitizers.cmake).
+function(pictor_own_compiled_targets out)
     _pictor_lorica_own_directories("${PROJECT_SOURCE_DIR}" dirs)
     set(result "")
     foreach(dir IN LISTS dirs)
@@ -144,7 +145,7 @@ endfunction()
 
 # Call once, after every Pictor target of this configure exists.
 function(pictor_lorica_apply_all)
-    _pictor_lorica_own_compiled_targets(targets)
+    pictor_own_compiled_targets(targets)
     foreach(target IN LISTS targets)
         pictor_lorica_target("${target}")
     endforeach()
@@ -167,7 +168,7 @@ endfunction()
 # Deferred to the end of Pictor's top directory: no Pictor-owned compiled target may
 # have been added after pictor_lorica_apply_all() without Lorica.
 function(_pictor_lorica_check_all)
-    _pictor_lorica_own_compiled_targets(targets)
+    pictor_own_compiled_targets(targets)
     set(missing "")
     foreach(target IN LISTS targets)
         get_target_property(done "${target}" PICTOR_LORICA_APPLIED)

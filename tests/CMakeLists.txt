@@ -149,6 +149,10 @@ if(TARGET pictor_fonts)
     endforeach()
 endif()
 
+# Fuzz entry points: regression executables always, libFuzzer binaries with
+# PICTOR_BUILD_FUZZERS (tests/fuzz/CMakeLists.txt).
+add_subdirectory(fuzz)
+
 # Reasonable per-test timeout — units finish in milliseconds, FPS test
 # completes in well under 5 seconds on any modern host.
 set_tests_properties(${PICTOR_TESTS} PROPERTIES TIMEOUT 60)
