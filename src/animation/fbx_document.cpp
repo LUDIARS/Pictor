@@ -25,6 +25,7 @@
 #include <limits>
 #include <span>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -42,6 +43,17 @@ inline T read_le(const uint8_t* p) noexcept {
     T v;
     std::memcpy(&v, p, sizeof(T));
     return v;
+}
+
+// File-supplied floating values converted to int64: NaN gives 0 and values beyond
+// the range saturate, instead of the undefined behaviour of an out-of-range cast
+// (UBSan finding of the libFuzzer run on ASCII FBX, 2026-11-11).
+inline int64_t saturating_int64(double v) noexcept {
+    constexpr double kLimit = 9223372036854775808.0;  // 2^63
+    if (std::isnan(v)) return 0;
+    if (v >= kLimit) return std::numeric_limits<int64_t>::max();
+    if (v < -kLimit) return std::numeric_limits<int64_t>::min();
+    return static_cast<int64_t>(v);
 }
 
 inline bool set_err(std::string* dst, std::string msg) {
@@ -422,7 +434,7 @@ int64_t FBXProperty::as_int() const noexcept {
         case FBXPropertyType::INT32:
         case FBXPropertyType::INT64: return i64;
         case FBXPropertyType::FLOAT:
-        case FBXPropertyType::DOUBLE: return static_cast<int64_t>(f64);
+        case FBXPropertyType::DOUBLE: return saturating_int64(f64);
         case FBXPropertyType::STRING:
         case FBXPropertyType::RAW: {
             try { return std::stoll(str); } catch (...) { return 0; }
@@ -494,11 +506,11 @@ std::vector<int64_t> FBXProperty::as_int_array() const {
             return r;
         case FBXPropertyType::ARR_FLOAT:
             r.reserve(arr_f32.size());
-            for (float v : arr_f32) r.push_back(static_cast<int64_t>(v));
+            for (float v : arr_f32) r.push_back(saturating_int64(v));
             return r;
         case FBXPropertyType::ARR_DOUBLE:
             r.reserve(arr_f64.size());
-            for (double v : arr_f64) r.push_back(static_cast<int64_t>(v));
+            for (double v : arr_f64) r.push_back(saturating_int64(v));
             return r;
         default: return r;
     }

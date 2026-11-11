@@ -24,6 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -213,6 +214,28 @@ void test_fbx_broken_inputs() {
     PT_ASSERT(!doc.parse(f.bytes.data(), f.bytes.size(), &error), "oversized array declaration is refused");
 }
 
+void test_fbx_out_of_range_integers() {
+    // Doubles beyond int64 saturate in as_int / as_int_array (an out-of-range cast was UB).
+    const std::string ascii = "N: 7.7e29, -7.7e29, 12.5\nA: *2 {\n a: 1e300,-1e300\n}\n";
+    FBXDocument doc;
+    std::string error;
+    PT_ASSERT(doc.parse(reinterpret_cast<const uint8_t*>(ascii.data()), ascii.size(), &error), "ASCII parses");
+    const FBXNode* n = doc.root.find_child("N");
+    const FBXNode* a = doc.root.find_child("A");
+    PT_ASSERT(n && n->properties.size() == 3, "three properties");
+    PT_ASSERT(a && a->properties.size() == 1, "one array property");
+    if (n && n->properties.size() == 3) {
+        PT_ASSERT(n->properties[0].as_int() == std::numeric_limits<int64_t>::max(), "large positive saturates");
+        PT_ASSERT(n->properties[1].as_int() == std::numeric_limits<int64_t>::min(), "large negative saturates");
+        PT_ASSERT(n->properties[2].as_int() == 12, "in-range double truncates");
+    }
+    if (a && a->properties.size() == 1) {
+        const auto values = a->properties[0].as_int_array();
+        PT_ASSERT(values.size() == 2 && values[0] == std::numeric_limits<int64_t>::max() &&
+                  values[1] == std::numeric_limits<int64_t>::min(), "array values saturate");
+    }
+}
+
 void test_fbx_file_limit() {
     const fs::path path = sparse_file("big.fbx", std::uintmax_t{parse_limits::kMaxModelFileBytes} + 1);
     FBXDocument doc;
@@ -353,6 +376,7 @@ int main() {
     test_fbx_huge_declared_props();
     test_fbx_ascii_amplification();
     test_fbx_broken_inputs();
+    test_fbx_out_of_range_integers();
     test_fbx_file_limit();
     test_font_hmtx_beyond_glyph_count();
     test_font_file_limit();
