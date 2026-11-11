@@ -81,6 +81,9 @@ if(NOT PICTOR_MOBILE)
             GIT_SHALLOW    TRUE
         )
         FetchContent_MakeAvailable(glfw)
+        # GLFW is C. Lorica probes the C compiler's FORTIFY / stack-clash / CET flags only
+        # where C is enabled, and pictor_lorica_apply_all() hardens glfw from this directory.
+        enable_language(C)
         set(glfw3_FOUND TRUE)
     endif()
 else()
