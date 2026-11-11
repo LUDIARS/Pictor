@@ -17,6 +17,9 @@ option(PICTOR_ENABLE_HW_COUNTERS  "Enable Intel PCM hardware counters (perf C �
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# --- Lorica (boundary checks + build hardening on every Pictor target) — cmake/PictorLorica.cmake ---
+include(cmake/PictorLorica.cmake)
+
 # ---------------------------------------------------------------------------
 # モバイル (Android NDK / iOS) クロスビルドの早期分岐 — Issue #47
 #
@@ -52,6 +55,7 @@ include(cmake/PictorCore.cmake)
 # web targets だけを作る。
 if(EMSCRIPTEN)
     include(cmake/PictorWebGL.cmake)
+    pictor_lorica_apply_all()
     return()
 endif()
 
@@ -745,3 +749,7 @@ if(PICTOR_BUILD_TOOLS AND NOT PICTOR_MOBILE)
         message(WARNING "Pictor: PICTOR_BUILD_TOOLS=ON but tools/feature-selector not found")
     endif()
 endif()
+
+# ─── Lorica on every Pictor-owned compiled target (cmake/PictorLorica.cmake) ─
+# Keep this last: a Pictor target defined after it fails configure.
+pictor_lorica_apply_all()

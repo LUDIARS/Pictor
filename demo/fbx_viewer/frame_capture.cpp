@@ -1,5 +1,7 @@
 #include "frame_capture.h"
 
+#include "c_file.h"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -20,7 +22,7 @@ bool write_bmp32(const std::string& path, uint32_t w, uint32_t h, const uint8_t*
         pixel_bytes64 > std::numeric_limits<uint32_t>::max() ||
         file_size64 > std::numeric_limits<uint32_t>::max()) return false;
 
-    FILE* f = std::fopen(path.c_str(), "wb");
+    FILE* f = open_c_file(path.c_str(), "wb");
     if (!f) return false;
     const uint32_t row_bytes = static_cast<uint32_t>(row_bytes64);
     const uint32_t pixel_bytes = static_cast<uint32_t>(pixel_bytes64);

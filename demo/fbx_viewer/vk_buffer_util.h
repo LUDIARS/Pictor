@@ -5,6 +5,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include "c_file.h"
+
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -58,7 +60,7 @@ inline bool create_buffer(VkDevice device, VkPhysicalDevice pd,
 }
 
 inline VkShaderModule load_shader_spv(VkDevice device, const std::string& path) {
-    FILE* f = std::fopen(path.c_str(), "rb");
+    FILE* f = open_c_file(path.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "Failed to open shader: %s\n", path.c_str()); return VK_NULL_HANDLE; }
     if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return VK_NULL_HANDLE; }
     const long len = std::ftell(f);

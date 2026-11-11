@@ -45,11 +45,18 @@ public:
 };
 
 double env_threshold_ms() {
-    if (const char* s = std::getenv("PICTOR_FPS_THRESHOLD_MS")) {
-        double v = std::atof(s);
-        if (v > 0.0) return v;
-    }
-    return 20.0;
+    // getenv is C4996, an error under the MSVC /sdl of Lorica's baseline.
+#ifdef _MSC_VER
+    char*  s    = nullptr;
+    size_t size = 0;
+    if (_dupenv_s(&s, &size, "PICTOR_FPS_THRESHOLD_MS") != 0) s = nullptr;
+    const double v = s ? std::atof(s) : 0.0;
+    std::free(s);
+#else
+    const char*  s = std::getenv("PICTOR_FPS_THRESHOLD_MS");
+    const double v = s ? std::atof(s) : 0.0;
+#endif
+    return v > 0.0 ? v : 20.0;
 }
 
 } // namespace
