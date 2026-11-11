@@ -11,7 +11,7 @@
 
 | 項目 | 要件 | 根拠 |
 |---|---|---|
-| ビルドシステム | **CMake** (3.20 以上) のみ。premake は Pictor 本体では使わない (Rive を prebuilt 消費するだけ) | `../../CMakeLists.txt:1` |
+| ビルドシステム | **CMake** (3.24 以上。取り込む Lorica が 3.24 を要求する) のみ。premake は Pictor 本体では使わない (Rive を prebuilt 消費するだけ) | `../../CMakeLists.txt:1` |
 | C++ | C++20 対応コンパイラ (GCC / Clang / MSVC) | `../../CMakeLists.txt:4` |
 | CPU | x86/x64 では AVX2 を使用 (ARM64 は `PICTOR_IS_X86` ガードで自動回避) | `../../CMakeLists.txt:271-285` |
 | Vulkan SDK | GPU 機能に必要。未検出時は `find_package(Vulkan QUIET)` でスキップされ、headless デモ/テストのみビルド | `../../CMakeLists.txt:46-49` |

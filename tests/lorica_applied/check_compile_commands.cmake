@@ -21,7 +21,7 @@
 #
 # Skips print "PICTOR_LORICA_SKIP:" (the test's SKIP_REGULAR_EXPRESSION) and stop.
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 
 if(MODE STREQUAL "unsupported" OR MODE STREQUAL "no-export")
     message("PICTOR_LORICA_SKIP: ${REASON}")
