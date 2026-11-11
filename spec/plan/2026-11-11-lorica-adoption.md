@@ -103,4 +103,99 @@ Linux 列: この環境 (Linux x86_64、GCC 13.3 / Clang 18、Vulkan SDK・GPU�
 
 ## 6. やったこと・残り
 
-報告 `/home/user/.cpp-deps/reports/Pictor-report.md` と同じ内容を、段階ごとにここへ追記する。
+### 6.1 Lorica の取り込みと適用 (`cmake/PictorLorica.cmake`)
+
+- 取り込み: `LORICA_SOURCE_DIR` があれば `add_subdirectory`、無ければ FetchContent で固定 commit。
+  取り込む側がすでに `Lorica::boundary` を持つ (自分で `add_subdirectory` / FetchContent / `find_package` した) ときは
+  それを使い、Pictor からは何も足さない (二重定義なし)。Lorica の tests / fuzzer / protection は Pictor の
+  ビルドでは作らない (通常変数で OFF。取り込む側の cache は FORCE しない)。
+- 適用: root の最後の `pictor_lorica_apply_all()` が、Pictor のソース木 (third_party/ と binary dir を除く) の
+  全 compiled target に `Lorica::boundary` (PRIVATE `$<BUILD_INTERFACE:...>`)、`lorica_harden_target` (baseline)、
+  `lorica_deprecate_unsafe_apis` (Lorica が対応する toolchain のみ) を付ける。その後に足された Pictor の target は
+  configure の DEFER 検査で FATAL_ERROR になる。
+- 第三者: FetchContent でビルドする `glfw` と `openxr_loader` に baseline を付ける
+  (`PICTOR_LORICA_HARDEN_FETCHED_DEPS`、既定 ON。OFF にすると WARNING)。C のため unsafe API の拒否は付けない。
+- Lorica が対応しない toolchain では hardening を飛ばし、WARNING で理由と target 数を出す (§4)。
+- EXTENDED: 使わない。Pictor には常駐サーバ・ネットワークの受け口・ブリッジの実行ファイルが無い
+  (graph demo の clangd channel もホストが渡す値を受けるだけで子プロセスを持たない)。ライブラリは毎フレームの
+  描画・カリング・メモリプールを含むので baseline にとどめる。
+- MSVC: Lorica の baseline の `/sdl` は C4996 をエラーにするので、Windows で通る `sscanf` / `getenv` / `fopen` を
+  置き換えた (`vector_animation.cpp`、`fps_baseline_test`、`pixel_text_test`、fbx_viewer / text / sharc のデモ)。
+  MSVC でのビルドは未確認 (§6.5)。
+- 取り込む側への影響: Pictor の hardening のフラグ・定義・Lorica の include は consumer に伝わらない
+  (取り込む側 3 通りの configure と build.ninja で確認。§6.4)。
+
+### 6.2 入力経路の上限 (`pictor/core/bounded_file.h`、`parse_limits.h`)
+
+| 経路 | 入れたもの | 上限 |
+| --- | --- | --- |
+| ファイル丸ごと読み (共通) | `read_file_bounded` / `read_text_file_bounded`: 大きさを `lorica::narrow` で確かめ (tellg の -1 を拒否)、上限と比べてから確保 | 呼び出し側の値 |
+| FBX `load_file` | 上の関数 | `kMaxModelFileBytes` 512 MiB |
+| FBX `parse` (binary) | `lorica::byte_reader` で全読み出し、`lorica::input_budget` で累計予算 (ノード・プロパティの構造体、文字列、展開後の配列を確保の前に計上)、`checked_multiply` で配列の大きさ | `FBXParseLimits`: 2 GiB / 要素 8M / 深さ 256 |
+| FBX `parse` (ASCII) | 同じ予算 (ノード・プロパティ・配列の値ごと) | 同上 |
+| BVH `import_file` | 上限付きで読む | 512 MiB |
+| フォント `load_from_file` | 上限付きで読む | `kMaxFontFileBytes` 256 MiB |
+| フォント `hmtx` | numberOfHMetrics を numGlyphs で切る (配列の外への書き込みを修正) | — |
+| Rive `load_file` | 上限付きで読む (tellg -1 の巨大 resize と、自分自身からの assign を修正) | `kMaxVectorAnimationFileBytes` 64 MiB |
+| Lottie `load_file` | 上限付きで読む | 64 MiB |
+| パイプラインプロファイル (hot reload) | 上限付きで読む | `kMaxConfigFileBytes` 16 MiB |
+| GI ベイク `load` | ファイルを上限付きで読み、件数 × 各区画の大きさを `checked_multiply` と `byte_reader` で中身と照合してから確保。余りのバイトも拒否 | `kMaxBakeFileBytes` 512 MiB |
+| Web mesh 入力 (wasm C ABI) | `vertex_count * 3` と `* 9` を `checked_multiply` (wasm32 の size_t で桁あふれしない) | — |
+
+残り (入れていない。優先の高い順):
+
+1. SPIR-V を読む 10 箇所 (`simple_renderer` `ui_renderer` `ui_overlay_pipeline` `bitmap_text_renderer`
+   `gi_gpu_executor` `gi_ssao_compute` `sharc_executor` `decal_system` `postprocess_pipeline` `reprojection_pass`)。
+   どれも Vulkan のときだけコンパイルされ、この環境ではビルドできないので触っていない。`read_file_bounded` と
+   `shader_registry.cpp` の既存上限 64 MiB に揃えるのが次の作業。
+2. `sharc_executor.cpp` の `load_cache` (Vulkan のみ)。
+3. デモの入力 (`track_csv` `morph_loader` `obj_mesh` `ply_mesh` `dock_layout`、fbx_viewer の cache)。
+4. `fbx_importer` / `fbx_scene` が document から作るメッシュの確保 (document の予算の外)。
+5. `vector_animation.cpp` の SVG 文字列 (呼び出し側が渡す長さ)、C API の受け口。
+
+### 6.3 sanitizer と fuzz
+
+- `cmake/PictorSanitizers.cmake`: `PICTOR_SANITIZE` (ASan + UBSan) / `PICTOR_SANITIZE_THREAD` (TSan)。既定 OFF。
+- `tests/fuzz/`: 入口 4 つ (`fbx_document` `font_loader` `visus_json` `web_mesh_input`)。どれも回帰用の実行ファイル
+  (`pictor_fuzz_regression_*`、seed・その接頭辞・決まった変異を流す) が ctest に入る。`PICTOR_BUILD_FUZZERS=ON`
+  (Clang のみ、既定 OFF) で libFuzzer の実行ファイル `pictor_fuzz_*` も作る。
+
+### 6.4 ビルドの手順 (この環境)
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLORICA_SOURCE_DIR=/path/to/Lorica \
+      -DGLFW_BUILD_WAYLAND=OFF -DGLFW_BUILD_X11=OFF   # X11/Wayland の開発ヘッダが無い環境だけ
+cmake --build build -j2 && ctest --test-dir build
+# ASan + UBSan / TSan
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DPICTOR_BUILD_DEMO=OFF -DPICTOR_SANITIZE=ON ...
+cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DPICTOR_BUILD_DEMO=OFF -DPICTOR_SANITIZE_THREAD=ON ...
+# libFuzzer (Clang)
+CC=clang CXX=clang++ cmake -S . -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPICTOR_BUILD_DEMO=OFF \
+      -DPICTOR_SANITIZE=ON -DPICTOR_BUILD_FUZZERS=ON \
+      -DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link -DCMAKE_C_FLAGS=-fsanitize=fuzzer-no-link ...
+./build-fuzz/tests/fuzz/pictor_fuzz_regression_fbx_document --write-seeds corpus
+./build-fuzz/tests/fuzz/pictor_fuzz_fbx_document -max_total_time=30 corpus
+```
+
+結果の数値は報告 (`/home/user/.cpp-deps/reports/Pictor-report.md`) にある。
+
+### 6.5 人間の判断が要ること (要約)
+
+報告の 9 章を正とする。主なもの: MSVC (Windows) でのビルド確認、`/sdl` が既存コードの警告をエラーにしないか、
+守りと速度のどちらを優先するか (計測は目安のみ)、consumer 側の TU と Pictor の TU で標準ライブラリの assertions /
+FORTIFY の設定が違うこと、`cmake/PictorLorica.cmake` とこの文書のドメイン登録 (release-metadata は lockedFields)。
+
+### 6.6 結果 (2026-11-11、この環境)
+
+- GCC 13 Release: 着手時 ctest 52/52 → 最後 ctest 57/57 (C++ 56 + Node 1)。警告の数は着手時と同じ。
+- ASan + UBSan / TSan (RelWithDebInfo、`-O1 -g1`、デモなし): どちらも ctest 57/57
+  (`fps_baseline_test` は sanitizer では既定の 20 ms 予算を超えるので `PICTOR_FPS_THRESHOLD_MS=500`)。
+  sanitizer で見つけて直したもの: `unit_frame_tap_test` の配列外読み (ASan)、`fps_baseline_test` の callback の
+  データ競合 (TSan)。
+- libFuzzer (Clang 18、ASan + UBSan、各 30 秒): font_loader (15,417 runs)・visus_json (1,306,125)・web_mesh_input
+  (8,120,223。この入口のコードが同じ一つ前の fuzz ビルドでの値) は所見なし。修正後の fbx_document は 998,342 runs で所見なし。fbx_document で 2 件
+  (長さ 0 の配列の memcpy、ASCII の巨大な double の int64 への変換。どちらも UBSan) を直し、seed とテストに入れた。
+- 守り: `compile_commands.json` の全件に Lorica の baseline のフラグ、打ち消す設定 0 件。`verify_binary.py` で
+  build ツリーの ELF 実行ファイルすべてが PIE / NX stack / full RELRO。
+- 速度 (目安): `fps_baseline_test` の平均フレーム時間は着手時 4.48 ms → Lorica 適用後 4.56 ms (+2% 前後、
+  混んだ機械でのばらつきの範囲)。
