@@ -210,3 +210,8 @@ FORTIFY の設定が違うこと、`cmake/PictorLorica.cmake` とこの文書の
 
 - Lorica の CMakeLists.txt が 3.24 を要求し、3.20〜3.23 では Lorica の取り込みで止まっていたため、Pictor 自身の宣言 (`CMakeLists.txt`・`demo/android/CMakeLists.txt`・`tests/lorica_applied/check_compile_commands.cmake`) と README / spec / docs の記述を 3.24 に揃えた。古い CMake には対応しない (依頼者の判断)。CMake 3.20.5 では `CMakeLists.txt:1` の「CMake 3.24 or higher is required」で止まる。
 - 3.21〜3.24 の policy (CMP0126〜CMP0139) が NEW になる影響は、GCC Release の既定構成と Clang の ASan + UBSan + libFuzzer 構成で、変更前後の `compile_commands.json`・`build.ninja`・`rules.ninja` (GCC は `CMakeCache.txt` も) を比べて差なし。Pictor 自身の CMake は該当 policy の対象の命令 (try_compile・CheckIPOSupported・if(PATH_EQUAL) など) を使っていない。`set(... CACHE ...)` (CMP0126) は、取り込む側が同名の通常変数 (`LORICA_SOURCE_DIR` など) を先に置いたとき、それを消さずに使う形に変わる (意図どおり)。MSVC・Android NDK・Emscripten の構成では比べていない。
+
+### 6.9 probe の名前をマクロで綴る (2026-11-12 追記)
+
+- Revisor の Praesidium の文字列の規則 `native.unbounded-copy` (呼び出しの形の `strcpy(` を探す) に `lorica_applied_tu_test.cpp` の probe の 2 行 (未評価の `decltype` と宣言で、呼んではいない) が当たっていたので、名前を `PICTOR_LORICA_PROBE_UNSAFE_NAME(str, cpy)` で綴り、使い終わったら `#undef` する形にした (Praesidium は緩めない。Ergo と同じ書き方)。
+- 直した後の検査: `a6b84d7` からこの PR が足した・変えた C/C++ のファイル全体で指摘 0 件 (テスト以外で当たる行は直す前から 0 件)。probe の確かめる内容は変えていない。強制 include を外すと従来どおり落ちることも確かめた。

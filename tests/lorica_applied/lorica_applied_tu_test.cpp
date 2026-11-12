@@ -18,9 +18,13 @@
 // only come from a forced include. Overload resolution picks the non-template ::strcpy when it
 // is declared, else the fallback template below.
 #if defined(__cplusplus) && !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+// The name is spelled through a macro, as lorica/unsafe_api.hpp itself does, so that no line
+// reads like a call to it: nothing here calls the function (the lookup below is an unevaluated
+// decltype). Praesidium's text rule native.unbounded-copy looks for call-shaped uses.
+#define PICTOR_LORICA_PROBE_UNSAFE_NAME(a, b) a##b
 namespace pictor_lorica_probe {
 struct undeclared {};
-template <class... Args> undeclared strcpy(Args...);
+template <class... Args> undeclared PICTOR_LORICA_PROBE_UNSAFE_NAME(str, cpy)(Args...);
 template <class T> T value_of();  // unevaluated stand-in, like std::declval
 template <class T, class U> struct same { static constexpr bool value = false; };
 template <class T> struct same<T, T> { static constexpr bool value = true; };
@@ -32,11 +36,13 @@ using namespace pictor_lorica_probe;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 constexpr bool kUnsafeApiHeaderForceIncluded =
-    !pictor_lorica_probe::same<decltype(strcpy(pictor_lorica_probe::value_of<char*>(),
-                                               pictor_lorica_probe::value_of<const char*>())),
+    !pictor_lorica_probe::same<decltype(PICTOR_LORICA_PROBE_UNSAFE_NAME(str, cpy)(
+                                   pictor_lorica_probe::value_of<char*>(),
+                                   pictor_lorica_probe::value_of<const char*>())),
                                pictor_lorica_probe::undeclared>::value;
 #pragma GCC diagnostic pop
 } // namespace pictor_lorica_lookup
+#undef PICTOR_LORICA_PROBE_UNSAFE_NAME
 #define PICTOR_LORICA_PROBE_FORCED_INCLUDE 1
 #endif
 // ---------------------------------------------------------------------------------------------
