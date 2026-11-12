@@ -9,6 +9,9 @@
     },
     {
       "pathPattern": "(^|/)include/pictor/data/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/unit_input_bounds_test\\.cpp$"
     }
   ]
 }

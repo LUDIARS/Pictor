@@ -44,6 +44,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -589,7 +590,17 @@ int main(int argc, char** argv) {
     vk_cfg.app_name = "pictor_sharc_demo";
     // PICTOR_SHARC_VALIDATE=1 で Khronos validation layer を有効化
     // (Gate 2 完了条件: 同期警告ゼロの機械確認用)
+    // getenv is C4996, an error under the MSVC /sdl of Lorica's baseline.
+#ifdef _MSC_VER
+    {
+        char*  value = nullptr;
+        size_t size  = 0;
+        vk_cfg.validation = _dupenv_s(&value, &size, "PICTOR_SHARC_VALIDATE") == 0 && value != nullptr;
+        std::free(value);
+    }
+#else
     vk_cfg.validation = std::getenv("PICTOR_SHARC_VALIDATE") != nullptr;
+#endif
     if (!vk.initialize(&surface, vk_cfg)) {
         std::fprintf(stderr, "[init] FATAL: Vulkan context init failed\n");
         surface.destroy();

@@ -31,6 +31,7 @@
 #include <GLFW/glfw3.h>
 #include <cstdio>
 #include <cmath>
+#include <fstream>
 #include <cstring>
 #include <chrono>
 #include <vector>
@@ -214,14 +215,14 @@ bool TextDemoRenderer::create_buffer(VkDeviceSize size, VkBufferUsageFlags usage
 }
 
 VkShaderModule TextDemoRenderer::load_shader(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "Cannot open shader: %s\n", path); return VK_NULL_HANDLE; }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    std::vector<char> code(len);
-    fread(code.data(), 1, len, f);
-    fclose(f);
+    // std::ifstream: fopen is C4996, an error under the MSVC /sdl of Lorica's baseline.
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) { fprintf(stderr, "Cannot open shader: %s\n", path); return VK_NULL_HANDLE; }
+    const std::streamoff len = file.tellg();
+    if (len <= 0) { fprintf(stderr, "Cannot read shader: %s\n", path); return VK_NULL_HANDLE; }
+    std::vector<char> code(static_cast<size_t>(len));
+    file.seekg(0);
+    if (!file.read(code.data(), len)) { fprintf(stderr, "Cannot read shader: %s\n", path); return VK_NULL_HANDLE; }
 
     VkShaderModuleCreateInfo info{};
     info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -1061,8 +1062,7 @@ static std::string find_default_font() {
         "../fonts/default.otf",
     };
     for (const char* path : bundled) {
-        FILE* f = fopen(path, "rb");
-        if (f) { fclose(f); return path; }
+        if (std::ifstream(path, std::ios::binary).is_open()) return path;
     }
 
     // Fallback: system fonts
@@ -1081,8 +1081,7 @@ static std::string find_default_font() {
         "C:\\Windows\\Fonts\\arial.ttf",
     };
     for (const char* path : system_fonts) {
-        FILE* f = fopen(path, "rb");
-        if (f) { fclose(f); return path; }
+        if (std::ifstream(path, std::ios::binary).is_open()) return path;
     }
     return {};
 }

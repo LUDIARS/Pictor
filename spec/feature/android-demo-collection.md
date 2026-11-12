@@ -6,7 +6,7 @@ Pictorだけでデモ選択APKをビルドする。Ergoへ依存しない。端�
 
 ## ビルド
 
-Android SDK platform 31、build-tools 34.0.0、NDK、JDK 11以上、CMake 3.20以上、Ninja、Node.jsを用意する。ANDROID_HOME、ANDROID_NDK_HOME、JAVA_HOMEを明示し、必要ならNINJAへ実行ファイルを指定する。
+Android SDK platform 31、build-tools 34.0.0、NDK、JDK 11以上、CMake 3.24以上 (Pictor が取り込む Lorica の要求。SDK Manager の CMake 3.22.1 では足りない)、Ninja、Node.jsを用意する。ANDROID_HOME、ANDROID_NDK_HOME、JAVA_HOMEを明示し、必要ならNINJAへ実行ファイルを指定する。
 
 `node demo/android/build.mjs`
 

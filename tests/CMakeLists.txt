@@ -45,6 +45,7 @@ set(PICTOR_TESTS
     unit_fbx_track_csv_test
     unit_fbx_morph_targets_test
     unit_web_mesh_input_test
+    unit_input_bounds_test
     pixel_text_test
     fps_baseline_test
 )
@@ -147,6 +148,14 @@ if(TARGET pictor_fonts)
         add_dependencies(${_t} pictor_fonts)
     endforeach()
 endif()
+
+# Lorica is really applied: inside a unit, in every compile command, in the executables
+# (tests/lorica_applied/CMakeLists.txt).
+add_subdirectory(lorica_applied)
+
+# Fuzz entry points: regression executables always, libFuzzer binaries with
+# PICTOR_BUILD_FUZZERS (tests/fuzz/CMakeLists.txt).
+add_subdirectory(fuzz)
 
 # Reasonable per-test timeout — units finish in milliseconds, FPS test
 # completes in well under 5 seconds on any modern host.

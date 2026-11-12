@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(PictorAndroidDemos LANGUAGES CXX)
 if(NOT ANDROID)
     message(FATAL_ERROR "Use the Android NDK toolchain")

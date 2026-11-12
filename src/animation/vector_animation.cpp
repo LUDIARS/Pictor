@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <charconv>
 #include <sstream>
 
 namespace pictor {
@@ -122,8 +123,14 @@ bool VectorAnimationPlayer::load_svg(const std::string& svg_data) {
                 if (attr_end != std::string::npos) {
                     std::string color = svg_data.substr(attr_pos, attr_end - attr_pos);
                     if (color.size() == 7 && color[0] == '#') {
-                        unsigned int r, g, b;
-                        if (sscanf(color.c_str(), "#%02x%02x%02x", &r, &g, &b) == 3) {
+                        // std::from_chars: no locale, no C4996 (sscanf is an error under MSVC /sdl).
+                        unsigned int r = 0, g = 0, b = 0;
+                        auto hex = [&](size_t at, unsigned int& v) {
+                            const char* first = color.data() + at;
+                            const auto [end, ec] = std::from_chars(first, first + 2, v, 16);
+                            return ec == std::errc{} && end == first + 2;
+                        };
+                        if (hex(1, r) && hex(3, g) && hex(5, b)) {
                             out[0] = r / 255.0f;
                             out[1] = g / 255.0f;
                             out[2] = b / 255.0f;

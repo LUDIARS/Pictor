@@ -6,6 +6,8 @@
 // delegated to the upper FBXScene (Level 2+3).
 #pragma once
 
+#include "pictor/core/parse_limits.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -84,11 +86,21 @@ struct FBXNode {
     bool empty() const noexcept { return name.empty() && properties.empty() && children.empty(); }
 };
 
+/// Limits of one parse() call (defaults: pictor/core/parse_limits.h). The budget is
+/// charged before each node, property, string and array is allocated; a document
+/// that exceeds it fails with an error naming the parse budget.
+struct FBXParseLimits {
+    size_t max_bytes    = parse_limits::kMaxFbxDocumentBytes;  ///< nodes + properties + strings + decoded arrays
+    size_t max_elements = parse_limits::kMaxFbxElements;       ///< nodes + properties
+    size_t max_depth    = static_cast<size_t>(parse_limits::kMaxNestingDepth);
+};
+
 /// FBX document (binary / ASCII abstraction).
 struct FBXDocument {
     bool        is_ascii = false;
     uint32_t    version  = 0;   ///< e.g. 7400, 7500. May be 0 for ASCII.
     FBXNode     root;
+    FBXParseLimits limits;      ///< applied by parse / parse_binary / parse_ascii / load_file
 
     bool parse(const uint8_t* data, size_t size, std::string* error = nullptr);
     bool parse_binary(const uint8_t* data, size_t size, std::string* error = nullptr);

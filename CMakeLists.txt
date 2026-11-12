@@ -1,9 +1,13 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(Pictor VERSION 2.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Top level only: tests/lorica_applied reads compile_commands.json; an including project
+# decides for its own build tree.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
 
 option(PICTOR_BUILD_DEMO          "Build all demo applications"      ON)
 option(PICTOR_BUILD_TOOLS         "Build developer tool targets (feature selector etc.)" OFF)
@@ -16,6 +20,10 @@ option(PICTOR_ENABLE_RIVE         "Enable Rive Renderer integration (requires pr
 option(PICTOR_ENABLE_HW_COUNTERS  "Enable Intel PCM hardware counters (perf C 層, requires PICTOR_PCM_DIR)" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# --- Lorica (boundary checks + build hardening on every Pictor target) — cmake/PictorLorica.cmake ---
+include(cmake/PictorLorica.cmake)
+include(cmake/PictorSanitizers.cmake)
 
 # ---------------------------------------------------------------------------
 # モバイル (Android NDK / iOS) クロスビルドの早期分岐 — Issue #47
@@ -52,6 +60,8 @@ include(cmake/PictorCore.cmake)
 # web targets だけを作る。
 if(EMSCRIPTEN)
     include(cmake/PictorWebGL.cmake)
+    pictor_lorica_apply_all()
+    pictor_sanitize_all()
     return()
 endif()
 
@@ -77,6 +87,9 @@ if(NOT PICTOR_MOBILE)
             GIT_SHALLOW    TRUE
         )
         FetchContent_MakeAvailable(glfw)
+        # GLFW is C. Lorica probes the C compiler's FORTIFY / stack-clash / CET flags only
+        # where C is enabled, and pictor_lorica_apply_all() hardens glfw from this directory.
+        enable_language(C)
         set(glfw3_FOUND TRUE)
     endif()
 else()
@@ -745,3 +758,8 @@ if(PICTOR_BUILD_TOOLS AND NOT PICTOR_MOBILE)
         message(WARNING "Pictor: PICTOR_BUILD_TOOLS=ON but tools/feature-selector not found")
     endif()
 endif()
+
+# ─── Lorica on every Pictor-owned compiled target (cmake/PictorLorica.cmake) ─
+# Keep this last: a Pictor target defined after it fails configure.
+pictor_lorica_apply_all()
+pictor_sanitize_all()
