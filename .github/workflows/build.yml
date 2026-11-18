@@ -12,6 +12,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # --- Lorica (private LUDIARS/Lorica, cmake/PictorLorica.cmake) ---------------
+      # The commit is read from cmake/PictorLorica.cmake (set(PICTOR_LORICA_COMMIT <sha>)),
+      # so CMake and this workflow cannot disagree. LUDIARS_REPO_TOKEN is the org's
+      # read token for private repositories; without it the job stops instead of building
+      # Pictor without Lorica.
+      - name: Resolve pinned Lorica commit
+        id: lorica
+        run: |
+          sha=$(sed -n 's/^set(PICTOR_LORICA_COMMIT \([0-9a-f]\{40\}\))$/\1/p' cmake/PictorLorica.cmake)
+          if [ "$(printf '%s' "$sha" | grep -c .)" != 1 ]; then
+            echo "::error file=cmake/PictorLorica.cmake::could not read exactly one 40-hex set(PICTOR_LORICA_COMMIT <sha>) line"
+            exit 1
+          fi
+          echo "Lorica commit: $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Require LUDIARS_REPO_TOKEN
+        env:
+          LUDIARS_REPO_TOKEN: ${{ secrets.LUDIARS_REPO_TOKEN }}
+        run: |
+          if [ -z "$LUDIARS_REPO_TOKEN" ]; then
+            echo "::error title=LUDIARS_REPO_TOKEN missing::LUDIARS_REPO_TOKEN が未設定 (または fork からの PR で secret が渡されない) なので private の LUDIARS/Lorica を取得できない。Lorica なしではビルドしない。"
+            exit 1
+          fi
+
+      - name: Checkout Lorica
+        uses: actions/checkout@v4
+        with:
+          repository: LUDIARS/Lorica
+          ref: ${{ steps.lorica.outputs.sha }}
+          path: _ci/lorica
+          token: ${{ secrets.LUDIARS_REPO_TOKEN }}
+          persist-credentials: false
+
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -29,7 +63,8 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICTOR_BUILD_DEMO=OFF \
-            -DPICTOR_BUILD_BENCHMARK=OFF
+            -DPICTOR_BUILD_BENCHMARK=OFF \
+            -DLORICA_SOURCE_DIR="$GITHUB_WORKSPACE/_ci/lorica"
 
       - name: Build (pictor library)
         run: cmake --build build --target pictor --parallel
@@ -60,3 +95,12 @@ jobs:
 
       - name: Run backend-neutral core + null backend tests
         run: ctest --test-dir build --output-on-failure -R "^(unit_gfx_handle_test|unit_pass_recorder_test|unit_single_thread_dispatcher_test|unit_null_backend_test)$"
+
+      # --- Lorica is really applied (tests/lorica_applied/CMakeLists.txt) ----------
+      # visus_migrate and the probe are the executables verify_binary.py inspects here
+      # (demos are off in this job).
+      - name: Build Lorica checks
+        run: cmake --build build --parallel --target lorica_applied_tu_test visus_migrate
+
+      - name: Run Lorica checks
+        run: ctest --test-dir build --output-on-failure -R "^lorica_applied_"

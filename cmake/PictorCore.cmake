@@ -18,6 +18,7 @@ add_library(pictor_core STATIC
     src/core/device_memory_profile.cpp
     src/core/transform_math.cpp
     src/core/float_parse.cpp
+    src/core/bounded_file.cpp
 
     # Memory Subsystem
     src/memory/aligned_block.cpp

@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -202,8 +203,13 @@ void test_asset_ids() {
     frame_tap_mesh_content_hash(vertices_a, sizeof(vertices_a), indices, sizeof(indices), hash_a2);
     frame_tap_mesh_content_hash(vertices_b, sizeof(vertices_b), indices, sizeof(indices), hash_b);
     // 同じバイト列でも頂点 / インデックスの境目が違えば別の内容。
-    frame_tap_mesh_content_hash(vertices_a, sizeof(vertices_a) - 4,
-                                reinterpret_cast<const uint8_t*>(vertices_a) + 8, 4 + sizeof(indices),
+    // One contiguous buffer: the shifted split must stay inside the bytes it hashes
+    // (it used to read 12 bytes past vertices_a, found by ASan).
+    uint8_t joined[sizeof(vertices_a) + sizeof(indices)];
+    std::memcpy(joined, vertices_a, sizeof(vertices_a));
+    std::memcpy(joined + sizeof(vertices_a), indices, sizeof(indices));
+    frame_tap_mesh_content_hash(joined, sizeof(vertices_a) - 4,
+                                joined + sizeof(vertices_a) - 4, 4 + sizeof(indices),
                                 hash_shift);
     PT_ASSERT(hash_a == hash_a2, "content hash is deterministic");
     PT_ASSERT(hash_a != hash_b, "content hash depends on the bytes");

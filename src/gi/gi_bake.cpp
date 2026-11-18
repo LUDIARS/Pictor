@@ -1,5 +1,10 @@
 ﻿#include "pictor/gi/gi_bake.h"
 #include "pictor/gi/gi_sh.h"
+#include "pictor/core/bounded_file.h"
+#include "pictor/core/parse_limits.h"
+#include <lorica/byte_reader.hpp>
+#include <lorica/checked_size.hpp>
+#include <span>
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -503,56 +508,54 @@ bool GIBakeSystem::save(const std::string& path, const GIBakeResult& result) con
     return file.good();
 }
 
+namespace {
+
+// Copies count records of T from the reader into out; false when they are not there.
+template <typename T>
+bool read_records(lorica::byte_reader& in, uint32_t count, std::vector<T>& out) {
+    const auto bytes = lorica::checked_multiply(static_cast<size_t>(count), sizeof(T));
+    const auto part = bytes ? in.take(*bytes) : std::nullopt;
+    if (!part) return false;
+    out.resize(count);
+    if (*bytes > 0) std::memcpy(out.data(), part->data(), *bytes);
+    return true;
+}
+
+} // namespace
+
 GIBakeResult GIBakeSystem::load(const std::string& path) const {
     GIBakeResult result;
 
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) return result;
+    // The whole file, bounded, then every section checked against what was read:
+    // the record count comes from the file and is never used to size a buffer
+    // before the bytes for it are known to be there.
+    std::vector<uint8_t> bytes;
+    if (read_file_bounded(path, parse_limits::kMaxBakeFileBytes, bytes) != FileReadStatus::OK) {
+        return result;
+    }
+    lorica::byte_reader in(std::as_bytes(std::span<const uint8_t>(bytes)));
 
-    BakeFileHeader header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(header));
+    BakeFileHeader header{};
+    const auto raw_header = in.take(sizeof(header));
+    if (!raw_header) return result;
+    std::memcpy(&header, raw_header->data(), sizeof(header));
 
     if (header.magic != BAKE_MAGIC || header.version != BAKE_VERSION) {
         return result;
     }
 
-    uint32_t count = header.object_count;
+    const uint32_t count = header.object_count;
+    auto has = [&](BakeTarget target) { return (header.flags & static_cast<uint32_t>(target)) != 0; };
+    if (!read_records(in, count, result.object_ids)) return result;
+    if (has(BakeTarget::SHADOW_MAP) && !read_records(in, count, result.shadows)) return result;
+    if (has(BakeTarget::AMBIENT_OCCLUSION) && !read_records(in, count, result.ao)) return result;
+    if (has(BakeTarget::PROBE_IRRADIANCE) && !read_records(in, count, result.irradiance)) return result;
+    if (has(BakeTarget::LIGHTMAP) && !read_records(in, count, result.lightmaps)) return result;
+    // save() writes nothing after the last section.
+    if (in.remaining() != 0) return result;
+
     result.bake_timestamp = header.timestamp;
-
-    // Object IDs
-    result.object_ids.resize(count);
-    file.read(reinterpret_cast<char*>(result.object_ids.data()),
-              count * sizeof(ObjectId));
-
-    // Shadows
-    if (header.flags & static_cast<uint32_t>(BakeTarget::SHADOW_MAP)) {
-        result.shadows.resize(count);
-        file.read(reinterpret_cast<char*>(result.shadows.data()),
-                  count * sizeof(BakedShadow));
-    }
-
-    // AO
-    if (header.flags & static_cast<uint32_t>(BakeTarget::AMBIENT_OCCLUSION)) {
-        result.ao.resize(count);
-        file.read(reinterpret_cast<char*>(result.ao.data()),
-                  count * sizeof(BakedAO));
-    }
-
-    // Irradiance
-    if (header.flags & static_cast<uint32_t>(BakeTarget::PROBE_IRRADIANCE)) {
-        result.irradiance.resize(count);
-        file.read(reinterpret_cast<char*>(result.irradiance.data()),
-                  count * sizeof(BakedIrradiance));
-    }
-
-    // Lightmaps
-    if (header.flags & static_cast<uint32_t>(BakeTarget::LIGHTMAP)) {
-        result.lightmaps.resize(count);
-        file.read(reinterpret_cast<char*>(result.lightmaps.data()),
-                  count * sizeof(BakedLightmap));
-    }
-
-    result.valid = file.good();
+    result.valid = true;
     return result;
 }
 

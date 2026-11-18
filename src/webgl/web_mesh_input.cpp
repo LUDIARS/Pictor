@@ -2,6 +2,8 @@
 
 #include "pictor/webgl/web_mesh_input.h"
 
+#include <lorica/checked_size.hpp>
+
 #include <cmath>
 #include <limits>
 
@@ -53,12 +55,17 @@ WebMeshInputError validate_web_mesh_input(const WebMeshInput& input) {
     if (input.vertex_count > static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())) {
         return WebMeshInputError::TOO_LARGE;
     }
-    const std::size_t components = input.vertex_count * 3;
-    if (!all_finite(input.positions, components) || !all_finite(input.normals, components) ||
-        !all_finite(input.colors, components)) {
+    // size_t is 32-bit in wasm32: vertex_count * 3 (and the packed * 9) must not wrap.
+    const auto components = lorica::checked_multiply(input.vertex_count, std::size_t{3});
+    if (!components ||
+        !lorica::checked_multiply(input.vertex_count, static_cast<std::size_t>(WEB_MESH_VERTEX_FLOATS))) {
+        return WebMeshInputError::TOO_LARGE;
+    }
+    if (!all_finite(input.positions, *components) || !all_finite(input.normals, *components) ||
+        !all_finite(input.colors, *components)) {
         return WebMeshInputError::NON_FINITE_VALUE;
     }
-    for (std::size_t i = 0; i < components; ++i) {
+    for (std::size_t i = 0; i < *components; ++i) {
         if (!in_unit_range(input.colors[i])) return WebMeshInputError::COLOR_OUT_OF_RANGE;
     }
     for (std::size_t i = 0; i < input.index_count; ++i) {

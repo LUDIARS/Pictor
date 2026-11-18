@@ -12,6 +12,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -36,8 +37,7 @@ std::string find_default_font() {
         "/System/Library/Fonts/Helvetica.ttc",
     };
     for (const char* p : candidates) {
-        FILE* f = std::fopen(p, "rb");
-        if (f) { std::fclose(f); return p; }
+        if (std::ifstream(p, std::ios::binary).is_open()) return p;
     }
     return {};
 }
@@ -45,15 +45,15 @@ std::string find_default_font() {
 /// Dump a PPM (P6, RGB) for visual debugging on failure.
 void write_ppm(const char* path, const ImageBuffer& img) {
     if (img.channels != 4) return;
-    FILE* f = std::fopen(path, "wb");
+    // std::ofstream: fopen is C4996, an error under the MSVC /sdl of Lorica's baseline.
+    std::ofstream f(path, std::ios::binary);
     if (!f) return;
-    std::fprintf(f, "P6\n%u %u\n255\n", img.width, img.height);
+    f << "P6\n" << img.width << ' ' << img.height << "\n255\n";
     for (size_t i = 0; i < size_t(img.width) * img.height; ++i) {
-        std::fputc(img.pixels[i * 4 + 0], f);
-        std::fputc(img.pixels[i * 4 + 1], f);
-        std::fputc(img.pixels[i * 4 + 2], f);
+        f.put(static_cast<char>(img.pixels[i * 4 + 0]));
+        f.put(static_cast<char>(img.pixels[i * 4 + 1]));
+        f.put(static_cast<char>(img.pixels[i * 4 + 2]));
     }
-    std::fclose(f);
     std::fprintf(stderr, "       wrote debug image: %s\n", path);
 }
 

@@ -33,6 +33,7 @@
 #include "pictor/surface/glfw_surface_provider.h"
 #include "pictor/surface/vulkan_context.h"
 
+#include "c_file.h"
 #include "channel_list.h"
 #include "frame_capture.h"
 #include "morph_loader.h"
@@ -564,7 +565,7 @@ static bool write(const fs::path& cache_path,
 {
     std::error_code ec;
     fs::create_directories(cache_path.parent_path(), ec);
-    FILE* f = std::fopen(cache_path.string().c_str(), "wb");
+    FILE* f = open_c_file(cache_path.string().c_str(), "wb");
     if (!f) return false;
 
     std::fwrite(MAGIC, 1, 8, f);
@@ -639,7 +640,7 @@ static bool read(const fs::path& cache_path,
 {
     std::error_code ec;
     if (!fs::exists(cache_path, ec)) return false;
-    FILE* f = std::fopen(cache_path.string().c_str(), "rb");
+    FILE* f = open_c_file(cache_path.string().c_str(), "rb");
     if (!f) return false;
 
     auto fail = [&]() { std::fclose(f); return false; };

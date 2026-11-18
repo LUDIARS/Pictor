@@ -1,5 +1,7 @@
 #include "track_csv.h"
 
+#include "c_file.h"
+
 #include "pictor/core/float_parse.h"
 
 #include <cmath>
@@ -185,7 +187,7 @@ bool load_track_csv(const std::string& path,
                     const std::vector<std::string>& bone_names,
                     const std::vector<std::string>& shape_names,
                     TrackData& out, std::string& error) {
-    FILE* f = std::fopen(path.c_str(), "rb");
+    FILE* f = open_c_file(path.c_str(), "rb");
     if (!f) { error = "cannot open " + path; return false; }
     std::string text;
     char buf[1 << 16];

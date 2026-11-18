@@ -1,4 +1,5 @@
 ﻿#include "pictor/animation/bvh_importer.h"
+#include "pictor/core/bounded_file.h"
 #include "pictor/core/parse_limits.h"
 #include <fstream>
 #include <sstream>
@@ -38,13 +39,14 @@ static int read_int(const char*& c, const char* end) {
 }
 
 BVHImportResult BVHImporter::import_file(const std::string& path) const {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        return {false, "Failed to open BVH file: " + path, {}, {}, 0, 0.0f};
+    // Binary read: the tokenizer already treats '\r' as whitespace.
+    std::string content;
+    const FileReadStatus status =
+        read_text_file_bounded(path, parse_limits::kMaxModelFileBytes, content);
+    if (status != FileReadStatus::OK) {
+        return {false, std::string("Failed to read BVH file (") + file_read_status_name(status) + "): " + path,
+                {}, {}, 0, 0.0f};
     }
-
-    std::string content((std::istreambuf_iterator<char>(file)),
-                         std::istreambuf_iterator<char>());
     return import_memory(content.data(), content.size());
 }
 

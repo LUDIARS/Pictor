@@ -1,4 +1,6 @@
 ﻿#include "pictor/animation/rive_animation.h"
+#include "pictor/core/bounded_file.h"
+#include "pictor/core/parse_limits.h"
 #include <fstream>
 #include <cstring>
 #include <algorithm>
@@ -23,22 +25,16 @@ RiveAnimation::RiveAnimation() = default;
 RiveAnimation::~RiveAnimation() = default;
 
 bool RiveAnimation::load_file(const std::string& path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        error_ = "Failed to open Rive file: " + path;
+    // A local buffer: load_memory copies into file_data_, which must not be its own source.
+    std::vector<uint8_t> bytes;
+    const FileReadStatus status =
+        read_file_bounded(path, parse_limits::kMaxVectorAnimationFileBytes, bytes);
+    if (status != FileReadStatus::OK) {
+        error_ = std::string("Failed to read Rive file (") + file_read_status_name(status) + "): " + path;
         return false;
     }
 
-    auto size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    file_data_.resize(static_cast<size_t>(size));
-    if (!file.read(reinterpret_cast<char*>(file_data_.data()), size)) {
-        error_ = "Failed to read Rive file: " + path;
-        return false;
-    }
-
-    return load_memory(file_data_.data(), file_data_.size());
+    return load_memory(bytes.data(), bytes.size());
 }
 
 bool RiveAnimation::load_memory(const uint8_t* data, size_t size) {

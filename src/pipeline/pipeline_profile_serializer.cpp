@@ -1,5 +1,6 @@
 #include "pictor/pipeline/pipeline_profile_serializer.h"
 
+#include "pictor/core/bounded_file.h"
 #include "pictor/core/parse_limits.h"
 
 #include <cctype>
@@ -1592,14 +1593,13 @@ bool from_pipeline_profile_json(const std::string&        json,
 namespace {
 
 bool read_file(const std::string& path, std::string& contents, std::string* error) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f.is_open()) {
-        if (error) *error = "could not open file: " + path;
+    // Hot reload reads this file again on every change: bounded like the Visus JSON.
+    const FileReadStatus status =
+        read_text_file_bounded(path, parse_limits::kMaxConfigFileBytes, contents);
+    if (status != FileReadStatus::OK) {
+        if (error) *error = std::string("could not read file (") + file_read_status_name(status) + "): " + path;
         return false;
     }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    contents = ss.str();
     // Tolerate a UTF-8 BOM at the head of the file.
     if (contents.size() >= 3 &&
         static_cast<unsigned char>(contents[0]) == 0xEF &&

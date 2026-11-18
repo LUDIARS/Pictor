@@ -1,4 +1,6 @@
 ﻿#include "pictor/animation/lottie_animation.h"
+#include "pictor/core/bounded_file.h"
+#include "pictor/core/parse_limits.h"
 #include <fstream>
 #include <cstring>
 #include <cmath>
@@ -16,14 +18,13 @@ LottieAnimation::LottieAnimation() = default;
 LottieAnimation::~LottieAnimation() = default;
 
 bool LottieAnimation::load_file(const std::string& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        error_ = "Failed to open Lottie file: " + path;
+    std::string json;
+    const FileReadStatus status =
+        read_text_file_bounded(path, parse_limits::kMaxVectorAnimationFileBytes, json);
+    if (status != FileReadStatus::OK) {
+        error_ = std::string("Failed to read Lottie file (") + file_read_status_name(status) + "): " + path;
         return false;
     }
-
-    std::string json((std::istreambuf_iterator<char>(file)),
-                      std::istreambuf_iterator<char>());
     return load_json(json);
 }
 

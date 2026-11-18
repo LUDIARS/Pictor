@@ -1,10 +1,12 @@
 #include "raw_frame_writer.h"
 
+#include "c_file.h"
+
 namespace pictor_fbx_viewer {
 
 bool RawFrameWriter::open_file(const std::string& path) {
     close();
-    file_ = std::fopen(path.c_str(), "wb");
+    file_ = open_c_file(path.c_str(), "wb");
     failed_ = false;
     frames_ = 0;
     return file_ != nullptr;
