@@ -1,7 +1,7 @@
 # pictor_unite_bg_demo
 
 Unite Tokyo 2026 の講演「『hololive Dreams』の背景づくりと 24 時間ライティング」（QualiArts）で紹介された手法を、Pictor（Vulkan）上で再現した学習用デモです。
-解説とクイズはこのリポジトリには置かず、別のドキュメントにまとめています。このフォルダにあるのは **コードとシェーダーだけ** です。
+解説とクイズは [GUIDE.md](GUIDE.md) にまとめています。講演スライド（[Docswell](https://www.docswell.com/s/UnityJapan/Z1QGE8-2026-11-17-184813)）と並べて読む前提で、スライドのページ番号ごとに、対応するコードの行とデモの操作を示しています。コード側には解説を書かず、解説は GUIDE.md にだけ置いています。
 
 ## ビルドと実行
 
