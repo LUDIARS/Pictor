@@ -1,0 +1,55 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// =============================================================================
+// 草のカリング (ComputeShader で 1 本単位)
+//   CPU がカメラに映るセルを選び、連続したセルは 1 回の Dispatch にまとめる。
+//   ここでは各スレッドが草 1 本 (1 株) を受け持ち、
+//     ・フェード距離より遠い → 捨てる
+//     ・視錐台 (カメラに映る範囲) の外 → 捨てる
+//     ・距離で LOD0 / LOD1 を選び、可視リストへ追加 (atomicAdd)
+//   描画は vkCmdDrawIndirect で、GPU が数えた本数をそのまま使う。
+// =============================================================================
+#include "common.glsl"
+#include "grass_common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform PC {
+    uint  start;      // このDispatchが担当する範囲の先頭 (セルの開始番号)
+    uint  count;      // 範囲の長さ
+    uint  capacity;   // LOD ごとの可視リストの最大数
+    uint  cull_on;    // 0 なら視錐台判定をしない (比較用)
+    float fade_end;
+    float lod_dist;
+} pc;
+
+// view_proj から視錐台の 6 平面を取り出す (Gribb-Hartmann 法)
+vec4 frustum_plane(int i) {
+    mat4 m = transpose(F.view_proj);
+    vec4 r = (i == 0) ? m[3] + m[0] : (i == 1) ? m[3] - m[0]
+           : (i == 2) ? m[3] + m[1] : (i == 3) ? m[3] - m[1]
+           : (i == 4) ? m[2]        :            m[3] - m[2];
+    return r / length(r.xyz);
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    uint idx = pc.start + i;
+    GrassInstance g = g_inst[idx];
+
+    vec3 c = g.pos_scale.xyz + vec3(0.0, g.params.w * 0.5, 0.0);   // バウンディング球の中心
+    float r = g.params.w * 0.7 + 0.3;
+    float dist = length(c - F.cam_pos.xyz);
+    if (dist > pc.fade_end) return;
+
+    if (pc.cull_on != 0u) {
+        for (int k = 0; k < 6; ++k) {
+            vec4 pl = frustum_plane(k);
+            if (dot(pl.xyz, c) + pl.w < -r) return;
+        }
+    }
+    uint lod = dist < pc.lod_dist ? 0u : 1u;
+    uint slot = atomicAdd(g_cmd[lod * 4u + 1u], 1u);
+    if (slot < pc.capacity) g_visible[lod * pc.capacity + slot] = idx;
+}

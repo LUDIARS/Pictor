@@ -495,6 +495,25 @@ if(PICTOR_BUILD_DEMO AND NOT PICTOR_MOBILE)
             target_compile_options(pictor_graph_demo PRIVATE /utf-8)
         endif()
 
+        # Unite Tokyo 2026『hololive Dreams』背景づくり講演の学習デモ
+        # (大気散乱 / 夜空 / ライトシャフト / 海 / 雲 SixWay / GI / タレント / 草 / SkyTime)
+        add_executable(pictor_unite_bg_demo
+            demo/unite_bg/main.cpp
+            demo/unite_bg/sky_profile.cpp
+            demo/unite_bg/vk_helpers.cpp
+            demo/unite_bg/grass_system.cpp
+        )
+        target_include_directories(pictor_unite_bg_demo PRIVATE demo/unite_bg)
+        target_link_libraries(pictor_unite_bg_demo PRIVATE pictor)
+        if(MSVC)
+            target_compile_options(pictor_unite_bg_demo PRIVATE /utf-8)
+        endif()
+        set(_ubg_dir "${CMAKE_CURRENT_SOURCE_DIR}/demo/unite_bg/shaders")
+        pictor_effect_shaders(pictor_unite_bg_demo
+            "${_ubg_dir}/fullscreen.vert;${_ubg_dir}/sky.frag;${_ubg_dir}/night.frag;${_ubg_dir}/shaft_scene.frag;${_ubg_dir}/shaft_composite.frag;${_ubg_dir}/ocean.frag;${_ubg_dir}/cloud_bake.frag;${_ubg_dir}/clouds.frag;${_ubg_dir}/gi_probe_bake.frag;${_ubg_dir}/gi_local_bake.frag;${_ubg_dir}/gi.frag;${_ubg_dir}/talent.frag;${_ubg_dir}/grass_ground.frag;${_ubg_dir}/grass.vert;${_ubg_dir}/grass.frag;${_ubg_dir}/grass_env.comp;${_ubg_dir}/grass_cull.comp;${_ubg_dir}/profile.frag"
+            "${CMAKE_CURRENT_BINARY_DIR}/shaders/unite_bg"
+            "${_ubg_dir}/common.glsl" "${_ubg_dir}/atmosphere.glsl" "${_ubg_dir}/gi_scene.glsl" "${_ubg_dir}/grass_common.glsl")
+
         message(STATUS "Pictor: All demos enabled (benchmark, window, text, graph)")
     else()
         message(STATUS "Pictor: Only benchmark demo enabled (Vulkan + GLFW3 required for other demos)")

@@ -1,0 +1,12 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// 草の照明に使う太陽光・空の色を毎フレーム 1 回だけ計算してバッファへ置く
+// (草の頂点/ピクセルごとに大気散乱を計算すると重すぎるため)
+#include "atmosphere.glsl"
+#include "grass_common.glsl"
+layout(local_size_x = 1) in;
+void main() {
+    g_env[0] = vec4(sun_light_at_ground(), 0.0);
+    g_env[1] = vec4(sky_ambient_up(), 0.0);
+    g_env[2] = vec4(sky_ambient_horizon(), 0.0);
+}
