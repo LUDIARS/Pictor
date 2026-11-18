@@ -10,6 +10,11 @@
 #define NOGDI
 #endif
 #include <vulkan/vulkan.h>
+// Linux (VK_USE_PLATFORM_XLIB_KHR) では vulkan.h が Xlib.h を引き込み、 X11 の
+// `None` マクロが NativeWindowHandle::Type::None 等の列挙子と衝突する。
+#ifdef None
+#undef None
+#endif
 #endif
 
 namespace pictor {
